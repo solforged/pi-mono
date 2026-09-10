@@ -1,0 +1,3 @@
+[tasks.test]
+description = "Test locally owned pi extensions without model calls"
+run = "node --test tests/*.test.ts"
