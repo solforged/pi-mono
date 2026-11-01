@@ -4,16 +4,27 @@ Locally owned extensions for pi. No third-party extension
 packages or additional npm dependencies. Uses pi's bundled APIs and Node
 built-ins. The main conversation model is never switched by these extensions.
 
+## Assistant computer prototype
+
+`computer/` contains the Mac-first QEMU Linux desktop prototype, isolated from
+these host Pi extensions. See [its setup and safety notes](computer/README.md).
+Pi Durable is the planned assistant runtime; this first milestone supplies VM
+lifecycle, a shared desktop/browser, guest Pi, and encrypted backup/restore.
+
 ## Install
 
 Sources live in this repository. Deployment is declared in
-`~/src/dotfiles/cli/mise/mise.toml`. Apply only these targets:
+`~/src/dotfiles/cli/mise/mise.hyperion.toml`. Apply only these targets:
 
 ```sh
 mise bootstrap dotfiles apply --yes \
   ~/.pi/agent/extensions/workflows \
   ~/.pi/agent/extensions/web-search \
   ~/.pi/agent/extensions/snapcompact \
+  ~/.pi/agent/extensions/continue \
+  ~/.pi/agent/extensions/anthropic \
+  ~/.pi/agent/extensions/herdr-title \
+  ~/.pi/agent/extensions/artifacts \
   ~/.pi/agent/roles.json
 ```
 
@@ -24,18 +35,22 @@ Gondolin are not replaced. To try without deployment:
 pi -e ./extensions/workflows/index.ts
 pi -e ./extensions/web-search/index.ts
 pi -e ./extensions/snapcompact/index.ts
+pi -e ./extensions/continue/index.ts
+pi -e ./extensions/anthropic/index.ts
+pi -e ./extensions/herdr-title/index.ts
+pi -e ./extensions/artifacts/index.ts
 ```
 
 ## Model roles
 
 `roles.json` supplies personal defaults:
 
-| Role      | Provider/model              | Thinking |
-| --------- | --------------------------- | -------- |
-| `advisor` | `openai-codex/gpt-6-astra`  | high     |
-| `task`    | `xai/grok-4.6`              | medium   |
-| `tiny`    | `openai-codex/gpt-5.6-luna` | low      |
-| `learn`   | `openai-codex/gpt-5.6-sol`  | medium   |
+| Role      | Provider/model        | Thinking |
+| --------- | --------------------- | -------- |
+| `advisor` | `openai/gpt-6-astra`  | high     |
+| `task`    | `xai/grok-4.6`        | medium   |
+| `tiny`    | `openai/gpt-5.6-luna` | low      |
+| `learn`   | `openai/gpt-5.6-sol`  | medium   |
 
 Pi's built-in Grok provider is `xai`. Any registered provider ID is accepted,
 including `grok`, `nous-portal`, and work-internal ones when your
@@ -120,12 +135,50 @@ provider registrations do not cross a process boundary.
 | `/curate-skills`                            | Audit changed, workflow-managed skills; repeat to process the next batch |
 | `/workflows`                                | Show private state location and auxiliary usage                          |
 | `/snapcompact`                              | Show whether this model archives compacted history as images             |
+| `/artifacts [on\|off\|check]`                  | Show deterministic output archival counts or toggle it until reload        |
 
 Automatic naming runs after the first substantive exchange settles in the TUI.
 It uses `TITLE_SYSTEM.md`, never overwrites a manual title, and makes at most
 one automatic attempt per session. Failures leave the session usable;
 `/autoname` retries explicitly. Naming does not run automatically inside
 subprocesses.
+
+## Continue shorthand
+
+In the interactive TUI, submit `.` on its own to send a normal `Continue.`
+user message. Surrounding whitespace is ignored. Other input, dots with image
+attachments, extension-injected messages, and noninteractive sessions are
+unchanged. This does not rewind history or retry failed turns; no retry
+shortcut is registered.
+
+## Herdr agent titles
+
+`herdr-title` follows the active Pi session name through Herdr's pane
+metadata. It syncs on startup, reload, resume, fork, and name changes,
+including `/name` and `/autoname`. An unnamed or newly cleared session
+clears the metadata title instead of inventing a directory-based name.
+Workspace, worktree, tab, and manual pane labels are never changed.
+
+Reports use `pane report-metadata` with source `user:pi-title` and an
+`agent=pi` presentation guard. They do not take over agent lifecycle state
+or session restore. Dotfiles configures Pi's agent sidebar rows to show the
+metadata title alongside `pi` via the `pane` token; without metadata that
+token falls back to any manual pane label.
+
+Titles have a 90-second TTL, renewed every 30 seconds even while Pi is
+idle. The timer starts only at interactive session startup, is unreferenced,
+and stops on shutdown. Quit, reload, and session replacement abort pending
+writes and clear only this source's title. Cleanup is bounded and best-effort;
+a crash or unavailable server leaves at most the last report's TTL. A new
+runtime uses the same source to immediately replace or clear stale metadata.
+Unchanged event updates are skipped, but heartbeat always renews a live title.
+Command failures are quiet and retry on heartbeat or subsequent events.
+
+Only interactive TUI sessions inside Herdr write or clear metadata. Commands
+target the inherited `HERDR_PANE_ID`, never focus. Print, JSON, and RPC child
+agents do nothing, including on shutdown. Each Pi pane has its own title,
+so multiple agents in a tab need no ownership wiring. Legacy
+`HERDR_TITLE_OWNER` values are ignored. No model calls or state polling.
 
 ## Commits
 
@@ -261,7 +314,7 @@ the live Grok or Codex backend, then walks the rest of the chain.
 
 | Backend | Auth | Nested call |
 | ------- | ---- | ----------- |
-| Codex   | `openai-codex` OAuth | ChatGPT `/codex/responses` with hosted `web_search` |
+| Codex   | `openai` OAuth or API key | OpenAI `/v1/responses` with hosted `web_search` |
 | xAI     | `xai` OAuth or API key | `https://api.x.ai/v1/responses` as `grok-4.6` (then `grok-4.5`) |
 | Exa     | `EXA_API_KEY` | `https://api.exa.ai/search` |
 
@@ -274,7 +327,44 @@ Other parents keep Codex then xAI then Exa. Unavailable backends are skipped.
 This is not in-session search. Pi's Responses parser ignores `web_search_call`
 items, so injecting hosted search into the live payload would drop citations
 and replay. Nested calls reuse the existing logins and work for any parent
-model, including later Nous Portal sessions.
+model, including later Nous Portal sessions. The Codex backend label is kept
+for session routing; requests use Pi's current OpenAI endpoint and do not
+require an account-id claim in the ChatGPT access token.
+
+## Anthropic integration
+
+The `anthropic` extension integrates automatically with Pi's existing Anthropic
+provider. Use the normal `/login anthropic` and `/model`; there are no extra
+commands, status messages, or provider entries. It adds OMP's Claude Code
+request fingerprint and minimum-version retry, applying only to
+`sk-ant-oat` subscription tokens sent to `https://api.anthropic.com/v1/messages`.
+API keys, other providers, proxies, and token exchange requests are unchanged.
+Existing `/login anthropic` credentials and refresh behavior stay owned by Pi;
+no credentials are copied from OMP or Claude Code.
+
+The wrapper adds Claude Code headers, a SHA-256 billing marker, XXHash64 body
+attestation, and session metadata. It preserves Pi's feature-specific betas,
+removes the subscription-incompatible `context-1m` beta, and retains tool names,
+images, thinking, stream parsing, usage accounting, and request hooks. The
+uncached billing block precedes Pi's existing system blocks and cache controls.
+Device identity is random and stable for this extension runtime, not persisted.
+An explicit compatible `metadata.user_id` is preserved.
+
+An explicit `claude_code_version_too_old` HTTP rejection can adopt the required
+version and retry once before streaming begins. The adopted version lasts until
+reload or process exit. There are no background version checks or runtime
+upstream downloads. `PI_AI_CLAUDE_CODE_VERSION=2.1.280` pins the claimed version
+and disables automatic adoption; provider-scoped environment overrides win.
+Pi 1.0.2 already uses the full model output ceiling, so
+OMP's latest removal of the OAuth-specific 64k cap needs no additional patch.
+Caller-owned SDK clients supplied to the low-level stream API bypass this fetch
+wrapper; ordinary Pi and workflow requests use the built-in client.
+
+This is a local compatibility port, not official Anthropic support or a
+`claude -p` wrapper. Subscription access may break or conflict with Anthropic's
+[credential-use policy](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use).
+API-key usage does not need this shim. Upstream commits and the MIT license
+are retained in `extensions/anthropic/NOTICE`.
 
 ## Snapcompact
 
@@ -289,6 +379,53 @@ public-domain font. Text-only models keep the default LLM summary.
 of the last archive on this branch. Frames are stored on the compaction
 entry and re-attached on every LLM request.
 
+## Output artifacts
+
+Successful top-level `bash`, `powershell`, `grep`, `find`, `ls`, `web_search`,
+and `codemode` results exceeding 8 KiB of text or 160 lines are saved under
+`~/.pi/agent/tool-artifacts/` (or the configured Pi agent directory). The result
+entering history contains an artifact UUID and bounded, verbatim start/end
+excerpts plus selected diagnostic lines. These are explicitly incomplete,
+not a generated summary. There are no model calls or edits to older history,
+so existing cached prefixes are not deliberately rewritten.
+
+Use the model-callable `artifact_read` tool to retrieve omitted evidence:
+
+```json
+{ "id": "UUID_FROM_RECEIPT", "query": "timeout", "limit": 20 }
+```
+
+Queries are case-sensitive literal substrings, not regexes. `offset` selects a
+1-based starting line; `limit` defaults to 40 and cannot exceed 80. Each response
+is also bounded to 6,000 bytes and supplies a continuation offset. Long lines
+supply a `column` cursor so their entire text can be recovered without splitting
+Unicode characters. Retrieval accepts only artifact UUIDs, never arbitrary
+host paths; this also works when ordinary `read` is sandboxed.
+
+Failed results, explicit `read`, `edit` and `write`, other unlisted tools, and
+nested calls are unchanged. In particular, codemode scripts still receive the
+original structured data and can filter it themselves; only their final large
+text result is eligible. Images and existing tool details are retained. Raw
+structured output is not retained alongside a replaced top-level text result.
+A storage failure leaves the original result intact and reports a warning.
+
+Artifacts contain the text delivered by the upstream tool; this cannot recover
+anything that tool had already truncated. Receipts and tool details retain
+upstream full-output paths when available. Multiple text blocks are joined with
+blank lines; images stay in the result rather than being archived as text.
+
+Files/directories are private (0600/0700), with no network transmission by this
+extension. UUIDs survive reload, resume, and forks in the same agent directory.
+Artifacts are retained until manually removed; deleting them breaks receipts in
+old sessions. Treat them as sensitive as session logs. Inputs above 16 MiB fall
+back to the original result rather than silently losing output.
+
+`/artifacts` reports archived-result counts, text bytes omitted, and storage
+failures since this extension loaded. These are byte counts, not tokenizer or
+billing estimates. `/artifacts off` disables new archival until `on` or reload;
+previous artifacts remain retrievable. This deliberately starts with preventing
+large output from entering history, not semantic eviction of consumed evidence.
+
 ## Checks
 
 ```sh
@@ -299,8 +436,10 @@ node --test tests/*.test.ts
 ```
 
 The small regression suite makes no model calls and requires Git for the
-worktree check. For a loader/auth-configuration smoke check without starting
-Gondolin or making model requests:
+worktree check. When Pi is installed, the Anthropic integration test also
+exercises its bundled SDK and stream parser with intercepted HTTP requests.
+For a loader/auth-configuration smoke check without starting Gondolin or
+making model requests:
 
 ```sh
 pi --offline --no-extensions --no-skills --no-context-files \
@@ -312,6 +451,12 @@ pi --offline --no-extensions --no-skills --no-context-files \
 pi --offline --no-extensions --no-skills --no-context-files \
   --no-prompt-templates --no-session \
   -e ./extensions/snapcompact/index.ts -p '/snapcompact'
+pi --offline --no-extensions --no-skills --no-context-files \
+  --no-prompt-templates --no-session \
+  -e ./tests/fixtures/anthropic-smoke.ts -p '/anthropic-smoke'
+pi --offline --no-extensions --no-skills --no-context-files \
+  --no-prompt-templates --no-session \
+  -e ./extensions/artifacts/index.ts -p '/artifacts check'
 ```
 
 The installed pi documentation and shipped `session-name.ts`, `summarize.ts`,
