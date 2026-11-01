@@ -1,3 +1,7 @@
 [tasks.test]
 description = "Test locally owned pi extensions without model calls"
 run = "node --test tests/*.test.ts"
+
+[tasks."computer:test"]
+description = "Test the assistant VM controller without model calls"
+run = "node --test computer/tests/*.test.mjs"

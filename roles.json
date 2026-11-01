@@ -5,7 +5,7 @@
       "autoname": true,
       "roles": {
         "advisor": {
-          "provider": "openai-codex",
+          "provider": "openai",
           "model": "gpt-6-astra",
           "thinking": "high",
           "maxTokens": 8192,
@@ -19,14 +19,14 @@
           "timeoutMs": 600000
         },
         "tiny": {
-          "provider": "openai-codex",
+          "provider": "openai",
           "model": "gpt-5.6-luna",
           "thinking": "low",
           "maxTokens": 2048,
           "timeoutMs": 20000
         },
         "learn": {
-          "provider": "openai-codex",
+          "provider": "openai",
           "model": "gpt-5.6-sol",
           "thinking": "medium",
           "maxTokens": 8192,
