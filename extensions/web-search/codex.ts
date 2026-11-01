@@ -10,35 +10,19 @@ import {
 import { readSseJson } from "./sse.ts";
 
 const DEFAULT_MODELS = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"];
-const JWT_CLAIM_PATH = "https://api.openai.com/auth";
-const DEFAULT_BASE_URL = "https://chatgpt.com/backend-api";
+const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 
 export type CodexAuth = {
   token: string;
-  accountId: string;
   baseUrl?: string;
   headers?: Record<string, string | null>;
 };
 
-export function extractAccountId(token: string): string | undefined {
-  try {
-    const parts = token.split(".");
-    if (parts.length < 2) return;
-    const padded = parts[1]!.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - parts[1]!.length % 4) % 4);
-    const payload = JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as Record<string, any>;
-    const accountId = payload?.[JWT_CLAIM_PATH]?.chatgpt_account_id;
-    return typeof accountId === "string" && accountId ? accountId : undefined;
-  } catch {
-    return;
-  }
-}
-
 export function resolveCodexUrl(baseUrl?: string): string {
   const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : DEFAULT_BASE_URL;
   const normalized = raw.replace(/\/+$/, "");
-  if (normalized.endsWith("/codex/responses")) return normalized;
-  if (normalized.endsWith("/codex")) return `${normalized}/responses`;
-  return `${normalized}/codex/responses`;
+  if (normalized.endsWith("/responses")) return normalized;
+  return `${normalized}/responses`;
 }
 
 export function shouldRetryCodexModel(error: unknown): boolean {
@@ -195,9 +179,6 @@ function codexHeaders(auth: CodexAuth): Headers {
     else headers.set(key, value);
   }
   headers.set("Authorization", `Bearer ${auth.token}`);
-  headers.set("chatgpt-account-id", auth.accountId);
-  headers.set("originator", "pi");
-  headers.set("OpenAI-Beta", "responses=experimental");
   headers.set("accept", "text/event-stream");
   headers.set("content-type", "application/json");
   return headers;

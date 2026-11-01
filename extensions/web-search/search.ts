@@ -1,4 +1,4 @@
-import { extractAccountId, searchCodex, type CodexAuth } from "./codex.ts";
+import { searchCodex } from "./codex.ts";
 import { searchExa } from "./exa.ts";
 import {
   backendForSession,
@@ -21,7 +21,7 @@ export type AuthSource = {
 };
 
 export type SearchAuth = {
-  codex?: () => Promise<(AuthSource & { accountId?: string }) | undefined>;
+  codex?: () => Promise<AuthSource | undefined>;
   xai?: () => Promise<AuthSource | undefined>;
   exa?: () => Promise<string | undefined>;
 };
@@ -50,12 +50,10 @@ type Registry = {
 export function registryAuth(registry: Registry): SearchAuth {
   return {
     async codex() {
-      const result = await registry.getProviderAuth("openai-codex");
+      const result = await registry.getProviderAuth("openai");
       const token = result?.auth.apiKey;
       if (!token) return;
-      const accountId = extractAccountId(token);
-      if (!accountId) return;
-      return { token, accountId, baseUrl: result.auth.baseUrl, headers: result.auth.headers };
+      return { token, baseUrl: result.auth.baseUrl, headers: result.auth.headers };
     },
     async xai() {
       const result = await registry.getProviderAuth("xai");
@@ -133,9 +131,9 @@ async function runProvider(
 ): Promise<SearchResponse | "skip"> {
   if (provider === "codex") {
     const creds = await auth.codex?.();
-    if (!creds?.accountId) return "skip";
+    if (!creds?.token) return "skip";
     const sessionModel = backendForSession(params.sessionProvider) === "codex" ? params.sessionModel : undefined;
-    return searchCodex({ auth: creds as CodexAuth, query, sessionModel, signal, fetchImpl });
+    return searchCodex({ auth: creds, query, sessionModel, signal, fetchImpl });
   }
   if (provider === "xai") {
     const creds = await auth.xai?.();

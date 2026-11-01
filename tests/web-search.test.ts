@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { consumeCodexEvents, extractAccountId, extractTextSources, resolveCodexUrl, shouldRetryCodexModel } from "../extensions/web-search/codex.ts";
+import { consumeCodexEvents, extractTextSources, resolveCodexUrl, shouldRetryCodexModel } from "../extensions/web-search/codex.ts";
 import { buildExaBody, parseExaResponse, recencyStartDate, synthesizeAnswer } from "../extensions/web-search/exa.ts";
 import { formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, withRecencyHint } from "../extensions/web-search/format.ts";
-import { executeSearch, type SearchAuth } from "../extensions/web-search/search.ts";
+import { executeSearch, registryAuth, type SearchAuth } from "../extensions/web-search/search.ts";
 import { sseText } from "../extensions/web-search/sse.ts";
 import { buildXaiBody, parseXaiResponse } from "../extensions/web-search/xai.ts";
 
-function jwt(accountId: string): string {
-  const payload = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } })).toString("base64url");
+function jwt(): string {
+  const payload = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { encrypted_auth_metadata: "opaque" } })).toString("base64url");
   return `eyJhbGciOiJub25lIn0.${payload}.sig`;
 }
 
@@ -38,11 +38,10 @@ test("formatForLLM lists answer, sources, and citations", () => {
   assert.equal(withRecencyHint("pi extensions", "week"), "pi extensions (focus on the past week)");
 });
 
-test("Codex JWT, URL, markdown fallback, and event parsing", () => {
-  assert.equal(extractAccountId(jwt("acct_1")), "acct_1");
-  assert.equal(extractAccountId("not-a-jwt"), undefined);
-  assert.equal(resolveCodexUrl(), "https://chatgpt.com/backend-api/codex/responses");
-  assert.equal(resolveCodexUrl("https://chatgpt.com/backend-api/codex"), "https://chatgpt.com/backend-api/codex/responses");
+test("OpenAI Responses URL, markdown fallback, and event parsing", () => {
+  assert.equal(resolveCodexUrl(), "https://api.openai.com/v1/responses");
+  assert.equal(resolveCodexUrl("https://gateway.example/v1/"), "https://gateway.example/v1/responses");
+  assert.equal(resolveCodexUrl("https://gateway.example/v1/responses"), "https://gateway.example/v1/responses");
   const sources = extractTextSources("See [Docs](https://example.com/a) and https://example.com/b).");
   assert.equal(sources[0]?.url, "https://example.com/a");
   assert.equal(sources[1]?.url, "https://example.com/b");
@@ -66,6 +65,53 @@ test("Codex JWT, URL, markdown fallback, and event parsing", () => {
   assert.throws(() => consumeCodexEvents([{ type: "response.output_text.delta", delta: "no search" }], "gpt-5.6-luna"), /without running web search/);
   assert.equal(shouldRetryCodexModel(new ProviderError("codex", "model is not supported", 400)), true);
   assert.equal(shouldRetryCodexModel(new ProviderError("xai", "nope", 400)), false);
+});
+
+test("Codex search resolves OAuth without an account-id claim through openai", async () => {
+  const token = jwt();
+  const baseUrl = "https://api.openai.com/v1";
+  const headers = { "X-Test": "value" };
+  const calls: string[] = [];
+  const auth = registryAuth({
+    async getProviderAuth(id) {
+      calls.push(id);
+      return id === "openai" ? { auth: { apiKey: token, baseUrl, headers } } : undefined;
+    },
+  });
+  assert.deepEqual(await auth.codex!(), { token, baseUrl, headers });
+  assert.deepEqual(calls, ["openai"]);
+
+  const apiKeyAuth = registryAuth({
+    async getProviderAuth() { return { auth: { apiKey: "sk-proj-test" } }; },
+  });
+  assert.equal((await apiKeyAuth.codex!())?.token, "sk-proj-test");
+
+  const missingAuth = registryAuth({ async getProviderAuth() { return undefined; } });
+  assert.equal(await missingAuth.codex!(), undefined);
+});
+
+test("ChatGPT search uses OpenAI Responses without legacy Codex headers", async () => {
+  const token = jwt();
+  const result = await executeSearch({ query: "pi docs", sessionProvider: "openai", sessionModel: "gpt-6.1-sol" }, {
+    auth: registryAuth({ async getProviderAuth() { return { auth: { apiKey: token } }; } }),
+    fetchImpl: async (input, init) => {
+      assert.equal(String(input), "https://api.openai.com/v1/responses");
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("authorization"), `Bearer ${token}`);
+      assert.equal(headers.has("chatgpt-account-id"), false);
+      assert.equal(headers.has("OpenAI-Beta"), false);
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.model, "gpt-6.1-sol");
+      assert.deepEqual(body.tools, [{ type: "web_search", search_context_size: "high" }]);
+      assert.equal(body.max_output_tokens, undefined);
+      return sseResponse([
+        { type: "response.web_search_call.completed" },
+        { type: "response.output_text.delta", delta: "See https://pi.dev" },
+      ]);
+    },
+  });
+  assert.equal(result.response?.provider, "codex");
+  assert.match(result.text, /https:\/\/pi.dev/);
 });
 
 test("xAI and Exa parsers keep sources and synthesize answers", () => {
@@ -127,13 +173,13 @@ test("search chain skips missing backends, then falls through failures", async (
   let n = 0;
   const fallback = await executeSearch({ query: "exa after codex" }, {
     auth: {
-      codex: async () => ({ token: jwt("acct_1"), accountId: "acct_1" }),
+      codex: async () => ({ token: jwt() }),
       xai: async () => undefined,
       exa: async () => "exa-key",
     },
     fetchImpl: async (input) => {
       n += 1;
-      if (String(input).includes("chatgpt.com")) return sseResponse([{ type: "error", code: "rate_limit", message: "slow down" }]);
+      if (String(input).includes("api.openai.com")) return sseResponse([{ type: "error", code: "rate_limit", message: "slow down" }]);
       return jsonResponse({ results: [{ title: "Exa hit", url: "https://exa.ai", summary: "Fallback worked." }] });
     },
   });
@@ -145,12 +191,13 @@ test("search chain skips missing backends, then falls through failures", async (
 test("Grok and Codex sessions prefer their own backend first", async () => {
   assert.deepEqual(searchOrder("xai"), ["xai", "codex", "exa"]);
   assert.deepEqual(searchOrder("grok"), ["xai", "codex", "exa"]);
+  assert.deepEqual(searchOrder("openai"), ["codex", "xai", "exa"]);
   assert.deepEqual(searchOrder("openai-codex"), ["codex", "xai", "exa"]);
   assert.deepEqual(searchOrder("nous-portal"), ["codex", "xai", "exa"]);
 
   const calls: string[] = [];
   const auth: SearchAuth = {
-    codex: async () => ({ token: jwt("acct_1"), accountId: "acct_1" }),
+    codex: async () => ({ token: jwt() }),
     xai: async () => ({ token: "xai-token" }),
     exa: async () => undefined,
   };
