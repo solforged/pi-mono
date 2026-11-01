@@ -1,11 +1,11 @@
-import { readFile, realpath } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { realpath } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { registerAutoname } from "./autoname.ts";
+import { loadTitlePrompt, registerAutoname } from "./autoname.ts";
 import { registerCommit } from "./commit.ts";
 import { registerLearning } from "./learning-ui.ts";
 import { addUsage, bounded, emptyUsage } from "./process.ts";
@@ -122,7 +122,7 @@ export default async function (pi: ExtensionAPI) {
       },
     });
   }
-  const titlePrompt = await readFile(join(root, "TITLE_SYSTEM.md"), "utf8");
+  const titlePrompt = await loadTitlePrompt(root, agentDir);
   registerAutoname(pi, getConfig, titlePrompt, lifetime.signal);
   registerCommit(pi, getConfig, agentDir, lifetime.signal, report);
   registerLearning(pi, getConfig, agentDir, lifetime.signal, report);

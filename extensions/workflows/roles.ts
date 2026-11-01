@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-export const roleNames = ["advisor", "task", "tiny", "learn"] as const;
+export const roleNames = ["advisor", "task", "commit", "tiny", "learn"] as const;
 export type RoleName = (typeof roleNames)[number];
 export const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export interface Role {
@@ -42,7 +42,7 @@ export function expandHome(value: string): string {
   return value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
 }
 export function profileName(env: NodeJS.ProcessEnv = process.env): string {
-  const profile = env.PI_WORKFLOW_PROFILE ?? (env.FNOX_PROFILE === "work" ? "work" : "personal");
+  const profile = env.PI_WORKFLOW_PROFILE ?? "personal";
   if (!/^[a-z][a-z0-9-]{0,31}$/.test(profile)) throw new Error("Invalid PI_WORKFLOW_PROFILE");
   return profile;
 }

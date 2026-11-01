@@ -1,6 +1,14 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { configSnapshot, type ConfigSource } from "./roles.ts";
 import { completeRole } from "./requests.ts";
+
+export async function loadTitlePrompt(root: string, agentDir: string): Promise<string> {
+  try { return await readFile(join(agentDir, "TITLE_SYSTEM.md"), "utf8"); }
+  catch (error: any) { if (error.code !== "ENOENT") throw error; }
+  return readFile(join(root, "TITLE_SYSTEM.md"), "utf8");
+}
 
 export function parseTitle(text: string): string | undefined {
   const match = /^<title>([^<>\n\r]+)<\/title>$/.exec(text.trim());

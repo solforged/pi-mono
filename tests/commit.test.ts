@@ -28,29 +28,45 @@ test("porcelain v2 parses modifications, renames, and untracked files", () => {
   assert.throws(() => parsePorcelainV2("1 .M N... 100644 100644 100644 abc abc ../escape\0"), /Unsafe path/);
 });
 
-test("commit messages wrap, reject lists, and plans cover every path once", () => {
+test("commit messages use omp headers and wrapped bullet bodies", () => {
   assert.equal(wrapParagraph("one two three four", 10), "one two\nthree four");
-  assert.equal(validateMessage("feat(zsh): Added foo.", "").subject, "feat(zsh): Added foo");
+  assert.equal(validateMessage("feat(zsh): added foo.", "").subject, "feat(zsh): added foo");
+  assert.equal(validateMessage("chore: removed old config", "").body, "");
+  assert.equal(validateMessage("fix(git/hooks): fixed validation", "- Rejected invalid input.").body, "- Rejected invalid input.");
   assert.throws(() => validateMessage("x".repeat(73), ""), /72/);
-  assert.throws(() => validateMessage("fix(git): Updated hooks", "- did a thing"), /list/);
+  for (const subject of ["fix(git): Updated hooks", "plain subject", "fix(A): fixed hooks", "fix(a/b/c): fixed hooks"]) {
+    assert.throws(() => validateMessage(subject, ""), /lowercase summary/);
+  }
+  for (const body of ["A prose paragraph.", "1. Added a thing.", "* Added a thing.", "- Added a thing", "- One.\n\nA paragraph."]) {
+    assert.throws(() => validateMessage("fix(git): fixed hooks", body), /bullets|sentence/);
+  }
+  assert.throws(() => validateMessage("fix(git): fixed hooks", Array(7).fill("- Added a check.").join("\n")), /six bullets/);
+  const body = "- Replaced the old policy with the current global commit style so generated messages passed the same checks as manual commits.\n- Kept existing hooks active.\n  Preserved their failure messages.";
+  const wrapped = validateMessage("fix(git): aligned commit rules", body).body;
+  assert.ok(wrapped.split("\n").every((line) => line.length <= 72));
+  assert.ok(wrapped.split("\n").every((line) => /^(?:- | {2})\S/.test(line)));
+  assert.equal(validateMessage("fix(git): aligned commit rules", wrapped).body, wrapped);
+});
+
+test("commit plans cover every path once and keep renames together", () => {
   const files = [file("a.ts"), file("b.ts"), file("new.ts", "n", { state: "renamed", origPath: "old.ts" }), file("old.ts", "deleted", { state: "renamed", origPath: "new.ts" })];
   const groups = parseGroups(JSON.stringify({
     groups: [
-      { subject: "feat(cli): Added parser", files: ["a.ts"] },
-      { subject: "fix(cli): Renamed helper.", body: "Keep the old path with the new file.", files: ["b.ts", "new.ts", "old.ts"] },
+      { subject: "feat(cli): added parser", files: ["a.ts"] },
+      { subject: "fix(cli): renamed helper.", body: "- Kept the old path with the new file.", files: ["b.ts", "new.ts", "old.ts"] },
     ],
   }), files);
   assert.equal(groups[0].files[0], "a.ts");
-  assert.equal(groups[1].subject, "fix(cli): Renamed helper");
-  assert.match(groups[1].body, /Keep the old path/);
-  assert.throws(() => parseGroups(JSON.stringify({ groups: [{ subject: "feat(cli): Added parser", files: ["a.ts"] }] }), files), /Unassigned/);
+  assert.equal(groups[1].subject, "fix(cli): renamed helper");
+  assert.match(groups[1].body, /Kept the old path/);
+  assert.throws(() => parseGroups(JSON.stringify({ groups: [{ subject: "feat(cli): added parser", files: ["a.ts"] }] }), files), /Unassigned/);
   assert.throws(() => parseGroups(JSON.stringify({
     groups: [
-      { subject: "feat(cli): Added parser", files: ["a.ts", "new.ts"] },
-      { subject: "fix(cli): Left the rename", files: ["b.ts", "old.ts"] },
+      { subject: "feat(cli): added parser", files: ["a.ts", "new.ts"] },
+      { subject: "fix(cli): left the rename", files: ["b.ts", "old.ts"] },
     ],
   }), files), /Rename must stay together/);
-  assert.match(formatPlan(groups), /Added parser/);
+  assert.match(formatPlan(groups), /added parser/);
 });
 
 test("cached plans reuse the same remaining tree and invalidate on edits", () => {
@@ -59,11 +75,17 @@ test("cached plans reuse the same remaining tree and invalidate on edits", () =>
     version: 1, repo: "/repo", head: "abc", fingerprint: fingerprint("abc", files),
     files, created: "now",
     groups: [
-      { subject: "feat(cli): Added a", body: "", files: ["a.ts"], status: "pending" },
-      { subject: "feat(cli): Added b", body: "", files: ["b.ts"], status: "pending" },
+      { subject: "feat(cli): added a", body: "", files: ["a.ts"], status: "pending" },
+      { subject: "feat(cli): added b", body: "", files: ["b.ts"], status: "pending" },
     ],
   };
   assert.equal(planValid(plan, "/repo", "abc", files), true);
+  const outdated = structuredClone(plan);
+  outdated.groups[0].subject = "feat(cli): Added a";
+  assert.equal(planValid(outdated, "/repo", "abc", files), false);
+  outdated.groups[0].subject = plan.groups[0].subject;
+  outdated.groups[0].body = "Used the old prose-paragraph policy.";
+  assert.equal(planValid(outdated, "/repo", "abc", files), false);
   assert.equal(planValid(plan, "/other", "abc", files), false);
   assert.equal(planValid(plan, "/repo", "def", files), false);
   assert.equal(planValid(plan, "/repo", "abc", [file("a.ts", "changed"), file("b.ts", "2")]), false);
@@ -120,8 +142,8 @@ test("applyGroups commits in order and retries remaining groups after a hook fai
     version: 1, repo, head: current.head, fingerprint: fingerprint(current.head, current.files),
     files: current.files, created: "now",
     groups: [
-      { subject: "feat(cli): Added ok file", body: "", files: ["ok.txt"], status: "pending" },
-      { subject: "feat(cli): Added secret file", body: "", files: ["secret.txt"], status: "pending" },
+      { subject: "feat(cli): added ok file", body: "", files: ["ok.txt"], status: "pending" },
+      { subject: "feat(cli): added secret file", body: "", files: ["secret.txt"], status: "pending" },
     ],
   };
   const saved: Plan[] = [];
@@ -135,10 +157,10 @@ test("applyGroups commits in order and retries remaining groups after a hook fai
   await writeFile(hook, "#!/bin/sh\nexit 0\n");
   const second = await applyGroups(ctx, plan, async (next) => { saved.push(structuredClone(next)); });
   assert.equal(second.error, undefined);
-  assert.deepEqual(second.committed, ["feat(cli): Added secret file"]);
+  assert.deepEqual(second.committed, ["feat(cli): added secret file"]);
   const log = await git("log", "--format=%s");
-  assert.match(log, /Added ok file/);
-  assert.match(log, /Added secret file/);
+  assert.match(log, /added ok file/);
+  assert.match(log, /added secret file/);
   const clean = await snapshot(ctx);
   assert.equal(clean.files.length, 0);
   assert.ok(saved.length >= 2);

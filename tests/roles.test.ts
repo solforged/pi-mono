@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { profileName, resolveConfig, resolveRole } from "../extensions/workflows/roles.ts";
+import { profileName, resolveConfig, resolveRole, roleNames } from "../extensions/workflows/roles.ts";
 import { completeRole } from "../extensions/workflows/requests.ts";
 import { base, config, registry, root, temporary } from "./helpers.ts";
 import { readFile } from "node:fs/promises";
@@ -9,11 +9,21 @@ import { RoleStore, previewRoles } from "../extensions/workflows/role-store.ts";
 import { supportedThinking } from "../extensions/workflows/roles.ts";
 import { saveJson } from "../extensions/workflows/state.ts";
 
-test("personal roles use Codex/Grok; work never inherits them", () => {
-  assert.equal(config.roles.task?.provider, "xai");
-  assert.equal(profileName({ FNOX_PROFILE: "work" }), "work");
+test("personal roles default to OpenAI; Anthropic is opt-in; work stays unset", () => {
+  assert.equal(profileName({}), "personal");
+  assert.equal(profileName({ FNOX_PROFILE: "work" }), "personal");
+  assert.equal(profileName({ PI_WORKFLOW_PROFILE: "anthropic" }), "anthropic");
+  assert.equal(config.roles.task?.model, "gpt-6.1-sol");
+  assert.equal(config.roles.commit?.model, "gpt-6-luna");
+  assert.equal(config.roles.learn?.model, "gpt-6-luna");
+  const anthropic = resolveConfig(base, {}, "anthropic");
+  assert.equal(anthropic.roles.advisor?.model, "claude-opus-5-5");
+  assert.equal(anthropic.roles.task?.model, "claude-sonnet-5-5");
+  assert.equal(anthropic.roles.commit?.model, "claude-haiku-5-5");
   const work = resolveConfig(base, {}, "work");
-  for (const name of ["advisor", "task", "tiny", "learn"] as const) {
+  for (const name of roleNames) {
+    assert.equal(config.roles[name]?.provider, "openai");
+    assert.equal(anthropic.roles[name]?.provider, "anthropic");
     assert.equal(work.roles[name], null);
     assert.throws(() => resolveRole(work, name, registry() as any), /no fallback/);
   }
@@ -65,7 +75,7 @@ test("role panel drafts are isolated; save preserves other profiles and running 
   const draft = await store.begin();
   draft.edits.task = { ...config.roles.task!, provider: "nous-portal", model: "test-model" };
   assert.equal(previewRoles(draft).roles.task?.provider, "nous-portal");
-  assert.equal(store.snapshot().roles.task?.provider, "xai");
+  assert.equal(store.snapshot().roles.task?.provider, "openai");
   assert.deepEqual(JSON.parse(await readFile(file, "utf8")), local);
   const models = { ...registry(), find: (provider: string, id: string) => ({ provider, id, maxTokens: 8192, reasoning: true }) };
   await store.save(draft, models as any, new AbortController().signal);
@@ -74,7 +84,7 @@ test("role panel drafts are isolated; save preserves other profiles and running 
   assert.equal(saved.profiles.personal.roles.task.note, "custom field");
   assert.deepEqual(saved.profiles.work, local.profiles.work);
   assert.equal(store.snapshot().roles.task?.provider, "nous-portal");
-  assert.equal(running.roles.task?.provider, "xai");
+  assert.equal(running.roles.task?.provider, "openai");
 });
 
 test("disable is explicit null; reset removes only the active profile override", async (t) => {
@@ -87,7 +97,7 @@ test("disable is explicit null; reset removes only the active profile override",
   const reset = await store.begin();
   reset.edits.task = "reset";
   await store.save(reset, registry() as any, new AbortController().signal);
-  assert.equal(store.snapshot().roles.task?.provider, "xai");
+  assert.equal(store.snapshot().roles.task?.provider, "openai");
   const saved = JSON.parse(await readFile(join(dir, "roles.local.json"), "utf8"));
   assert.ok(!Object.hasOwn(saved.profiles.personal.roles, "task"));
   const work = await RoleStore.create(root, dir, "work");

@@ -1,13 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFile, symlink } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseTitle, registerAutoname } from "../extensions/workflows/autoname.ts";
+import { loadTitlePrompt, parseTitle, registerAutoname } from "../extensions/workflows/autoname.ts";
 import { applyDraft, evidenceChunks, evidenceFromBranch, inventorySkills, parseCandidates, renderDraft, stageCandidate } from "../extensions/workflows/learning.ts";
 import { atomicWrite, hash, readSkill } from "../extensions/workflows/state.ts";
 import { childArgs, childExtensions, createWorktree } from "../extensions/workflows/subagents.ts";
 import { runProcess } from "../extensions/workflows/process.ts";
 import { config, registry, root, skill, temporary } from "./helpers.ts";
+
+test("title prompts prefer the agent directory and fall back only when absent", async (t) => {
+  const dir = await temporary(t);
+  assert.equal(await loadTitlePrompt(root, dir), await readFile(join(root, "TITLE_SYSTEM.md"), "utf8"));
+  await writeFile(join(dir, "TITLE_SYSTEM.md"), "Shared title rules");
+  assert.equal(await loadTitlePrompt(root, dir), "Shared title rules");
+  const broken = await temporary(t);
+  await mkdir(join(broken, "TITLE_SYSTEM.md"));
+  await assert.rejects(loadTitlePrompt(root, broken), { code: "EISDIR" });
+});
 
 test("automatic names cannot overwrite a manual name while a request is pending", async () => {
   assert.equal(parseTitle("<title>Fix the session naming</title>"), "Fix the session naming");
@@ -81,7 +91,9 @@ test("workers use separate worktrees, preserve the parent checkout, and reject d
     assert.equal(result.code, 0, result.stderr);
   };
   await git("init", "-q");
-  await git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "test");
+  // Only this disposable repository bypasses host hooks, including post-checkout.
+  await git("config", "core.hooksPath", await temporary(t));
+  await git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "test: created fixture");
   // Worktrees live outside the source repository, as they do in production.
   const worktrees = await temporary(t);
   const [first, second] = await Promise.all([createWorktree(dir, join(worktrees, "first"), signal), createWorktree(dir, join(worktrees, "second"), signal)]);
