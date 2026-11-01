@@ -1,0 +1,19 @@
+[Unit]
+Description=Assistant shared XFCE desktop
+Requires=assistant-display.service
+After=assistant-display.service
+
+[Service]
+Type=simple
+User=assistant
+Group=assistant
+RuntimeDirectory=assistant-desktop
+RuntimeDirectoryMode=0700
+Environment=HOME=/home/assistant DISPLAY=:0 XAUTHORITY=/home/assistant/.Xauthority XDG_RUNTIME_DIR=/run/assistant-desktop XDG_SESSION_TYPE=x11
+ExecStartPre=/opt/assistant-computer/wait-display.sh
+ExecStart=/usr/bin/dbus-run-session -- /usr/bin/xfce4-session
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

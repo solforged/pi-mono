@@ -1,0 +1,15 @@
+[Unit]
+Description=Assistant virtual X11 display
+After=network.target
+
+[Service]
+Type=simple
+User=assistant
+Group=assistant
+Environment=HOME=/home/assistant
+ExecStart=/opt/assistant-computer/display.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

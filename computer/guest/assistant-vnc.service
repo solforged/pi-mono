@@ -1,0 +1,17 @@
+[Unit]
+Description=Assistant desktop access over SSH
+Requires=assistant-display.service
+After=assistant-display.service
+
+[Service]
+Type=simple
+User=assistant
+Group=assistant
+Environment=HOME=/home/assistant DISPLAY=:0 XAUTHORITY=/home/assistant/.Xauthority
+ExecStartPre=/opt/assistant-computer/wait-display.sh
+ExecStart=/usr/bin/x11vnc -display :0 -auth /home/assistant/.Xauthority -rfbauth /home/assistant/.vnc/passwd -localhost -rfbport 5900 -forever -shared -nosel -noxdamage
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
