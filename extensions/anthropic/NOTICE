@@ -1,0 +1,38 @@
+Anthropic compatibility algorithms and constants adapted from:
+https://github.com/can1357/oh-my-pi
+
+packages/ai/src/providers/anthropic.ts
+packages/ai/src/providers/claude-code-fingerprint.ts
+
+Upstream changes:
+e7daffdda7eb6b4a8363fb37b6fd0f16fadaabc2 (fingerprint hardening)
+c7cd89d2360fe55a1f2103303ff49b18c9a82526 (body attestation)
+228222665589a144c4592283c5fd919d5bd0caed (dynamic version and retry)
+42aee39175 (full OAuth model output ceiling; already supported by Pi 1.0.2)
+
+This port delegates login, models, tools, thinking, and stream parsing to Pi.
+It is locally maintained; it does not download upstream updates at runtime.
+
+MIT License
+
+Copyright (c) 2025 Mario Zechner
+Copyright (c) 2025-2026 Can Bölük
+Copyright (c) 2026 Stencil Labs, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
