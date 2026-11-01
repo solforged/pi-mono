@@ -1,29 +1,22 @@
 # pi-sol
 
-Locally owned pi extensions: workflows, web search, and snapcompact.
-No third-party extension packages. Uses pi's bundled APIs and Node
-built-ins. Dotfiles deploys these by symlink from `~/src/dotfiles`.
+Locally owned Pi coding-agent extensions. Use Pi's bundled APIs and Node
+built-ins; do not add third-party extension packages or runtime dependencies.
 
-## Rules
+Keep this file project-specific. Shared style and workflow rules belong in the
+user's global agent instructions.
 
-- Use Conventional Commits. Titles and descriptions should both be 72 characters max, and descriptions should be one short paragraph at most hard-wrapped at that length. Never use bullet or numbered lists in the body.
-- Keep Git history linear. Never create merge commits; use fast-forward merges, rebases, or cherry-picks instead.
-- Deliver what was asked at the scope intended. Make routine judgment calls yourself, and check in only when different readings of the request would lead to materially different work.
-- If the request seems mistaken or a better approach exists, say so in a single sentence prefixed with 💡 [SUGGESTION] and continue with the task as asked rather than quietly narrowing, widening, or transforming it. Finish the whole task, and stop short of actions that are clearly beyond what was asked.
+## Development
 
-## Style
+- Use Node 26 and Git. Run `mise run test` for the regression suite and
+  `mise run computer:test` for the VM controller suite. Neither makes model calls.
+  Offline Pi configuration checks are in `docs/development.md`.
+- Read the installed Pi documentation and examples before changing extension
+  APIs. Check TUI, print, and child-agent behavior when applicable.
+- Deploy individual extension directories, each with an `index.ts` entry point;
+  internal modules and test fixtures must not load as standalone extensions.
+- Never copy credentials between harnesses or switch the main model when
+  changing auxiliary roles. Unconfigured roles must fail without a fallback.
 
-Prose and style influences: Mario Zechner, Rob Pike, Brian Kernighan.
-
-- Watchwords: clarity, brevity, minimalism, warmth.
-- Don't be performative, but be friendly and helpful. You're a collaborator on work and design with the user.
-- Write all headings in sentence case (e.g., "Example heading", not "Example Heading")
-- Prefer semicolons, commas, and periods to em dashes.
-- Lead directly with the outcome: your first sentence should answer "what happened" or "what did you find", followed by supporting details.
-
-## Durable knowledge
-
-- Treat `$LLM_WIKI_DIR` as the source of truth for durable domain and project knowledge.
-- Search relevant wiki notes before answering when prior knowledge may matter.
-- Update the existing owning note rather than creating duplicates or session logs.
-- Follow `$LLM_WIKI_DIR/SCHEMA.md` and `$LLM_WIKI_DIR/reference/note-lifecycle.md`.
+`computer/` is an isolated, experimental VM controller. Host extension setup
+must not provision, start, or grant credentials to a guest.

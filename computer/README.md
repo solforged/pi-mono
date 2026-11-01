@@ -6,8 +6,10 @@ milestone supplies the computer, not an autonomous assistant service.
 
 ## Start here
 
-On Hyperion, dotfiles deploys `assistant-computer` from `computer/cli.mjs`.
-Without deployment, use `node ~/src/pi-sol/computer/cli.mjs` instead.
+This prototype is separate from the host extensions. Use
+`node ~/src/pi-sol/computer/cli.mjs` directly, or link the executable as
+`assistant-computer` in a directory on `PATH` for the commands below. Supply the
+host requirements separately; installing extensions does not create or start a VM.
 
 ```sh
 assistant-computer doctor
@@ -47,9 +49,9 @@ not only to the currently requested task.
 - Linux uses KVM and `xorriso`; the user must have access to `/dev/kvm`.
 - `age` for encrypted backup/restore; not needed to boot.
 
-Hyperion's mise layer declares Homebrew QEMU and age. No Amarna dependency or
-service changes are made yet. Its eventual setup needs QEMU, architecture-
-appropriate edk2 firmware, xorriso, age, and working KVM permissions.
+Install these tools through the host's package manager and configure KVM
+permissions separately on Linux. No host service is installed or started by
+extension setup. Do not treat passing controller tests as live VM acceptance.
 
 Defaults: 4 CPUs, 8192 MiB RAM, a sparse 64 GiB disk, SSH on host loopback port
 22222, and a foreground desktop tunnel on host loopback port 15900. Override
