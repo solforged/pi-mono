@@ -9,7 +9,7 @@ import {
   type Source,
 } from "./format.ts";
 
-const DEFAULT_MODELS = ["grok-4.6", "grok-4.5"];
+const DEFAULT_MODELS = ["grok-4.7"];
 const DEFAULT_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_CAP = 10;
 const MAX_CAP = 30;

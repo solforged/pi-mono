@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { consumeCodexEvents, extractTextSources, resolveCodexUrl, shouldRetryCodexModel } from "../extensions/web-search/codex.ts";
+import { codexModels, consumeCodexEvents, extractTextSources, resolveCodexUrl, shouldRetryCodexModel } from "../extensions/web-search/codex.ts";
 import { buildExaBody, parseExaResponse, recencyStartDate, synthesizeAnswer } from "../extensions/web-search/exa.ts";
 import { formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, withRecencyHint } from "../extensions/web-search/format.ts";
 import { executeSearch, registryAuth, type SearchAuth } from "../extensions/web-search/search.ts";
 import { sseText } from "../extensions/web-search/sse.ts";
-import { buildXaiBody, parseXaiResponse } from "../extensions/web-search/xai.ts";
+import { buildXaiBody, parseXaiResponse, xaiModels } from "../extensions/web-search/xai.ts";
 
 function jwt(): string {
   const payload = Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { encrypted_auth_metadata: "opaque" } })).toString("base64url");
@@ -19,6 +19,23 @@ function jsonResponse(body: unknown, status = 200): Response {
 function sseResponse(events: unknown[], status = 200): Response {
   return new Response(sseText(events), { status, headers: { "content-type": "text/event-stream" } });
 }
+
+test("search defaults use current models and preserve explicit pins", (t) => {
+  const keys = ["PI_CODEX_WEB_SEARCH_MODEL", "PI_XAI_WEB_SEARCH_MODEL"];
+  for (const key of keys) {
+    const previous = process.env[key];
+    t.after(() => { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; });
+    delete process.env[key];
+  }
+  assert.deepEqual(codexModels(), ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"]);
+  assert.deepEqual(xaiModels(), ["grok-4.7"]);
+  assert.equal(codexModels("gpt-6.1-sol")[0], "gpt-6.1-sol");
+  assert.equal(xaiModels("session-model")[0], "session-model");
+  process.env.PI_CODEX_WEB_SEARCH_MODEL = "pinned-openai";
+  process.env.PI_XAI_WEB_SEARCH_MODEL = "pinned-xai";
+  assert.deepEqual(codexModels("session-model"), ["pinned-openai"]);
+  assert.deepEqual(xaiModels("session-model"), ["pinned-xai"]);
+});
 
 test("formatForLLM lists answer, sources, and citations", () => {
   const text = formatForLLM({
