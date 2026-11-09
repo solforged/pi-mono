@@ -108,8 +108,19 @@ export type Segment = { text: string; priority: number; compact?: string };
 //   pi.events.emit("statusline:segment", { key, text, color?, priority? })
 // color names a theme color (default "muted"); priority ranks it with the
 // built-in segments (default 1, the cost's). An empty text removes the key.
+// A segment replaces the extension status with the same key, so an extension
+// can publish both and Pi's built-in footer still shows the status.
 export const SEGMENT_EVENT = "statusline:segment";
 export type Contribution = { text: string; color: string; priority: number };
+
+// Extension statuses for the right-hand side, sorted by key, without those a segment replaces.
+export function rightStatuses(statuses: ReadonlyMap<string, string>, contributed: ReadonlyMap<string, unknown>): string[] {
+  return [...statuses.entries()]
+    .filter(([key]) => !contributed.has(key))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, text]) => text.replace(/[\r\n\t]+/g, " ").trim())
+    .filter(Boolean);
+}
 
 export function readContribution(data: unknown): { key: string; contribution?: Contribution } | undefined {
   if (typeof data !== "object" || data === null) return undefined;

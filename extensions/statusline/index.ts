@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
-  displayPath, fitSegments, formatCost, formatTokens, icons, layout, parseGitStatus, readContribution, sessionStats,
+  displayPath, fitSegments, formatCost, formatTokens, icons, layout, parseGitStatus, readContribution, rightStatuses, sessionStats,
   modelLabel, thinkingColor, thinkingIcon, thinkingLabel, SEGMENT_EVENT, type Contribution, type Git, type Segment, type Stats,
 } from "./format.ts";
 
@@ -135,10 +135,7 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
         }
 
         const left = fitSegments(segments, dim(" · "), width, measure);
-        const statuses = [...footerData.getExtensionStatuses().entries()]
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([, text]) => text.replace(/[\r\n\t]+/g, " ").trim())
-          .filter(Boolean);
+        const statuses = rightStatuses(footerData.getExtensionStatuses(), contributed);
         const name = ctx.sessionManager.getSessionName();
         return layout(left, statuses, name ? dim(name) : undefined, width, measure);
       },

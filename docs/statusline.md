@@ -34,7 +34,10 @@ pi.events.emit("statusline:segment", { key: "my-ext", text: "label", color: "war
 
 and removes it by emitting the same key with no text. `color` names a theme
 color (default `muted`); `priority` ranks the segment against the built-in ones
-when the line is too narrow (default 1, the same as cost).
+when the line is too narrow (default 1, the same as cost). A segment replaces the
+extension status (`ctx.ui.setStatus`) with the same key. An extension can
+therefore publish both, so its state still shows in Pi's built-in footer
+without appearing twice here.
 
 Extension statuses and the session name are right-aligned when they fit. When
 they don't, the session name moves to a second line, followed by statuses if
