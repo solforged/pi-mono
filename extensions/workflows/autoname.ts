@@ -28,13 +28,25 @@ export function firstUserText(entries: any[]): string {
   return "";
 }
 
+const PERMANENT_ERROR = /insufficient_quota|usage.?limit|quota.?exceeded|billing|available balance|out of budget/i;
+const TRANSIENT_ERROR = /(?<![a-z0-9])(?:408|429|5\d\d)(?![a-z0-9])|overloaded|capacity|rate.?limit|too many requests|unavailable|timed? ?out|timeout|network|connection|fetch failed|socket|ECONNRESET|ENOTFOUND|EAI_AGAIN|stream ended/i;
+export const MAX_TRANSIENT_FAILURES = 3;
+
+/** Provider outages, rate limits and timeouts; quota and billing limits are permanent. */
+export function isTransientError(error: unknown): boolean {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return !PERMANENT_ERROR.test(text) && TRANSIENT_ERROR.test(text);
+}
+
 export function registerAutoname(pi: ExtensionAPI, source: ConfigSource, prompt: string, lifetime: AbortSignal) {
   let busy = false;
   let attempted = false;
+  let transientFailures = 0;
   let nameRevision = 0;
   let titleController: AbortController | undefined;
   pi.on("session_start", (_event, ctx) => {
     // Markers copied by fork/clone belong to the old session, not the new one.
+    transientFailures = 0;
     attempted = ctx.sessionManager.getEntries().some((entry: any) => entry.type === "custom" && entry.customType === "workflow-title" && entry.data?.sessionId === ctx.sessionManager.getSessionId());
   });
   pi.on("session_info_changed", () => { nameRevision++; });
@@ -51,18 +63,27 @@ export function registerAutoname(pi: ExtensionAPI, source: ConfigSource, prompt:
     const sessionId = ctx.sessionManager.getSessionId();
     const previous = pi.getSessionName();
     const revision = nameRevision;
-    try {
+    const sameSession = () => ctx.sessionManager.getSessionId() === sessionId;
+    // Only a response or a permanent failure uses up the one automatic attempt.
+    const markAttempted = () => {
       attempted = true;
       pi.appendEntry("workflow-title", { sessionId, attempted: true });
+    };
+    try {
       const result = await completeRole(ctx, config, "tiny", prompt, text, signal);
       signal.throwIfAborted();
+      if (!sameSession()) return;
+      markAttempted();
       const title = parseTitle(result.text);
-      if (ctx.sessionManager.getSessionId() !== sessionId || nameRevision !== revision || pi.getSessionName() !== previous) return;
+      if (nameRevision !== revision || pi.getSessionName() !== previous) return;
       pi.appendEntry("workflow-usage", { role: "tiny", ...result, text: undefined });
       if (title) pi.setSessionName(title);
       else if (force && ctx.hasUI) ctx.ui.notify("No valid task title generated", "info");
     } catch (error) {
-      if (!signal.aborted && ctx.hasUI) ctx.ui.notify(`Automatic naming skipped: ${String(error)}`, "warning");
+      if (signal.aborted || !sameSession()) return;
+      const retry = !force && isTransientError(error) && ++transientFailures < MAX_TRANSIENT_FAILURES;
+      if (!retry) markAttempted();
+      if (ctx.hasUI) ctx.ui.notify(`Automatic naming ${retry ? "will retry on your next message" : "skipped"}: ${String(error)}`, "warning");
     } finally { busy = false; titleController = undefined; }
   }
   pi.on("message_end", (event, ctx) => {

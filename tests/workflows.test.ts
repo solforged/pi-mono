@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { loadTitlePrompt, parseTitle, registerAutoname } from "../extensions/workflows/autoname.ts";
+import { isTransientError, loadTitlePrompt, MAX_TRANSIENT_FAILURES, parseTitle, registerAutoname } from "../extensions/workflows/autoname.ts";
 import { applyDraft, evidenceChunks, evidenceFromBranch, inventorySkills, parseCandidates, renderDraft, stageCandidate } from "../extensions/workflows/learning.ts";
 import { atomicWrite, hash, readSkill } from "../extensions/workflows/state.ts";
 import { childArgs, childExtensions, createWorktree } from "../extensions/workflows/subagents.ts";
@@ -38,6 +38,57 @@ test("automatic names cannot overwrite a manual name while a request is pending"
   finish({ content: [{ type: "text", text: "<title>Fix the naming race</title>" }], stopReason: "stop", usage: {} });
   await new Promise(setImmediate);
   assert.equal(name, "My explicit name");
+});
+
+test("transient naming failures retry on the next message; permanent ones use the attempt", async () => {
+  const outage = "OpenAI API error (503): {\"code\":\"subscription_sharing_user_unavailable\"}";
+  assert.ok(isTransientError(new Error(`tiny: ${outage}`)));
+  assert.ok(isTransientError(new DOMException("The operation was aborted due to timeout", "TimeoutError")));
+  assert.ok(!isTransientError(new Error("tiny: 429 insufficient_quota")));
+  assert.ok(!isTransientError(new Error("Role tiny is not configured")));
+
+  async function run(replies: string[]) {
+    const events: Record<string, (...args: any[]) => any> = {};
+    const markers: unknown[] = [];
+    const notices: string[] = [];
+    let name: string | undefined;
+    let calls = 0;
+    const pi = { on: (event: string, fn: any) => { events[event] = fn; }, registerCommand() {}, getSessionName: () => name, setSessionName: (value: string) => { name = value; },
+      appendEntry: (type: string, data: unknown) => { if (type === "workflow-title") markers.push(data); } } as any;
+    const ctx = { mode: "tui", hasUI: true, ui: { notify: (text: string) => notices.push(text) }, sessionManager: {
+      getSessionId: () => "one", getEntries: () => [],
+      getBranch: () => [{ type: "message", message: { role: "user", content: "Fix the naming race" } }],
+    }, modelRegistry: registry(async () => {
+      const reply = replies[calls++];
+      return reply.startsWith("error:")
+        ? { content: [], stopReason: "error", errorMessage: reply.slice(6), usage: {} }
+        : { content: [{ type: "text", text: reply }], stopReason: "stop", usage: {} };
+    }) } as any;
+    registerAutoname(pi, config, "Name the task", new AbortController().signal);
+    events.session_start({}, ctx);
+    for (let i = 0; i < replies.length + 1; i++) {
+      events.message_end({ message: { role: "user" } }, ctx);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise(setImmediate);
+    }
+    return { name, calls, markers, notices };
+  }
+
+  const recovered = await run([`error:${outage}`, "<title>Fix the naming race</title>"]);
+  assert.equal(recovered.name, "Fix the naming race");
+  assert.equal(recovered.calls, 2);
+  assert.equal(recovered.markers.length, 1);
+  assert.match(recovered.notices[0], /will retry on your next message/);
+
+  const outageForever = await run(Array(MAX_TRANSIENT_FAILURES).fill(`error:${outage}`));
+  assert.equal(outageForever.calls, MAX_TRANSIENT_FAILURES);
+  assert.equal(outageForever.markers.length, 1);
+  assert.match(outageForever.notices.at(-1)!, /skipped/);
+
+  const permanent = await run(["error:insufficient_quota"]);
+  assert.equal(permanent.calls, 1);
+  assert.equal(permanent.markers.length, 1);
+  assert.match(permanent.notices[0], /skipped/);
 });
 
 test("skill drafts stay inactive until the exact diff is approved; stale edits and symlinks fail closed", async (t) => {

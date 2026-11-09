@@ -27,8 +27,9 @@ their detailed behavior.
 Automatic naming runs as soon as the first substantive user message is sent in
 the TUI.
 It uses the shared or fallback `TITLE_SYSTEM.md`, never overwrites a manual
-title, and makes at most one automatic attempt per session. Failures leave the
-session usable; `/autoname` retries explicitly. Naming does not run automatically
+title, and makes at most one automatic attempt per session. Transient provider
+errors (5xx, rate limits, timeouts) retry on your next message, up to three
+tries; other failures leave the session unnamed until `/autoname` retries. Naming does not run automatically
 inside subprocesses. See [setup](setup.md#agent-directory-and-shared-instructions)
 for shared title instructions and [Herdr](herdr.md) for terminal integration.
 
