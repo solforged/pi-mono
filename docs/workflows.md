@@ -6,7 +6,7 @@
 | --- | --- |
 | `/roles [show\|check]` | Edit model roles, print mappings, or check registration/auth. |
 | `/autoname` | Generate another title; confirm before replacing an existing name. |
-| `/commit [replan\|show\|clear]` | Split the working tree into file-level commits; cache the plan on failure. |
+| `/commit [replan\|apply\|show\|clear]` | Split the working tree into commits, down to hunks; cache the plan. |
 | `/advisor <task>` | Ask the advisor with a bounded recent-conversation excerpt. |
 | `/subagent <advisor\|scout\|worker> <task>` | Run a named agent with bounded context. |
 | `/learn [flow]` | Have the current model author a managed skill. |
@@ -42,17 +42,28 @@ unchanged. This does not rewind history or retry failed turns; see
 
 ## Commits
 
-`/commit` asks the dedicated `commit` role to group the current working tree
-into file-level commits, then creates them on the host so configured hooks still
-run. Messages use the OMP commit style: a lowercase past-tense summary in a
-Conventional Commit header, at most 72 characters; an optional body of up to six
-sentence bullets, wrapped at 72 columns with two-space continuations. It does
-not split hunks inside a file. The TUI confirms the plan; print mode applies it.
+`/commit` asks the dedicated `commit` role to group the working tree into
+commits, then creates them on the host so configured hooks still run. Modified
+text files are offered as separate `-U0` hunks, so one file can be split across
+features. A file stays whole if applying all of its hunks to the base blob does
+not reproduce it exactly: new, deleted, renamed, binary, mode-changed, filtered
+or non-UTF-8 files. Partial content is staged with `hash-object` and
+`update-index`, so the working tree is never touched. Any existing staging is
+reset first.
 
-The plan is stored under `commits/plan.json` and reused when the remaining files
-are unchanged, so a hook failure can be fixed and retried without another model
-call. Cached messages using the old policy are replanned. `/commit replan`
-discards the cache, `/commit show` prints it, and `/commit clear` deletes it.
+The message format comes from `~/.config/git/commit-style.md` (or
+`$XDG_CONFIG_HOME/git/`), plus a repository's `.commit-style.md`. The
+repository file wins where they conflict. Proposed messages are checked with
+`git hook run commit-msg` before anything is committed; failures go back to the
+model, which gets up to three attempts.
+
+The TUI confirms the plan. Print mode only prints it; `/commit apply` creates
+the commits without asking. The plan is stored under `commits/plan.json` and
+reused while the working tree, `HEAD` and the style files are unchanged. A hook
+failure can therefore be fixed and retried without another model call. If a
+hook edits the working tree mid-run, `/commit` stops and needs `replan`.
+`/commit replan` discards the cache, `/commit show` prints it, and
+`/commit clear` deletes it.
 
 ## Private state and usage
 

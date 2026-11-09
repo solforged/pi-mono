@@ -3,13 +3,14 @@ import test from "node:test";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  applyGroups, fingerprint, formatPlan, parseGroups, parsePorcelainV2, planValid, snapshot, validateMessage, wrapParagraph,
-  type FileState, type GitCtx, type Plan,
+  analyze, applyGroups, applyHunks, checkMessages, createPlan, formatPlan, loadStyle, parseGroups, parseHunks,
+  parsePorcelainV2, planValid, snapshot, type FileState, type GitCtx, type Plan, type Unit,
 } from "../extensions/workflows/commit.ts";
 import { runProcess } from "../extensions/workflows/process.ts";
+import { hash } from "../extensions/workflows/state.ts";
 import { temporary } from "./helpers.ts";
 
-const file = (path: string, digest = "d", extra: Partial<FileState> = {}): FileState => ({ path, digest, code: "M", state: "changed", ...extra });
+const file = (path: string, digest = "d", extra: Partial<FileState> = {}): FileState => ({ path, digest, code: ".M", state: "changed", ...extra });
 
 test("porcelain v2 parses modifications, renames, and untracked files", () => {
   const raw = [
@@ -28,73 +29,68 @@ test("porcelain v2 parses modifications, renames, and untracked files", () => {
   assert.throws(() => parsePorcelainV2("1 .M N... 100644 100644 100644 abc abc ../escape\0"), /Unsafe path/);
 });
 
-test("commit messages use omp headers and wrapped bullet bodies", () => {
-  assert.equal(wrapParagraph("one two three four", 10), "one two\nthree four");
-  assert.equal(validateMessage("feat(zsh): added foo.", "").subject, "feat(zsh): added foo");
-  assert.equal(validateMessage("chore: removed old config", "").body, "");
-  assert.equal(validateMessage("fix(git/hooks): fixed validation", "- Rejected invalid input.").body, "- Rejected invalid input.");
-  assert.throws(() => validateMessage("x".repeat(73), ""), /72/);
-  for (const subject of ["fix(git): Updated hooks", "plain subject", "fix(A): fixed hooks", "fix(a/b/c): fixed hooks"]) {
-    assert.throws(() => validateMessage(subject, ""), /lowercase summary/);
-  }
-  for (const body of ["A prose paragraph.", "1. Added a thing.", "* Added a thing.", "- Added a thing", "- One.\n\nA paragraph."]) {
-    assert.throws(() => validateMessage("fix(git): fixed hooks", body), /bullets|sentence/);
-  }
-  assert.throws(() => validateMessage("fix(git): fixed hooks", Array(7).fill("- Added a check.").join("\n")), /six bullets/);
-  const body = "- Replaced the old policy with the current global commit style so generated messages passed the same checks as manual commits.\n- Kept existing hooks active.\n  Preserved their failure messages.";
-  const wrapped = validateMessage("fix(git): aligned commit rules", body).body;
-  assert.ok(wrapped.split("\n").every((line) => line.length <= 72));
-  assert.ok(wrapped.split("\n").every((line) => /^(?:- | {2})\S/.test(line)));
-  assert.equal(validateMessage("fix(git): aligned commit rules", wrapped).body, wrapped);
+test("-U0 hunks apply in any subset, including EOF newline changes", () => {
+  const diff = [
+    "diff --git a/f b/f", "index 1..2 100644", "--- a/f", "+++ b/f",
+    "@@ -0,0 +1 @@", "+top",
+    "@@ -2 +3 @@ fn", "-b", "+B",
+    "@@ -5 +6,2 @@", "-e", "\\ No newline at end of file", "+e", "+f",
+  ].join("\n") + "\n";
+  const hunks = parseHunks(diff)!;
+  assert.equal(hunks.length, 3);
+  const base = "a\nb\nc\nd\ne";
+  assert.equal(applyHunks(base, hunks), "top\na\nB\nc\nd\ne\nf\n");
+  assert.equal(applyHunks(base, [hunks[1]]), "a\nB\nc\nd\ne");
+  assert.equal(applyHunks(base, [hunks[2], hunks[0]]), "top\na\nb\nc\nd\ne\nf\n");
+  const noEol = parseHunks("@@ -1 +1 @@\n-a\n+b\n\\ No newline at end of file\n")!;
+  assert.equal(applyHunks("a\n", noEol), "b");
+  assert.equal(parseHunks("diff --git a/f b/f\nnew file mode 100644\n@@ -0,0 +1 @@\n+x\n"), null);
+  assert.equal(parseHunks("diff --git a/f b/f\nBinary files a/f and b/f differ\n"), null);
 });
 
-test("commit plans cover every path once and keep renames together", () => {
-  const files = [file("a.ts"), file("b.ts"), file("new.ts", "n", { state: "renamed", origPath: "old.ts" }), file("old.ts", "deleted", { state: "renamed", origPath: "new.ts" })];
+test("plans cover every unit once; bare file IDs expand to their hunks", () => {
+  const units: Unit[] = [
+    { id: "F1", paths: ["a.ts"] },
+    { id: "F2.1", paths: ["b.ts"], hunk: 0 }, { id: "F2.2", paths: ["b.ts"], hunk: 1 },
+    { id: "F3", paths: ["new.ts", "old.ts"] },
+  ];
   const groups = parseGroups(JSON.stringify({
     groups: [
-      { subject: "feat(cli): added parser", files: ["a.ts"] },
-      { subject: "fix(cli): renamed helper.", body: "- Kept the old path with the new file.", files: ["b.ts", "new.ts", "old.ts"] },
+      { subject: " feat(cli): added parser ", body: "- Kept it.  \r\n", units: ["F1", "F2.2"] },
+      { subject: "fix(cli): renamed helper", units: ["F2.1", "F3"] },
     ],
-  }), files);
-  assert.equal(groups[0].files[0], "a.ts");
-  assert.equal(groups[1].subject, "fix(cli): renamed helper");
-  assert.match(groups[1].body, /Kept the old path/);
-  assert.throws(() => parseGroups(JSON.stringify({ groups: [{ subject: "feat(cli): added parser", files: ["a.ts"] }] }), files), /Unassigned/);
-  assert.throws(() => parseGroups(JSON.stringify({
-    groups: [
-      { subject: "feat(cli): added parser", files: ["a.ts", "new.ts"] },
-      { subject: "fix(cli): left the rename", files: ["b.ts", "old.ts"] },
-    ],
-  }), files), /Rename must stay together/);
-  assert.match(formatPlan(groups), /added parser/);
+  }), units);
+  assert.equal(groups[0].subject, "feat(cli): added parser");
+  assert.equal(groups[0].body, "- Kept it.");
+  assert.deepEqual(groups[1].units, ["F2.1", "F3"]);
+  assert.deepEqual(parseGroups(JSON.stringify({ groups: [{ subject: "x", units: ["F1", "F2", "F3"] }] }), units)[0].units, ["F1", "F2.1", "F2.2", "F3"]);
+  assert.throws(() => parseGroups(JSON.stringify({ groups: [{ subject: "x", units: ["F1", "F3"] }] }), units), /Unassigned units: F2.1, F2.2/);
+  assert.throws(() => parseGroups(JSON.stringify({ groups: [{ subject: "x", units: ["F1", "F2", "F2.1", "F3"] }] }), units), /multiple groups/);
+  assert.throws(() => parseGroups(JSON.stringify({ groups: [{ subject: "x", units: ["F9"] }] }), units), /Unknown unit/);
+  assert.throws(() => parseGroups(JSON.stringify({ groups: [{ subject: "a\nb", units: ["F1", "F2", "F3"] }] }), units), /single/);
 });
 
-test("cached plans reuse the same remaining tree and invalidate on edits", () => {
+test("cached plans survive partial commits and invalidate on edits or style changes", () => {
   const files = [file("a.ts", "1"), file("b.ts", "2")];
   const plan: Plan = {
-    version: 1, repo: "/repo", head: "abc", fingerprint: fingerprint("abc", files),
-    files, created: "now",
+    version: 2, repo: "/repo", base: "abc", head: "abc", style: hash("style"), files, hunks: {}, created: "now",
+    units: [{ id: "F1", paths: ["a.ts"] }, { id: "F2", paths: ["b.ts"] }],
     groups: [
-      { subject: "feat(cli): added a", body: "", files: ["a.ts"], status: "pending" },
-      { subject: "feat(cli): added b", body: "", files: ["b.ts"], status: "pending" },
+      { subject: "feat(cli): added a", body: "", units: ["F1"], status: "pending" },
+      { subject: "feat(cli): added b", body: "", units: ["F2"], status: "pending" },
     ],
   };
-  assert.equal(planValid(plan, "/repo", "abc", files), true);
-  const outdated = structuredClone(plan);
-  outdated.groups[0].subject = "feat(cli): Added a";
-  assert.equal(planValid(outdated, "/repo", "abc", files), false);
-  outdated.groups[0].subject = plan.groups[0].subject;
-  outdated.groups[0].body = "Used the old prose-paragraph policy.";
-  assert.equal(planValid(outdated, "/repo", "abc", files), false);
-  assert.equal(planValid(plan, "/other", "abc", files), false);
-  assert.equal(planValid(plan, "/repo", "def", files), false);
-  assert.equal(planValid(plan, "/repo", "abc", [file("a.ts", "changed"), file("b.ts", "2")]), false);
+  assert.equal(planValid(plan, "/repo", "abc", files, "style"), true);
+  assert.equal(planValid(plan, "/repo", "abc", files, "new style"), false);
+  assert.equal(planValid(plan, "/other", "abc", files, "style"), false);
+  assert.equal(planValid(plan, "/repo", "def", files, "style"), false);
+  assert.equal(planValid(plan, "/repo", "abc", [file("a.ts", "changed"), file("b.ts", "2")], "style"), false);
+  assert.equal(planValid(plan, "/repo", "abc", [file("b.ts", "2")], "style"), false);
   plan.groups[0].status = "done";
-  const remaining = [file("b.ts", "2")];
   plan.head = "def";
-  plan.fingerprint = fingerprint("def", remaining);
-  assert.equal(planValid(plan, "/repo", "def", remaining), true);
-  assert.equal(planValid(plan, "/repo", "def", files), false);
+  assert.equal(planValid(plan, "/repo", "def", [file("b.ts", "2")], "style"), true);
+  assert.equal(planValid(plan, "/repo", "def", [file("a.ts", "edited"), file("b.ts", "2")], "style"), false);
+  assert.match(formatPlan(plan), /added b/);
 });
 
 async function isolated(t: { after: (fn: () => Promise<unknown>) => unknown }) {
@@ -104,9 +100,9 @@ async function isolated(t: { after: (fn: () => Promise<unknown>) => unknown }) {
   const hooks = join(dir, "hooks");
   await mkdir(repo);
   await mkdir(hooks);
-  await mkdir(join(home, "xdg"), { recursive: true });
+  await mkdir(join(home, "xdg", "git"), { recursive: true });
   const globalConfig = join(home, "gitconfig");
-  await writeFile(globalConfig, "[user]\n  name = Test\n  email = test@example.invalid\n[commit]\n  gpgsign = false\n");
+  await writeFile(globalConfig, `[user]\n  name = Test\n  email = test@example.invalid\n[commit]\n  gpgsign = false\n[core]\n  hooksPath = ${hooks}\n`);
   const env = {
     PATH: process.env.PATH,
     HOME: home,
@@ -123,45 +119,102 @@ async function isolated(t: { after: (fn: () => Promise<unknown>) => unknown }) {
     return result.stdout;
   };
   await git("init", "-q");
-  await git("commit", "--allow-empty", "-qm", "init");
   const ctx: GitCtx = { repo, signal, env };
-  return { repo, env, signal, git, ctx, hooks };
+  const hook = async (name: string, body: string) => {
+    await writeFile(join(hooks, name), `#!/bin/sh\n${body}\n`);
+    await chmod(join(hooks, name), 0o755);
+  };
+  return { repo, env, signal, git, ctx, hook, home };
 }
 
-test("applyGroups commits in order and retries remaining groups after a hook failure", async (t) => {
-  const { repo, git, ctx, hooks } = await isolated(t);
-  await writeFile(join(repo, "ok.txt"), "ok\n");
-  await writeFile(join(repo, "secret.txt"), "secret\n");
-  const hook = join(hooks, "pre-commit");
-  await writeFile(hook, "#!/bin/sh\ngit diff --cached --name-only | grep -q secret.txt && { echo gitleaks >&2; exit 1; }\nexit 0\n");
-  await chmod(hook, 0o755);
-  await git("config", "core.hooksPath", hooks);
+const lines = (count: number, edit: Record<number, string> = {}) => Array.from({ length: count }, (_, i) => edit[i + 1] ?? `line ${i + 1}`).join("\n") + "\n";
+
+test("style comes from the global file plus a repository addition", async (t) => {
+  const { repo, env, home } = await isolated(t);
+  assert.match(await loadStyle(repo, env), /No house style file/);
+  await writeFile(join(home, "xdg", "git", "commit-style.md"), "Use past tense.\n");
+  await writeFile(join(repo, ".commit-style.md"), "Scope is the top directory.\n");
+  const style = await loadStyle(repo, env);
+  assert.match(style, /Global house style:\nUse past tense\./);
+  assert.match(style, /Repository house style.*:\nScope is the top directory\./);
+});
+
+test("hunks of one file land in separate commits", async (t) => {
+  const { repo, git, ctx } = await isolated(t);
+  await writeFile(join(repo, "app.txt"), lines(30));
+  await git("add", ".");
+  await git("commit", "-qm", "init");
+  await writeFile(join(repo, "app.txt"), lines(30, { 2: "feature A", 25: "feature B" }));
+  await writeFile(join(repo, "a.txt"), "helper for A\n");
   const current = await snapshot(ctx);
-  assert.deepEqual(current.files.map((file) => file.path).sort(), ["ok.txt", "secret.txt"]);
-  const plan: Plan = {
-    version: 1, repo, head: current.head, fingerprint: fingerprint(current.head, current.files),
-    files: current.files, created: "now",
-    groups: [
-      { subject: "feat(cli): added ok file", body: "", files: ["ok.txt"], status: "pending" },
-      { subject: "feat(cli): added secret file", body: "", files: ["secret.txt"], status: "pending" },
-    ],
-  };
-  const saved: Plan[] = [];
-  const first = await applyGroups(ctx, plan, async (next) => { saved.push(structuredClone(next)); });
-  assert.equal(first.committed.length, 1);
+  const { units, sections } = await analyze(ctx, current.head, current.files);
+  assert.deepEqual(units.map((unit) => unit.id).sort(), ["F1.1", "F1.2", "F2"]);
+  assert.match(sections.join("\n"), /F1\.1 @@ -2 \+2 @@.*\n line 1\n-line 2\n\+feature A/);
+  const plan = await createPlan(ctx, current, "style", async () => JSON.stringify({ groups: [
+    { subject: "feat(app): added feature a", body: "- Added the helper.", units: ["F1.1", "F2"] },
+    { subject: "feat(app): added feature b", units: ["F1.2"] },
+  ] }));
+  assert.match(formatPlan(plan), /app\.txt \(hunks 1 of 2\)/);
+  const result = await applyGroups(ctx, plan, async () => {});
+  assert.equal(result.error, undefined);
+  assert.equal(await git("show", "HEAD~1:app.txt"), lines(30, { 2: "feature A" }));
+  assert.match(await git("show", "--stat", "--format=%B", "HEAD~1"), /added feature a\n\n- Added the helper\.[\s\S]*a\.txt/);
+  assert.equal(await git("show", "HEAD:app.txt"), lines(30, { 2: "feature A", 25: "feature B" }));
+  assert.equal((await snapshot(ctx)).files.length, 0);
+});
+
+test("files that cannot be spliced exactly stay whole", async (t) => {
+  const { repo, git, ctx } = await isolated(t);
+  await writeFile(join(repo, "bin.dat"), Buffer.from([0, 1, 2, 3, 10, 0, 5]));
+  await writeFile(join(repo, "mode.sh"), lines(20));
+  await git("add", ".");
+  await git("commit", "-qm", "init");
+  await writeFile(join(repo, "bin.dat"), Buffer.from([0, 9, 2, 3, 10, 0, 6]));
+  await writeFile(join(repo, "mode.sh"), lines(20, { 1: "x", 20: "y" }));
+  await chmod(join(repo, "mode.sh"), 0o755);
+  const current = await snapshot(ctx);
+  const { units } = await analyze(ctx, current.head, current.files);
+  assert.deepEqual(units.map((unit) => unit.id), ["F1", "F2"]);
+});
+
+test("commit-msg hook failures are fed back to the planner", async (t) => {
+  const { repo, git, ctx, hook } = await isolated(t);
+  await git("commit", "--allow-empty", "-qm", "init");
+  await hook("commit-msg", "grep -q '^[a-z]*: ' \"$1\" || { echo 'header must be type: summary' >&2; exit 1; }");
+  await writeFile(join(repo, "x.txt"), "x\n");
+  assert.equal((await checkMessages(ctx, [{ subject: "chore: added x", body: "", units: [], status: "pending" }])).length, 0);
+  const prompts: string[] = [];
+  const current = await snapshot(ctx);
+  const plan = await createPlan(ctx, current, "style", async (_system, prompt) => {
+    prompts.push(prompt);
+    return JSON.stringify({ groups: [{ subject: prompts.length === 1 ? "Added x" : "chore: added x", units: ["F1"] }] });
+  });
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /Group 1 \("Added x"\) failed the commit-msg hook:\nheader must be type: summary/);
+  assert.equal(plan.groups[0].subject, "chore: added x");
+});
+
+test("applyGroups retries remaining groups after a hook failure", async (t) => {
+  const { repo, git, ctx, hook } = await isolated(t);
+  await writeFile(join(repo, "app.txt"), lines(30));
+  await git("add", ".");
+  await git("commit", "-qm", "init");
+  await writeFile(join(repo, "app.txt"), lines(30, { 3: "ok", 27: "secret" }));
+  await hook("pre-commit", "git diff --cached | grep -q '^+secret' && { echo gitleaks >&2; exit 1; }\nexit 0");
+  const current = await snapshot(ctx);
+  const plan = await createPlan(ctx, current, "style", async () => JSON.stringify({ groups: [
+    { subject: "feat: added ok", units: ["F1.1"] },
+    { subject: "feat: added secret", units: ["F1.2"] },
+  ] }));
+  const first = await applyGroups(ctx, plan, async () => {});
+  assert.deepEqual(first.committed, ["feat: added ok"]);
   assert.match(first.error ?? "", /gitleaks/);
-  assert.equal(plan.groups[0].status, "done");
-  assert.equal(plan.groups[1].status, "pending");
   const retryTree = await snapshot(ctx);
-  assert.equal(planValid(plan, repo, retryTree.head, retryTree.files), true);
-  await writeFile(hook, "#!/bin/sh\nexit 0\n");
-  const second = await applyGroups(ctx, plan, async (next) => { saved.push(structuredClone(next)); });
+  assert.equal(planValid(plan, repo, retryTree.head, retryTree.files, "style"), true);
+  await hook("pre-commit", "exit 0");
+  const second = await applyGroups(ctx, plan, async () => {});
   assert.equal(second.error, undefined);
-  assert.deepEqual(second.committed, ["feat(cli): added secret file"]);
-  const log = await git("log", "--format=%s");
-  assert.match(log, /added ok file/);
-  assert.match(log, /added secret file/);
-  const clean = await snapshot(ctx);
-  assert.equal(clean.files.length, 0);
-  assert.ok(saved.length >= 2);
+  assert.deepEqual(second.committed, ["feat: added secret"]);
+  assert.equal(await git("show", "HEAD~1:app.txt"), lines(30, { 3: "ok" }));
+  assert.equal((await snapshot(ctx)).files.length, 0);
 });
