@@ -7,8 +7,9 @@ roles never switch the main conversation model or copy credentials.
 ## Install
 
 The extensions load by symlink from this checkout, using an existing Pi
-installation. No npm installation is required. See the [setup guide](docs/setup.md)
-for extension links, agent-directory overrides, and removal.
+installation. No npm installation is required. Run `mise run install` to link
+or refresh them; see the [setup guide](docs/setup.md) for agent-directory
+overrides and removal.
 
 To try one extension without deployment:
 

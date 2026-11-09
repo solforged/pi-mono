@@ -1,3 +1,7 @@
+[tasks.install]
+description = "Link every extension and roles.json into the Pi agent directory"
+run = "node scripts/install.ts"
+
 [tasks.test]
 description = "Test locally owned pi extensions without model calls"
 run = "node --test tests/*.test.ts"

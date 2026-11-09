@@ -3,7 +3,8 @@
 `extensions/rex/` runs persistent interactive Pi children in local Rex terminals.
 Delegation is asynchronous by default. Each child can accept follow-up tasks,
 receive parent messages, and become a human-controlled session. The existing
-headless `subagent` tool is unchanged. No dependencies or setup links are added.
+headless `subagent` tool is unchanged. No dependencies are added; `mise run
+install` links it with the other extensions.
 
 ## Try it
 
