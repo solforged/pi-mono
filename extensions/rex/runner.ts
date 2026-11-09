@@ -80,6 +80,8 @@ export function childCommand(manifest: Manifest, agentDir: string, profile: stri
     // Rex starts blocks with its server's environment. Carry the parent's PATH so
     // the child finds the same fd/rg/tooling (offline mode cannot download them).
     ...(process.env.PATH ? [`PATH=${process.env.PATH}`] : []),
+    // Children follow the parent's sandbox toggle (extensions/sandbox).
+    ...(process.env.PI_SANDBOX ? [`PI_SANDBOX=${process.env.PI_SANDBOX}`] : []),
     `PI_CODING_AGENT_DIR=${agentDir}`, `PI_WORKFLOW_PROFILE=${profile}`, `PI_REX_CHILD=${join(manifest.dir, "child.json")}`,
     invocation.command, ...invocation.args];
 }

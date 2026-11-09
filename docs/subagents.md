@@ -42,18 +42,16 @@ git -C /path/to/retained/worktree status --short
 git worktree remove /path/to/retained/worktree
 ```
 
-Git administration belongs to the parent. Gondolin mounts the worktree at
-`/workspace`; its external Git administrative files may not be accessible in the
-VM. Ordinary code editing/testing still works, but Git-dependent builds may need
-additional sandbox configuration.
+Git administration belongs to the parent. The [sandbox](sandbox.md) mounts a
+worktree and its shared Git directory at their host paths, so Git works inside
+it; commits still belong to the parent.
 
 ## Sandbox and cancellation
 
 The runner inherits explicit extension paths that override the requested parent
-tools. If a Gondolin tool-routing extension is loaded, each child loads that same
-extension. Gondolin is opt-in (`/gondolin on` or `pi --gondolin`); an idle parent
-produces idle children. It never silently drops those wrappers because extension
-discovery is disabled. Inline/SDK tool overrides that cannot be reproduced from
+tools. With the [sandbox](sandbox.md) loaded, each child loads it too and follows
+the parent's on/off state through `PI_SANDBOX`. The runner never silently drops
+those wrappers because extension discovery is disabled. Inline/SDK tool overrides that cannot be reproduced from
 a file cause dispatch to fail.
 
 `subagents.sandbox: "required"` refuses dispatch unless the parent has a

@@ -110,6 +110,14 @@ test("interactive argv omits print flags, prompt, credentials and parent Rex ide
   if (process.env.PATH) assert(command.includes(`PATH=${process.env.PATH}`));
   assert(command.indexOf(`PATH=${process.env.PATH}`) < command.findIndex(v => v.startsWith("PI_REX_CHILD=")));
 });
+test("children inherit the parent's sandbox toggle", t => {
+  const saved = process.env.PI_SANDBOX;
+  t.after(() => { if (saved === undefined) delete process.env.PI_SANDBOX; else process.env.PI_SANDBOX = saved; });
+  process.env.PI_SANDBOX = "off";
+  assert(childCommand(manifest(), "/a", "work", "/e.ts", []).includes("PI_SANDBOX=off"));
+  delete process.env.PI_SANDBOX;
+  assert(!childCommand(manifest(), "/a", "work", "/e.ts", []).some(v => v.startsWith("PI_SANDBOX=")));
+});
 test("child completion permits retry recovery but rejects unexpected model", () => {
   const m = manifest(), state = new ChildState(m); state.active = true;
   const message = (stopReason: string) => ({ role: "assistant", provider: m.role.provider, model: m.role.model, stopReason, content: [{ type: "text", text: "Answer" }], usage: { input: 2 } });
