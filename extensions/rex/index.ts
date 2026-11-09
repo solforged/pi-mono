@@ -124,21 +124,22 @@ export default async function (pi: ExtensionAPI) {
   pi.registerTool({
     ...toolRenderers("rex_agent"),
     name: "rex_agent", label: "Rex agent", executionMode: "sequential",
-    description: "Start a persistent interactive Pi child in local Rex. Each child has a short unique name (pass name, or one is assigned); use it with rex_send. Returns immediately by default; use rex_result next=true to wait for whichever task finishes first, rather than polling each child. Children appear in a deck of live slots beside the parent (needing-attention and running work first) and an Agents window grid for the rest; view=background keeps one detached. Advisor/scout are read-only; workers get clean-HEAD worktrees. Workflow concurrency limits live managed children. No recursion, remote hosts or model fallback. Worktrees/tool routing are not a security sandbox.",
+    description: "Start a persistent interactive Pi child in local Rex. Each child has a short unique name (pass name, or one is assigned); use it with rex_send. Returns immediately by default; use rex_result next=true to wait for whichever task finishes first, rather than polling each child. Children appear in a deck of live slots beside the parent (needing-attention and running work first) and an Agents window grid for the rest; view=background keeps one detached. Advisor/scout are read-only; workers get clean-HEAD worktrees. subagents.rexConcurrency limits live managed children. No recursion, remote hosts or model fallback. Worktrees/tool routing are not a security sandbox.",
     promptSnippet: "Delegate work asynchronously to inspectable Rex children",
-    promptGuidelines: ["Use rex_agent for independent work. Select context explicitly. Use rex_result to read actual results before reporting success. Review worker changes before integrating them."],
+    promptGuidelines: ["Give each Rex child a short title; put details in task, not the title.", "Use rex_agent for independent work. Select context explicitly. Use rex_result to read actual results before reporting success. Review worker changes before integrating them."],
     parameters: Type.Object({ agent: StringEnum(["advisor", "scout", "worker"] as const),
-      name: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{1,15}$", description: "Short unique child name, e.g. auth-scan" })), task: Type.String({ minLength: 1, maxLength: 16000 }),
+      name: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{1,15}$", description: "Short unique child name, e.g. auth-scan" })),
+      title: Type.Optional(Type.String({ maxLength: 60, description: "2–6 word label for the pane and roster, e.g. Find auth entry points" })), task: Type.String({ minLength: 1, maxLength: 16000 }),
       context: Type.Optional(Type.String({ maxLength: 16000 })), wait: Type.Optional(Type.Boolean()), view: Type.Optional(StringEnum(["deck", "background"] as const)) }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal]);
       const config = await loadConfig(root, runner.agentDir);
-      const run = await runner.open(params.agent, config, ctx, instructions, combined, r => pi.appendEntry("rex-run", { id: r.id, profile: r.profile }), params.task, params.name);
+      const run = await runner.open(params.agent, config, ctx, instructions, combined, r => pi.appendEntry("rex-run", { id: r.id, profile: r.profile }), params.title ?? "", params.name);
       let task: TaskRun | undefined;
       try {
         if (params.view === "background") await runner.update(Object.assign(run, { view: "background" as const }));
         combined.throwIfAborted();
-        task = await runner.submit(run.id, params.task, params.context ?? "", combined, !params.wait);
+        task = await runner.submit(run.id, params.task, params.context ?? "", combined, !params.wait, params.title);
         onUpdate?.({ content: [{ type: "text", text: `${run.name} started task ${task.id}` }], details: { task: taskMeta(run, task) } });
         return await result(task, !!params.wait, combined);
       } catch (error) {
@@ -153,7 +154,7 @@ export default async function (pi: ExtensionAPI) {
     name: "rex_send", label: "Message Rex child", executionMode: "sequential",
     description: "Send a follow-up task to an idle managed Rex child, steer its active task, or cancel it. A steer requires the exact active task ID and never spills into a later task. Messages are labelled as parent-agent messages. Follow-ups retain the child conversation/worktree and original model/tool policy. They return immediately unless wait=true. No sibling messaging or human takeover through this tool.",
     parameters: Type.Object({ child: Type.String({ description: "Child name (or ID prefix)" }), mode: StringEnum(["followup", "steer", "cancel"] as const),
-      text: Type.Optional(Type.String({ minLength: 1, maxLength: 16000 })), taskId: Type.Optional(Type.String()),
+      text: Type.Optional(Type.String({ minLength: 1, maxLength: 16000 })), title: Type.Optional(Type.String({ maxLength: 60, description: "Short label for a follow-up task" })), taskId: Type.Optional(Type.String()),
       context: Type.Optional(Type.String({ maxLength: 16000 })), wait: Type.Optional(Type.Boolean()) }),
     async execute(_id, params, signal, _update, ctx) {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal]), run = find(params.child);
@@ -169,7 +170,7 @@ export default async function (pi: ExtensionAPI) {
         await runner.steer(run.id, params.taskId, params.text, combined);
         return { content: [{ type: "text", text: `Message accepted for ${run.name}, task ${params.taskId}. Delivery is at Pi's next steering boundary.` }], details: {} };
       }
-      const task = await runner.submit(run.id, params.text, params.context ?? "", combined, !params.wait);
+      const task = await runner.submit(run.id, params.text, params.context ?? "", combined, !params.wait, params.title);
       try { return await result(task, !!params.wait, combined); }
       catch (error) { if (params.wait && combined.aborted && running(task)) await runner.cancel(run.id).catch(() => {}); throw error; }
     },
@@ -265,7 +266,7 @@ export default async function (pi: ExtensionAPI) {
         for (const role of ["advisor", "task"] as const) resolveRole(config, role, ctx.modelRegistry);
         if (!process.env.REX_SESSION || !process.env.REX_BLOCK) throw new Error("No inherited Rex identity");
         const identity = await runner.rex.probe(process.env.REX_SESSION, process.env.REX_BLOCK, AbortSignal.timeout(15_000));
-        report(ctx, `Local Rex ready: ${identity.hostId}\nRoles: ${config.profile} advisor/task configured; no model requests.\nUp to ${config.subagents.concurrency} managed children. Native peek/keep/hide; asynchronous tasks, follow-ups and explicit takeover. Reload retires managed children; it never replays tasks.`); return;
+        report(ctx, `Local Rex ready: ${identity.hostId}\nRoles: ${config.profile} advisor/task configured; no model requests.\nUp to ${config.subagents.rexConcurrency} managed children (subagents.rexConcurrency). Deck and Agents window; asynchronous tasks, follow-ups and explicit takeover. Reload retires managed children; it never replays tasks.`); return;
       }
       if (action === "list" && !prefix) { report(ctx, list()); return; }
       if (action === "layout" && !prefix) {

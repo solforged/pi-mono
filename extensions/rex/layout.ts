@@ -1,10 +1,10 @@
 import { atomicWrite } from "../workflows/state.ts";
 import type { RexClient } from "./client.ts";
-import { plan, rosterCommand, rosterText, type DeckChild, type Op } from "./deck.ts";
+import { PARENT_SHARE, plan, rosterCommand, rosterText, type DeckChild, type Op } from "./deck.ts";
 
 export type LayoutBackend = Pick<RexClient, "probe" | "snapshot" | "place" | "resizePane" | "swap" | "detach" | "newWindow" | "rows" | "close">;
 export interface Grid { window: string; roster: string }
-const MAX_STEPS = 80;
+const MAX_STEPS = 80, SHARE_MS = 5000;
 
 /** Serializes deck/grid reconciliation. Any failed or non-converging mutation
  * pauses automation; nothing is retried or rolled back. */
@@ -17,6 +17,7 @@ export class DeckManager {
   private again = false;
   private stopped = false;
   private probed = false;
+  private shareUntil = 0;
   private readonly opts: {
     rex: LayoutBackend; session: string; parent: string; cwd: string; rosterFile: string;
     children: () => DeckChild[]; roster: () => string[];
@@ -54,7 +55,9 @@ export class DeckManager {
       let previous = "";
       for (let step = 0; step < MAX_STEPS && !this.stopped && !this.paused; step++) {
         const snap = await rex.snapshot(session, signal);
-        const op = plan({ ...snap, parent, grid: this.grid, children: this.opts.children(), size, now: Date.now(), dwell: this.dwell });
+        const now = Date.now();
+        const op = plan({ ...snap, parent, grid: this.grid, children: this.opts.children(), size, now, dwell: this.dwell,
+          ...(now < this.shareUntil ? { share: PARENT_SHARE } : {}) });
         if (!op) return;
         const key = JSON.stringify(op);
         if (key === previous) throw new Error(`Rex layout did not converge (${op.kind})`);
@@ -73,6 +76,13 @@ export class DeckManager {
     switch (op.kind) {
       case "place":
         await rex.place(session, op.block, op.anchor, op.direction, op.ratio, signal);
+        // In a window Rex.app is showing, move_block splits 50/50 and the app may
+        // reset the split again shortly afterwards; resize_pane is honored. Hold
+        // the parent's share briefly after creating the deck, then leave it to the user.
+        if (op.deck && op.anchor === this.opts.parent) {
+          this.shareUntil = Date.now() + SHARE_MS;
+          for (const delay of [700, 2000, 4000]) setTimeout(() => this.schedule(0), delay).unref?.();
+        }
         if (op.deck) this.dwell.set(op.block, Date.now());
         return;
       case "resize": return rex.resizePane(session, op.before, op.after, op.direction, op.ratio, signal);

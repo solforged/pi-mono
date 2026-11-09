@@ -88,6 +88,7 @@
   },
   "subagents": {
     "concurrency": 3,
+    "rexConcurrency": 6,
     "maxTasks": 6,
     "maxTurns": 16,
     "outputBytes": 16000,

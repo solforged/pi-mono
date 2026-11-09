@@ -44,6 +44,12 @@ test("new children fill deck slots beside the parent, then the deck balances eve
   assert.equal(plan(input([win("window:home", deck3())], children)), undefined);
 });
 
+test("right after the deck opens, the parent's share is held; afterwards the user's resize stands", () => {
+  const evenSplit = win("window:home", { d: "horizontal", r: 0.5, a: P, b: B(1) });
+  assert.deepEqual(plan(input([evenSplit], [child(1)], { share: 0.55, size: { columns: 240, rows: 30 } })), { kind: "resize", before: P, after: B(1), direction: "horizontal", ratio: 0.55 });
+  assert.equal(plan(input([evenSplit], [child(1)], { size: { columns: 240, rows: 30 } })), undefined);
+});
+
 test("overflow opens the grid window, adds columns while single-row, then fills the shortest column", () => {
   const children = [1, 2, 3, 4, 5, 6].map(n => child(n)), home = win("window:home", deck3());
   assert.deepEqual(plan(input([home], children)), { kind: "grid" });
@@ -78,6 +84,19 @@ test("attention and pins are promoted by swapping out the weakest unfocused, unp
   assert.equal(plan(input([home(), g], pinnedDeck, { grid })), undefined);
 });
 
+test("swaps protect only the active window's focus; moves still skip any window's focused pane", () => {
+  const home = win("window:home", deck3(), P);
+  const g = (focused: string) => win("window:grid", { d: "horizontal", a: R, b: { d: "vertical", a: B(4), b: B(5) } }, focused);
+  const kids = [child(1, { priority: 3 }), child(2, { priority: 1 }), child(3, { priority: 3 }), child(4, { priority: 4 }), child(5, { priority: 2 })];
+  // Rex may leave a swapped-in grid pane as that (inactive) window's focus; it can still swap.
+  assert.deepEqual(plan(input([home, g(B(4))], kids, { grid })), { kind: "swap", into: B(4), out: B(2) });
+  const active = { ...input([home, g(B(4))], kids, { grid }) };
+  active.view = { ...active.view, active_window_id: "window:grid" };
+  assert.deepEqual(plan(active), { kind: "swap", into: B(5), out: B(2) }, "not while the user is focused on it");
+  const twoSlots = input([win("window:home", { d: "horizontal", r: 0.55, a: P, b: B(1) }), g(B(4))], [kids[0], kids[3], kids[4]], { grid, size: { columns: 240, rows: 45 } });
+  assert.deepEqual(plan(twoSlots), { kind: "place", block: B(5), anchor: B(1), direction: "vertical", ratio: 0.5, deck: true }, "a free slot never moves a focused pane");
+});
+
 test("user placements, background children, narrow windows and stale grids are respected", () => {
   const floating = { window_id: "window:home", focused_block_id: P, layers: [win("window:home", P).layers[0], { layer_id: "layer:f", kind: "floating", blocks: [{ block_id: B(1) }] }] };
   assert.equal(plan(input([floating], [child(1)])), undefined);
@@ -97,7 +116,7 @@ test("roster text strips control sequences and its command exits with the parent
 });
 
 // A small Rex layout simulator: binary split trees with move/resize/swap/detach semantics.
-function simulator(slotsRows = 63) {
+function simulator(slotsRows = 63, ignoreRatio = false) {
   const windows = new Map<string, Spec>([["window:home", P]]), focus = new Map<string, string>([["window:home", P]]);
   const remove = (spec: Spec, block: string): Spec | undefined => {
     if (typeof spec === "string") return spec === block ? undefined : spec;
@@ -124,7 +143,7 @@ function simulator(slotsRows = 63) {
       const placed = new Set(view.windows.flatMap(w => cells(w.layers[0].layout).map(c => c.block)));
       return { view, blocks: [...all].map(block_id => ({ block_id, placement: placed.has(block_id) ? "placed" : "detached" })) };
     },
-    async place(_s: string, block: string, anchor: string, d: any, r: number) { rex.calls.push("place"); detach(block); for (const [id, spec] of windows) windows.set(id, replace(spec, anchor, leaf => ({ d, r, a: leaf, b: block }))); },
+    async place(_s: string, block: string, anchor: string, d: any, r: number) { rex.calls.push("place"); detach(block); for (const [id, spec] of windows) windows.set(id, replace(spec, anchor, leaf => ({ d, r: ignoreRatio ? 0.5 : r, a: leaf, b: block }))); },
     async resizePane(_s: string, a: string, b: string, d: string, r: number) { rex.calls.push("resize"); for (const spec of windows.values()) resize(spec, a, b, d, r); },
     async swap(_s: string, a: string, b: string) { rex.calls.push("swap"); for (const [id, spec] of windows) windows.set(id, swapIn(spec, a, b)); },
     async detach(_s: string, block: string) { rex.calls.push("detach"); detach(block); },
@@ -138,7 +157,8 @@ test("the manager converges 14 children into a balanced 3-slot deck and 4×4 gri
   const { DeckManager } = await import("../extensions/rex/layout.ts");
   const { mkdtemp, readFile, rm } = await import("node:fs/promises");
   const dir = await mkdtemp("/tmp/rex-deck-"); t.after(() => rm(dir, { recursive: true, force: true }));
-  const sim = simulator(), kids = new Map<number, DeckChild>(), grids: any[] = [], pauses: string[] = [];
+  // Like a window the Rex app is showing: move_block ignores ratio; resize_pane does not.
+  const sim = simulator(63, true), kids = new Map<number, DeckChild>(), grids: any[] = [], pauses: string[] = [];
   const manager = new DeckManager({ rex: sim.rex, session: "session:x", parent: P, cwd: dir, rosterFile: `${dir}/roster.txt`,
     children: () => [...kids.values()], roster: () => ["Rex agents", ...[...kids.values()].map(k => k.name)],
     onGrid: g => grids.push(g), onPause: r => pauses.push(r) });
@@ -146,6 +166,7 @@ test("the manager converges 14 children into a balanced 3-slot deck and 4×4 gri
   assert.deepEqual(pauses, []);
   const home = cells(tree(sim.windows.get("window:home")!)), gridCells = cells(tree(sim.windows.get("window:grid")!));
   assert.equal(home.length, 4); assert.equal(gridCells.length, 12);
+  assert.equal((sim.windows.get("window:home") as any).r, 0.55, "the parent keeps its share");
   for (const c of home.filter(c => c.block !== P)) assert(Math.abs(c.rect[3] - 1 / 3) < 0.03, "deck rows are even");
   const cols = columns(gridCells);
   assert.deepEqual(cols.map(c => c.length), [3, 3, 3, 3]);
@@ -172,7 +193,8 @@ test("a failing or non-converging mutation pauses layout instead of retrying", a
     children: () => [child(1)], roster: () => [], onGrid: () => {}, onPause: r => pauses.push(r) });
   await manager.run();
   assert.match(pauses[0], /did not converge/); assert.equal(sim.rex.calls.filter((c: string) => c === "place").length, 1);
-  manager.schedule(0); await new Promise(r => setTimeout(r, 20)); assert.equal(sim.rex.calls.length, 1, "paused managers stay idle");
+  const calls = sim.rex.calls.length;
+  manager.schedule(0); await new Promise(r => setTimeout(r, 20)); assert.equal(sim.rex.calls.length, calls, "paused managers stay idle");
   sim.rex.place = async () => { throw new Error("outcome may be unknown"); };
   manager.resume(); await new Promise(r => setTimeout(r, 20)); await manager.run();
   assert.match(pauses[1], /outcome may be unknown/);

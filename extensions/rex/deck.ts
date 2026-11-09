@@ -22,6 +22,8 @@ export type Op =
 export interface PlanInput {
   view: Obj; blocks: Obj[]; parent: string; grid?: { window: string; roster: string };
   children: DeckChild[]; size?: { columns: number; rows: number }; now: number; dwell: Map<string, number>;
+  /** Set briefly after the deck is created: hold the parent at this share of the width. */
+  share?: number;
 }
 export const PARENT_SHARE = 0.55, DWELL_MS = 8000, TOLERANCE = 0.02;
 
@@ -65,7 +67,10 @@ const columnsFor = (cells: number) => Math.max(1, Math.ceil(Math.sqrt(cells)));
 export function classify(input: PlanInput) {
   const { view, blocks, parent, grid } = input;
   const home = locate(view, parent);
+  // Moving a window's focused block activates its new window, so moves and detaches
+  // skip every window's focus. Swaps only move focus within the active window.
   const focused = new Set<string>((view.windows ?? []).map((w: Obj) => w.focused_block_id).filter(Boolean));
+  const activeFocus: string | undefined = (view.windows ?? []).find((w: Obj) => w.window_id === view.active_window_id)?.focused_block_id;
   const deck: Array<DeckChild & Cell> = [], inGrid: Array<DeckChild & Cell> = [], unplaced: DeckChild[] = [];
   const homeCells = home?.layer.kind === "tiled" ? cells(home.layer.layout) : [];
   const gridWindow = grid && (view.windows ?? []).find((w: Obj) => w.window_id === grid.window);
@@ -83,7 +88,7 @@ export function classify(input: PlanInput) {
   }
   deck.sort(byPosition);
   const parentRect = homeCells.find(c => c.block === parent)?.rect;
-  return { home, deck, inGrid, unplaced, focused, gridWindow, gridLayer, gridCells, parentRect };
+  return { home, deck, inGrid, unplaced, focused, activeFocus, gridWindow, gridLayer, gridCells, parentRect };
 }
 
 export function plan(input: PlanInput): Op | undefined {
@@ -109,12 +114,17 @@ export function plan(input: PlanInput): Op | undefined {
   const candidates = c.inGrid.filter(g => free(g.block)).sort((a, b) => rank(b) - rank(a));
   if (c.deck.length < slots && candidates.length) return deckPlace(candidates[0].block);
   // 3. Promote by swapping when a grid child outranks the weakest deck child.
-  const victims = c.deck.filter(d => free(d.block) && !d.pinned).sort((a, b) => rank(a) - rank(b) || (input.dwell.get(a.block) ?? 0) - (input.dwell.get(b.block) ?? 0));
-  const best = candidates[0], weakest = victims[0];
+  const swappable = (block: string) => block !== c.activeFocus;
+  const victims = c.deck.filter(d => swappable(d.block) && !d.pinned).sort((a, b) => rank(a) - rank(b) || (input.dwell.get(a.block) ?? 0) - (input.dwell.get(b.block) ?? 0));
+  const best = c.inGrid.filter(g => swappable(g.block)).sort((a, b) => rank(b) - rank(a))[0], weakest = victims[0];
   if (best && weakest && rank(best) > rank(weakest)
     && (best.priority >= 4 || best.pinned || input.now - (input.dwell.get(weakest.block) ?? 0) >= DWELL_MS)) return { kind: "swap", into: best.block, out: weakest.block };
   // 4. Keep deck rows and grid rows/columns even.
   const parentLayout = c.home.layer.layout;
+  if (input.share && c.deck.length) {
+    const have = ratioBetween(parentLayout, input.parent, c.deck[0].block, "horizontal");
+    if (have !== undefined && Math.abs(have - input.share) > TOLERANCE) return { kind: "resize", before: input.parent, after: c.deck[0].block, direction: "horizontal", ratio: input.share };
+  }
   const deckBalance = balance(parentLayout, c.deck.map(d => d.block), "vertical");
   if (deckBalance) return deckBalance;
   if (c.gridLayer) {

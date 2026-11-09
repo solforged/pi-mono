@@ -132,9 +132,9 @@ test("persistent child handles distinct follow-ups and immutable, once-accounted
   await assert.rejects(stat(m.socket), { code: "ENOENT" });
 });
 test("asynchronous dispatch supports concurrent children; cancelling a wait leaves work running", async t => {
-  const h = await harness(t, "wait"), c = { ...config, subagents: { ...config.subagents, concurrency: 2 } };
+  const h = await harness(t, "wait"), c = { ...config, subagents: { ...config.subagents, rexConcurrency: 2 } };
   const [a, b] = await Promise.all([h.runner.open("scout", c, context(), "", signal()), h.runner.open("scout", c, context(), "", signal())]);
-  await assert.rejects(h.runner.open("scout", c, context(), "", signal()), /limit reached/);
+  await assert.rejects(h.runner.open("scout", c, context(), "", signal()), /limit \(2, subagents\.rexConcurrency\) reached/);
   const one = await h.runner.submit(a.id, "One", "", signal()), two = await h.runner.submit(b.id, "Two", "", signal());
   assert.equal(one.status, "running"); assert.equal(two.status, "running");
   await assert.rejects(h.runner.wait(one.id, AbortSignal.abort(new Error("stop waiting"))), /stop waiting/);
@@ -231,7 +231,7 @@ test("concurrent completion, notification and collection preserve durable accoun
 });
 
 test("children get unique names, labels, and name lookup; invalid or duplicate names fail before launch", async t => {
-  const h = await harness(t), c = { ...config, subagents: { ...config.subagents, concurrency: 4 } };
+  const h = await harness(t), c = { ...config, subagents: { ...config.subagents, rexConcurrency: 4 } };
   const one = await h.open("Find the\nentry points", undefined, c), two = await h.open("", "auth-scan", c);
   assert.equal(one.name, "birch"); assert.equal(two.name, "auth-scan");
   assert.deepEqual(h.fake.labels, ["birch · scout · Find the entry points", "auth-scan · scout"]);
@@ -244,7 +244,7 @@ test("children get unique names, labels, and name lookup; invalid or duplicate n
   assert.equal((await h.open("", undefined, c)).name, "cedar");
 });
 test("next returns unread results oldest first, then waits across children", async t => {
-  const h = await harness(t, "wait"), c = { ...config, subagents: { ...config.subagents, concurrency: 3 } };
+  const h = await harness(t, "wait"), c = { ...config, subagents: { ...config.subagents, rexConcurrency: 3 } };
   const a = await h.open("", "a-one", c), b = await h.open("", "b-two", c);
   await assert.rejects(h.runner.next(signal()), /No Rex tasks are running/);
   const ta = await h.runner.submit(a.id, "A", "", signal()), tb = await h.runner.submit(b.id, "B", "", signal());

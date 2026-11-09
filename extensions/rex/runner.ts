@@ -22,7 +22,7 @@ export interface Run {
   view?: "auto" | "background"; pinned?: number;
 }
 export interface TaskRun {
-  id: string; childId: string; requestId: string; task: string; status: "starting" | "running" | Outcome;
+  id: string; childId: string; requestId: string; task: string; title?: string; status: "starting" | "running" | Outcome;
   text: string; usage: Usage; usageKnown: boolean; started: number; elapsedMs: number; resultFile: string;
   collected: boolean; notified: boolean; background: boolean;
 }
@@ -37,6 +37,8 @@ interface Live {
 export const NAMES = ["birch", "cedar", "fern", "oak", "ash", "elm", "pine", "moss", "reed", "sage", "ivy", "hazel", "rowan", "alder",
   "aspen", "larch", "maple", "willow", "juniper", "laurel", "myrtle", "poplar", "spruce", "yew"];
 export const NAME = /^[a-z][a-z0-9-]{1,15}$/;
+/** Short, single-line pane/roster titles; control characters never reach Rex labels. */
+export const cleanTitle = (title: string) => title.replace(/[\u0000-\u001f\u007f-\u009f\s]+/g, " ").trim().slice(0, 60);
 export function childCommand(manifest: Manifest, agentDir: string, profile: string, extension: string, extensions: string[]): string[] {
   const invocation = piInvocation([
     "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes",
@@ -133,7 +135,7 @@ export class RexRunner {
     if (this.stopped || ctx.mode !== "tui" || process.env.PI_REX_CHILD) throw new Error("Rex delegation requires a live parent interactive Pi session");
     if (!Object.hasOwn(agents, agent) || !text(instructions, 24000)) throw new Error("Invalid agent or oversized instructions");
     // Idle managed children occupy a slot too: their processes and context remain live.
-    if (this.starting.size + [...this.live.values()].filter(l => l.ready && l.run.owner === "managed").length >= config.subagents.concurrency) throw new Error("Rex child limit reached; reuse, take, or close an existing child");
+    if (this.starting.size + [...this.live.values()].filter(l => l.ready && l.run.owner === "managed").length >= config.subagents.rexConcurrency) throw new Error(`Rex child limit (${config.subagents.rexConcurrency}, subagents.rexConcurrency) reached; reuse, take, or close an existing child`);
     const { role } = resolveRole(config, agents[agent].role, ctx.modelRegistry);
     const name = this.allocateName(requestedName);
     const session = process.env.REX_SESSION, parentBlock = process.env.REX_BLOCK;
@@ -167,7 +169,7 @@ export class RexRunner {
       this.live.set(id, live);
       await channel.listen(); launchSignal.throwIfAborted();
       // Rex shows the label on floating panes; prefer the first task over an ID.
-      const summary = title.replace(/[\u0000-\u001f\u007f\s]+/g, " ").trim().slice(0, 80);
+      const summary = cleanTitle(title);
       run.block = await this.rex.create(session, `${name} · ${agent}${summary ? ` · ${summary}` : ""}`.slice(0, 120), childCommand(manifest, this.agentDir, config.profile, extension, extensions), run.cwd, launchSignal);
       await this.save(run);
       const hello = await waitFor(channel.ready.promise, launchSignal);
@@ -187,13 +189,13 @@ export class RexRunner {
       throw error;
     } finally { this.starting.delete(controller); launchDone.resolve(); }
   }
-  async submit(id: string, task: string, context = "", signal: AbortSignal, background = true): Promise<TaskRun> {
+  async submit(id: string, task: string, context = "", signal: AbortSignal, background = true, title?: string): Promise<TaskRun> {
     const live = this.managed(id), run = live.run;
     if (run.activeTask || run.taskIds.length >= MAX_TASKS) throw new Error("Child is busy or its task limit was reached");
     if (!text(task, 16000) || !task.trim() || !text(context, 16000)) throw new Error("Invalid task/context");
     signal.throwIfAborted();
     const taskId = randomUUID(), requestId = randomUUID(), started = Date.now();
-    const item: TaskRun = { id: taskId, childId: id, requestId, task, status: "starting", text: "", usage: emptyUsage(), usageKnown: false, started,
+    const item: TaskRun = { id: taskId, childId: id, requestId, task, ...(title ? { title: cleanTitle(title) } : {}), status: "starting", text: "", usage: emptyUsage(), usageKnown: false, started,
       elapsedMs: 0, resultFile: join(run.dir, "tasks", taskId, "result.json"), collected: false, notified: false, background };
     run.activeTask = taskId; run.taskIds.push(taskId); run.status = "running";
     this.tasks.set(taskId, item);

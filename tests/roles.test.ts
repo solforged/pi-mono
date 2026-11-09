@@ -39,6 +39,9 @@ test("unavailable roles fail without a fallback or model mutation", async () => 
   assert.throws(() => resolveRole(config, "tiny", { find: () => undefined } as any), /not registered/);
   assert.throws(() => resolveRole(config, "tiny", { ...registry(), hasConfiguredAuth: () => false } as any), /authentication/);
   assert.throws(() => resolveConfig(base, { subagents: { concurrency: 0 } }, "personal"), /concurrency/);
+  assert.equal(resolveConfig(base, {}, "personal").subagents.rexConcurrency, 6);
+  assert.equal(resolveConfig(base, { subagents: { rexConcurrency: 14 } }, "personal").subagents.rexConcurrency, 14);
+  assert.throws(() => resolveConfig(base, { subagents: { rexConcurrency: 17 } }, "personal"), /rexConcurrency/);
   assert.throws(() => resolveConfig(base, { subagents: { childExtensions: ["npm:arbitrary"] } }, "personal"), /local paths/);
   assert.throws(() => profileName({ PI_WORKFLOW_PROFILE: "../work" }), /Invalid/);
 });

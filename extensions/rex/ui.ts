@@ -33,7 +33,7 @@ export function rows(runs: Iterable<Run>, tasks: Map<string, TaskRun>): Row[] {
     else if (last?.status === "failed" || last?.status === "cancelled") { group = "failed"; state = last.status; }
     if (run.owner === "retired" && group !== "attention") state += ", retired";
     const [glyph, tone] = STYLE[group];
-    return { id: run.id, name: run.name, pinned: !!run.pinned, group, glyph, tone, agent: run.agent, title: oneLine(last?.task ?? "starting", 48), state };
+    return { id: run.id, name: run.name, pinned: !!run.pinned, group, glyph, tone, agent: run.agent, title: oneLine(last?.title ?? last?.task ?? "starting", 48), state };
   }).sort((a, b) => ORDER.indexOf(a.group) - ORDER.indexOf(b.group));
 }
 
@@ -57,7 +57,7 @@ export interface TaskMeta {
   elapsedMs: number; tokens?: number; background: boolean;
 }
 export function taskMeta(run: Run, task: TaskRun): TaskMeta {
-  return { name: run.name, agent: run.agent, childId: run.id, taskId: task.id, title: oneLine(task.task, 72), status: task.status,
+  return { name: run.name, agent: run.agent, childId: run.id, taskId: task.id, title: oneLine(task.title ?? task.task, 72), status: task.status,
     elapsedMs: task.elapsedMs, tokens: task.usageKnown ? task.usage.totalTokens : undefined, background: task.background };
 }
 const GLYPHS: Record<string, [string, Tone]> = {
@@ -84,7 +84,7 @@ export function splitResult(text: string): { header: string; answer: string } {
 export function callLine(tool: "rex_agent" | "rex_send" | "rex_result", args: Record<string, any>, theme: Theme) {
   const quote = (s?: string) => s ? theme.fg("dim", ` "${oneLine(s, 72)}"`) : "";
   const rex = theme.fg("accent", "Rex");
-  if (tool === "rex_agent") return `${rex} ${args.name ? `${args.name} · ` : ""}${args.agent ?? ""}${quote(args.task)}${args.view && args.view !== "background" ? theme.fg("muted", ` · ${args.view}`) : ""}`;
+  if (tool === "rex_agent") return `${rex} ${args.name ? `${args.name} · ` : ""}${args.agent ?? ""}${quote(args.title ?? args.task)}${args.view && args.view !== "background" ? theme.fg("muted", ` · ${args.view}`) : ""}`;
   if (tool === "rex_send") return `${rex} ${args.mode ?? "send"} → ${args.child ?? ""}${quote(args.text)}`;
   if (args.next) return `${rex} next result`;
   return `${rex} ${args.taskId ? `result ${String(args.taskId).slice(0, 8)}${args.wait ? " (wait)" : ""}` : "list"}`;

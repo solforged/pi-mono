@@ -22,13 +22,15 @@ then ask Pi to use `rex_agent` for a small scout task:
 {
   "agent": "scout",
   "name": "auth-scan",
+  "title": "Find auth entry points",
   "task": "Find the authentication entry points and report their paths",
   "context": "Inspect the server directory. Do not change files."
 }
 ```
 
 Each child has a short name, unique within the parent session. Pass `name`, or
-one is assigned (`birch`, `cedar`, `fern`, …). Names appear in the Rex pane
+one is assigned (`birch`, `cedar`, `fern`, …). An optional `title` (2–6 words)
+labels the pane, roster and widget; without one, panes show only name and role. Names appear in the Rex pane
 label, the child's terminal title and header, the widget, the picker, and tool
 results; tools and `/agents` take a name instead of an ID.
 
@@ -75,8 +77,9 @@ Children are arranged automatically, designed for up to about 14 at once:
 - **Deck:** a column of live slots beside the parent pane, holding the children
   that matter most right now: waiting for you, then running, then unread
   results. Slot count follows the parent's height: 3 at 60+ rows, 2 at 40+, 1
-  otherwise; a window narrower than 160 columns gets no deck. The parent keeps
-  55% of its width. Rows are kept even.
+  otherwise; a window narrower than 160 columns gets no deck. The deck starts
+  with the parent at 55% of the width; resize it freely afterwards. Rows are
+  kept even.
 - **Agents window:** a background Rex window (tab) opened when the deck
   overflows. It holds every other child in an even grid (4×4 at 14 children)
   with a small roster pane listing all children and their states. It never takes
@@ -151,7 +154,9 @@ working directory across tasks. Each task receives fresh turn/time limits and
 separate usage accounting. Parent model selection never changes. Missing models,
 authentication, Rex identity, or required routing fail without fallback.
 
-`subagents.concurrency` limits live managed children, including idle ones. Each
+`subagents.rexConcurrency` (default 6, at most 16) limits live managed
+children, including idle ones; it is separate from the headless runner's
+`subagents.concurrency`. Raise it in `roles.local.json` for larger batches. Each
 child runs one task at a time, with at most 64 tasks and 64 steering messages per
 task. Follow-ups retain conversation context and the worker's existing worktree.
 Workers start from clean HEAD; changes are never committed, integrated, or
@@ -213,6 +218,7 @@ Explicit live checks create and remove their own test terminals:
 node tests/fixtures/rex-smoke.ts
 node tests/fixtures/rex-smoke.ts --dispatch
 node tests/fixtures/rex-deck-smoke.ts 14
+node tests/fixtures/rex-deck-smoke.ts 6 --show   # needs Rex.app Remote Control
 ```
 
 Both check native peek/toggle/keep/park, preserved focus, and takeover. The
@@ -221,7 +227,11 @@ and immutable results through real Pi, and captures the child's screen to check
 its named header and compact task display. They use an isolated fixed-response
 provider with `fetch` disabled, never credentials or external model requests.
 The deck check arranges placeholder terminals in two background windows and
-checks even sizes, overflow, an attention swap, and unchanged focus.
+checks even sizes, the parent's share, overflow, an attention swap, and
+unchanged focus. `--show` briefly displays the test window in Rex.app, then
+switches back: in a displayed window, `session.move_block` splits 50/50 and the
+app may reset a split shortly afterwards, so the manager holds the parent's
+share with `session.resize_pane` for a few seconds after creating the deck.
 
 Capabilities are checked against the running server's schemas through the
 [Rex CLI/server API](https://www.superlogical.com/rex/docs/automate/server-api).
