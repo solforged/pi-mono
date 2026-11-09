@@ -56,6 +56,9 @@ pi --offline --no-extensions --no-skills --no-context-files \
 pi --offline --no-extensions --no-skills --no-context-files \
   --no-prompt-templates --no-session \
   -e ./extensions/artifacts/index.ts -p '/artifacts check'
+pi --offline --no-extensions --no-skills --no-context-files \
+  --no-prompt-templates --no-session \
+  -e ./extensions/sessions/index.ts -p '/sessions check'
 ```
 
 The opt-in [Rex prototype checks](rex.md#checks) include live terminal smoke
