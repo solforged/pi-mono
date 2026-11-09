@@ -24,6 +24,7 @@ for resource in \
   extensions/herdr-title \
   extensions/statusline \
   extensions/artifacts \
+  extensions/ask \
   roles.json; do
   target="$agent_dir/$resource"
   if [ -e "$target" ] || [ -L "$target" ]; then
