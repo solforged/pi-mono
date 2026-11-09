@@ -6,6 +6,10 @@ run = "node scripts/install.ts"
 description = "Test locally owned pi extensions without model calls"
 run = "node --test tests/*.test.ts"
 
+[tasks."sandbox:smoke"]
+description = "Exercise the tool sandbox against live Apple containers, without model calls"
+run = "pi --offline --no-extensions --no-skills --no-context-files --no-prompt-templates --no-session -e ./tests/fixtures/sandbox-smoke.ts -p /sandbox-smoke"
+
 [tasks."computer:test"]
 description = "Test the assistant VM controller without model calls"
 run = "node --test computer/tests/*.test.mjs"

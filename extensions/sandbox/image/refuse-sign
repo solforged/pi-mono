@@ -1,0 +1,5 @@
+#!/bin/sh
+# Signing program for guest Git: commits are created on the host, where the
+# signing key and commit hooks live.
+echo "Commits are created on the host, not in the sandbox. Stage changes with git add, then use the git_commit tool." >&2
+exit 1

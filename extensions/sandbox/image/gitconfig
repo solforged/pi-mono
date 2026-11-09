@@ -1,0 +1,9 @@
+# Global Git configuration in the sandbox (GIT_CONFIG_GLOBAL). Host files are
+# owned by root in the guest. The plan's GIT_CONFIG_* environment forces
+# signing through refuse-sign, so commits are made on the host.
+[safe]
+	directory = *
+[core]
+	excludesFile = ~/.config/git/ignore
+[init]
+	defaultBranch = main

@@ -1,0 +1,18 @@
+#!/bin/bash
+# Runs one login-shell command for Pi in its own process group. Pi cancels by
+# signalling the `container exec` client, which forwards the signal here; the
+# whole group then stops, including background children.
+set -u
+setsid bash -lc "$1" </dev/null &
+child=$!
+stop() {
+  kill -TERM -- "-$child" 2>/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 -- "-$child" 2>/dev/null || exit 143
+    sleep 0.2
+  done
+  kill -KILL -- "-$child" 2>/dev/null
+  exit 143
+}
+trap stop TERM INT HUP
+wait "$child"

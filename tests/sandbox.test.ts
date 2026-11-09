@@ -1,0 +1,261 @@
+import assert from "node:assert/strict";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import test from "node:test";
+import { ContainerCli, type RunResult } from "../extensions/sandbox/container.ts";
+import { commandEnv, fdArgs, GrepCollector, guestError, parseListing, rgArgs, sniffImage } from "../extensions/sandbox/guest.ts";
+import { buildPlan, containerName, promptNote, runArgs, type Probe } from "../extensions/sandbox/plan.ts";
+import { imageTag, Sandbox, withLock } from "../extensions/sandbox/sandbox.ts";
+import { chooseEnabled, DEFAULTS, resolveSettings } from "../extensions/sandbox/settings.ts";
+import { temporary } from "./helpers.ts";
+
+const home = "/Users/me";
+function probe(files: Record<string, "file" | "dir"> = {}, patch: Partial<Probe> = {}): Probe {
+  return {
+    root: "/Users/me/src/app", home, cacheRoot: "/Users/me/.cache/pi-sandbox", commonDir: "/Users/me/src/app/.git",
+    wikiDir: "/Users/me/.local/share/wiki", contextDirs: ["/Users/me/.agents/skills"], identity: { name: "Me", email: "me@example.com" },
+    kind: (path) => files[path], ...patch,
+  };
+}
+
+test("settings come from defaults, then globals, then the closest project entry", () => {
+  assert.deepEqual(resolveSettings(undefined, "/x", home), DEFAULTS);
+  const raw = {
+    cpus: 4, mounts: ["~/src/shared"],
+    projects: { "~/src": { memory: "4G" }, "~/src/app": { enabled: false, mounts: [{ path: "/opt/data", readonly: false }] } },
+  };
+  const app = resolveSettings(raw, "/Users/me/src/app", home);
+  assert.equal(app.enabled, false);
+  assert.equal(app.cpus, 4);
+  assert.equal(app.memory, "4G");
+  assert.deepEqual(app.mounts, [{ path: "/Users/me/src/shared", readonly: true }, { path: "/opt/data", readonly: false }]);
+  assert.equal(resolveSettings(raw, "/Users/me/other", home).enabled, true);
+  assert.throws(() => resolveSettings({ wiki: "yes" }, "/x", home), /wiki/);
+  assert.throws(() => resolveSettings({ mounts: ["relative/path"] }, "/x", home), /absolute/);
+  assert.throws(() => resolveSettings({ enable: true }, "/x", home), /Unknown setting sandbox.enable/);
+});
+
+test("the flag beats the inherited environment, which beats settings", () => {
+  assert.deepEqual(chooseEnabled("off", "on", { enabled: true }), { enabled: false, source: "flag" });
+  assert.deepEqual(chooseEnabled(undefined, "off", { enabled: true }), { enabled: false, source: "environment" });
+  assert.deepEqual(chooseEnabled(undefined, undefined, { enabled: false }), { enabled: false, source: "settings" });
+  assert.throws(() => chooseEnabled("maybe", undefined, { enabled: true }), /--sandbox/);
+});
+
+test("a worktree mounts its Git metadata and guards config, hooks, and its .git pointer", () => {
+  const worktree = "/Users/me/.pi/wt/app--task";
+  const plan = buildPlan(probe({
+    [`${worktree}/.git`]: "file", "/Users/me/src/app/.git/config": "file", "/Users/me/src/app/.git/hooks": "dir",
+    [`${worktree}/Cargo.toml`]: "file", [`${worktree}/.pi`]: "dir",
+  }, { root: worktree, wikiDir: undefined }), DEFAULTS, "img");
+  const mounts = plan.mounts.map((m) => [m.target, m.readonly]);
+  assert.deepEqual(mounts.slice(0, 3), [[worktree, false], ["/Users/me/src/app/.git", false], ["/Users/me/.agents/skills", true]]);
+  assert(plan.mounts.some((m) => m.target === `${worktree}/target` && m.source.startsWith("/Users/me/.cache/pi-sandbox/worktrees/")));
+  assert.deepEqual(plan.readOnlyPaths.sort(), [`${worktree}/.git`, `${worktree}/.pi`, "/Users/me/src/app/.git/config", "/Users/me/src/app/.git/hooks"].sort());
+  assert.equal(plan.env.MISE_TRUSTED_CONFIG_PATHS, worktree);
+  assert.equal(plan.env.GIT_AUTHOR_EMAIL, "me@example.com");
+  assert.equal(plan.env.LLM_WIKI_DIR, undefined);
+});
+
+test("missing hooks are created on the host so the guest cannot add them", () => {
+  const plan = buildPlan(probe({ "/Users/me/src/app/.git": "dir" }, { wikiDir: undefined }), DEFAULTS, "img");
+  assert(plan.hostDirs.includes("/Users/me/src/app/.git/hooks"));
+  assert(plan.readOnlyPaths.includes("/Users/me/src/app/.git/hooks"));
+  assert(!plan.readOnlyPaths.includes("/Users/me/src/app/.git/config"));
+});
+
+test("the wiki mounts at its path with a Linux binary over bin/ and guarded Git", () => {
+  const wiki = "/Users/me/.local/share/wiki";
+  const plan = buildPlan(probe({ [`${wiki}/cmd/wiki`]: "dir", [`${wiki}/.git`]: "dir", [`${wiki}/.git/config`]: "file" }), DEFAULTS, "img");
+  assert(plan.mounts.some((m) => m.target === wiki && !m.readonly));
+  assert(plan.mounts.some((m) => m.target === `${wiki}/bin` && m.source === "/Users/me/.cache/pi-sandbox/wiki-bin"));
+  assert(plan.readOnlyPaths.includes(`${wiki}/.git/config`));
+  assert.equal(plan.env.LLM_WIKI_DIR, wiki);
+  assert(plan.wikiBuild);
+  const off = buildPlan(probe(), { ...DEFAULTS, wiki: "off" }, "img");
+  assert(!off.mounts.some((m) => m.target === wiki));
+  const ro = buildPlan(probe(), { ...DEFAULTS, wiki: "ro" }, "img");
+  assert(ro.mounts.some((m) => m.target === wiki && m.readonly));
+});
+
+test("broad or missing mounts are refused", () => {
+  assert.throws(() => buildPlan(probe({}, { root: home }), DEFAULTS, "img"), /home directory/);
+  assert.throws(() => buildPlan(probe({}, { root: "/" }), DEFAULTS, "img"), /home directory/);
+  assert.throws(() => buildPlan(probe(), { ...DEFAULTS, mounts: [{ path: "/Users", readonly: true }] }, "img"), /home directory/);
+  assert.throws(() => buildPlan(probe(), { ...DEFAULTS, mounts: [{ path: "/opt/none", readonly: true }] }, "img"), /does not exist/);
+  const shared = buildPlan(probe({ "/opt/shared": "dir" }), { ...DEFAULTS, mounts: [{ path: "/opt/shared", readonly: true }] }, "img");
+  assert(shared.mounts.some((m) => m.target === "/opt/shared" && m.readonly));
+});
+
+test("run arguments carry mounts, guards, labels, and environment but no host secrets", () => {
+  const plan = buildPlan(probe({ "/Users/me/src/app/.git/config": "file" }), DEFAULTS, "pi-sandbox:abc");
+  const args = runArgs(plan);
+  assert.deepEqual(args.slice(0, 6), ["run", "--detach", "--rm", "--init", "--name", containerName(plan.root)]);
+  assert(args.includes("type=bind,source=/Users/me/.agents/skills,target=/Users/me/.agents/skills,readonly"));
+  assert(args.includes("/Users/me/src/app/.git/config"));
+  assert(args.includes(`pi.sandbox.config=${plan.labels["pi.sandbox.config"]}`));
+  assert.deepEqual(args.slice(-3), ["pi-sandbox:abc", "sleep", "infinity"]);
+  assert(!args.some((arg) => /API_KEY|TOKEN/.test(arg)));
+  assert.match(promptNote(plan), /git_commit/);
+  assert.notEqual(buildPlan(probe(), { ...DEFAULTS, cpus: 2 }, "pi-sandbox:abc").labels["pi.sandbox.config"], plan.labels["pi.sandbox.config"]);
+});
+
+test("container names are stable, short, and distinct per root", () => {
+  assert.equal(containerName("/a/My App!"), containerName("/a/My App!"));
+  assert.match(containerName("/a/My App!"), /^pi-sbx-my-app-[0-9a-f]{10}$/);
+  assert.notEqual(containerName("/a/app"), containerName("/b/app"));
+});
+
+test("listings, grep events, and fd arguments match Pi's tools", () => {
+  const listing = parseListing(Buffer.from("D\0dsrc\0fREADME.md\0lbroken\0"));
+  assert.equal(listing.kind, "dir");
+  assert.deepEqual([...listing.entries], [["src", true], ["README.md", false], ["broken", false]]);
+  assert.equal(parseListing(Buffer.from("M\0")).kind, "missing");
+
+  assert.deepEqual(rgArgs({ pattern: "x", ignoreCase: true, literal: true, glob: "*.ts", context: 2 }, "/r"),
+    ["--no-config", "--json", "--line-number", "--color=never", "--hidden", "--ignore-case", "--fixed-strings", "--glob", "*.ts", "--context", "2", "--", "x", "/r"]);
+  const event = (type: string, line: number, text: string, path = "/r/src/a.ts") => JSON.stringify({ type, data: { path: { text: path }, line_number: line, lines: { text: `${text}\n` } } });
+  const collector = new GrepCollector(2);
+  for (const raw of [JSON.stringify({ type: "begin" }), event("match", 1, "one"), event("context", 2, "ctx"), event("match", 3, "two"), event("context", 4, "after")]) assert(collector.push(raw));
+  assert.equal(collector.push(event("match", 9, "three")), false);
+  assert(collector.limitReached);
+  const { output } = collector.format("/r", true, (text) => ({ text, wasTruncated: false }));
+  assert.deepEqual(output, ["src/a.ts:1: one", "src/a.ts-2- ctx", "src/a.ts:3: two", "src/a.ts-4- after"]);
+  assert.deepEqual(collector.format("/r/src/a.ts", false, (text) => ({ text, wasTruncated: false })).output[0], "a.ts:1: one");
+
+  assert.deepEqual(fdArgs("src/*.ts", "/r", 50, ["**/node_modules/**", "**/.git/**"]),
+    ["--glob", "--color=never", "--hidden", "--no-require-git", "--max-results", "50", "--exclude", "node_modules", "--exclude", ".git", "--full-path", "--", "**/src/*.ts", "/r"]);
+});
+
+test("guest errors and environment stay narrow", () => {
+  assert.equal(guestError("cat: /x: No such file or directory", "/x", "open").code, "ENOENT");
+  assert.match(guestError("sh: can't create /x: Read-only file system", "/x", "open").message, /read-only in the sandbox/);
+  assert.deepEqual(commandEnv({ PI_SESSION_ID: "s", ANTHROPIC_API_KEY: "k", PATH: "/bin", PI_SESSION_FILE: "/f" }), { PI_SESSION_ID: "s" });
+  assert.equal(sniffImage(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), "image/png");
+  assert.equal(sniffImage(Buffer.from("text")), null);
+});
+
+test("image tags follow the image directory contents", async (t) => {
+  const dir = await temporary(t);
+  await writeFile(join(dir, "Containerfile"), "FROM a");
+  const first = await imageTag(dir);
+  assert.match(first, /^pi-sandbox:[0-9a-f]{12}$/);
+  await writeFile(join(dir, "Containerfile"), "FROM b");
+  assert.notEqual(await imageTag(dir), first);
+});
+
+test("locks wait for live holders and break dead ones", async (t) => {
+  const dir = join(await temporary(t), "lock");
+  await mkdir(dir);
+  await writeFile(join(dir, "pid"), "999999");
+  assert.equal(await withLock(dir, async () => "taken", (pid) => pid !== 999999), "taken");
+  await mkdir(dir);
+  await writeFile(join(dir, "pid"), "424242");
+  await assert.rejects(withLock(dir, async () => "never", () => true, 300), /Timed out/);
+});
+
+// A plan whose host directories live under a temporary directory.
+const livePlan = (dir: string) => buildPlan(probe({}, {
+  root: join(dir, "app"), home: "/nonexistent", commonDir: undefined, wikiDir: undefined, contextDirs: [], cacheRoot: join(dir, "cache"),
+}), DEFAULTS, "img");
+
+// A fake `container` CLI that tracks one running container per name.
+function fakeCli() {
+  const running = new Map<string, Record<string, string>>();
+  const calls: string[][] = [];
+  const ok = (stdout = "", code = 0, stderr = ""): RunResult => ({ code, stdout: Buffer.from(stdout), stderr, aborted: false, timedOut: false, truncated: false });
+  const cli = new ContainerCli(async (_bin, args) => {
+    calls.push(args);
+    const [cmd] = args;
+    if (cmd === "system") return ok();
+    if (cmd === "image") return ok("", 0);
+    if (cmd === "inspect") {
+      const labels = running.get(args[1]);
+      return labels ? ok(JSON.stringify([{ status: "running", configuration: { labels } }])) : ok("", 1);
+    }
+    if (cmd === "list") return ok(JSON.stringify([...running].map(([id, labels]) => ({ status: "running", configuration: { id, labels } }))));
+    if (cmd === "run") {
+      const name = args[args.indexOf("--name") + 1];
+      const labels = Object.fromEntries(args.flatMap((arg, i) => args[i - 1] === "--label" ? [arg.split(/=(.*)/s).slice(0, 2)] : []));
+      running.set(name, labels);
+      return ok(name);
+    }
+    if (cmd === "delete") { running.delete(args.at(-1)!); return ok(); }
+    if (cmd === "exec") return args.some((arg) => running.has(arg)) ? ok("out") : ok("", 1, "Error: container not found");
+    return ok();
+  });
+  cli.removeDetached = (name) => { running.delete(name); };
+  return { cli, running, calls };
+}
+
+test("processes in one worktree share a container; the last one out removes it", async (t) => {
+  const stateRoot = await temporary(t);
+  const { cli, running, calls } = fakeCli();
+  const plan = livePlan(stateRoot);
+  const alive = new Set([1, 2]);
+  const options = { cli, stateRoot, alive: (pid: number) => alive.has(pid) };
+  const one = new Sandbox(plan, { ...options, pid: 1 });
+  const two = new Sandbox(plan, { ...options, pid: 2 });
+  await one.ensure();
+  await two.ensure();
+  assert.equal(calls.filter(([cmd]) => cmd === "run").length, 1);
+  assert.deepEqual((await readdir(join(stateRoot, "containers", plan.name, "leases"))).sort(), ["1", "2"]);
+  await one.release();
+  assert(running.has(plan.name));
+  await two.release();
+  assert(!running.has(plan.name));
+});
+
+test("a stale container from a dead session is replaced, and orphans are swept", async (t) => {
+  const stateRoot = await temporary(t);
+  const { cli, running, calls } = fakeCli();
+  const plan = livePlan(stateRoot);
+  running.set(plan.name, { ...plan.labels, "pi.sandbox.config": "old" });
+  running.set("pi-sbx-orphan-0000000000", { "pi.sandbox": "1" });
+  running.set("unrelated", {});
+  const box = new Sandbox(plan, { cli, stateRoot, pid: 7, alive: (pid) => pid === 7 });
+  await box.ensure();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(running.get(plan.name)?.["pi.sandbox.config"], plan.labels["pi.sandbox.config"]);
+  assert(calls.some((args) => args[0] === "delete" && args.at(-1) === plan.name));
+  assert(!running.has("pi-sbx-orphan-0000000000"));
+  assert(running.has("unrelated"));
+});
+
+test("an exec against a vanished container starts it once more", async (t) => {
+  const stateRoot = await temporary(t);
+  const { cli, running } = fakeCli();
+  const plan = livePlan(stateRoot);
+  const box = new Sandbox(plan, { cli, stateRoot, pid: 3, alive: () => true });
+  await box.ensure();
+  running.delete(plan.name);
+  const result = await box.exec(["true"]);
+  assert.equal(result.code, 0);
+  assert(running.has(plan.name));
+});
+
+test("start failures are kept so tools fail closed", async (t) => {
+  const stateRoot = await temporary(t);
+  const cli = new ContainerCli(async () => ({ code: 1, stdout: Buffer.alloc(0), stderr: "XPC connection error", aborted: false, timedOut: false, truncated: false }));
+  const plan = livePlan(stateRoot);
+  const box = new Sandbox(plan, { cli, stateRoot });
+  await assert.rejects(box.ensure(), /container system start/);
+  await assert.rejects(box.exec(["true"]), /container system start/);
+  assert.equal(box.phase, "error");
+});
+
+test("releasing during a start waits for it, then removes the container", async (t) => {
+  const stateRoot = await temporary(t);
+  const { cli, running } = fakeCli();
+  const run = cli.run;
+  (cli as any).run = async (bin: string, args: string[], options: any) => {
+    if (args[0] === "run") await new Promise((resolve) => setTimeout(resolve, 50));
+    return run(bin, args, options);
+  };
+  const plan = livePlan(stateRoot);
+  const box = new Sandbox(plan, { cli, stateRoot, pid: 5, alive: () => true });
+  box.ensure().catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await box.release();
+  assert(!running.has(plan.name));
+});
