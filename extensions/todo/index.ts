@@ -1,0 +1,211 @@
+import { StringEnum } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { showPanel } from "./panel.ts";
+import {
+  apply, counts, empty, format, limits, open, ordered, reminder, restore, section, statuses, tally, withParentTodos,
+  type Item, type List, type Operation, type Status,
+} from "./store.ts";
+
+// Keep the declaration small: it is sent with every request. Notes and
+// clearing finished items are left to /todos.
+const actions = ["list", "add", "update", "remove"] as const;
+type Details = List & { action: string; summary?: string };
+
+export default function (pi: ExtensionAPI) {
+  let list: List = empty();
+  let reminders = 0;     // Reminders sent since the user's last prompt.
+  let progressed = false; // A tool ran since that prompt or the last reminder.
+
+  function refresh(ctx: ExtensionContext) {
+    if (ctx.mode !== "tui") return;
+    const items = open(list);
+    if (!items.length) { ctx.ui.setWidget("todo", undefined); return; }
+    const { done } = counts(list.items);
+    ctx.ui.setWidget("todo", (_tui, theme) => ({
+      render(width: number) {
+        const mark = (item: Item) => item.status === "in_progress" ? theme.fg("accent", "▸") : theme.fg("dim", "○");
+        const lines = [theme.fg("accent", "Todo") + theme.fg("muted", ` ${items.length} open, ${done} done`)];
+        for (const item of items.slice(0, limits.widget)) lines.push(` ${mark(item)} ${theme.fg("muted", `#${item.id}`)} ${item.text}`);
+        if (items.length > limits.widget) lines.push(theme.fg("dim", ` … ${items.length - limits.widget} more · /todos`));
+        return lines.map((line) => truncateToWidth(line, width));
+      },
+      invalidate() {},
+    }));
+  }
+  function sync(ctx: ExtensionContext) { list = restore(ctx.sessionManager.getBranch()); refresh(ctx); }
+  // Edits outside the tool are recorded as custom entries on the branch.
+  function save(ctx: ExtensionContext, next: List) { list = next; pi.appendEntry("todo", next); refresh(ctx); }
+  function report(ctx: ExtensionContext, text: string) {
+    if (ctx.hasUI) ctx.ui.notify(text, "info"); else console.log(text);
+  }
+
+  pi.on("session_start", (_event, ctx) => sync(ctx));
+  pi.on("session_tree", (_event, ctx) => sync(ctx));
+  pi.on("before_agent_start", (event) => {
+    if (event.messageType === "user") { reminders = 0; progressed = false; }
+    const sections = event.systemPromptOptions.sections;
+    const text = event.systemPromptOptions.selectedTools?.includes("todo") ? section(list) : undefined;
+    if (text) sections.todos = text; else delete sections.todos;
+  });
+  pi.on("tool_execution_end", () => { progressed = true; });
+
+  // Remind the agent once per stop while it keeps making progress, at most three
+  // times per prompt. Aborted runs skip this event; print and JSON runs are left alone.
+  pi.on("agent_before_settle", (event, ctx) => {
+    if (!ctx.hasUI || !progressed || reminders >= limits.reminders || !pi.getActiveTools().includes("todo")) return;
+    const content = reminder(list, reminders + 1);
+    if (!content) return;
+    reminders++; progressed = false;
+    return {
+      entries: [...event.entries, { type: "custom_message", customType: "todo-reminder", content, display: true, details: { count: reminders, open: open(list).length } }],
+      continue: true,
+    };
+  });
+  pi.registerMessageRenderer("todo-reminder", (message, options, theme) => {
+    const details = message.details as { count: number; open: number } | undefined;
+    return new Text(theme.fg("warning", "↻ ") + theme.fg("muted", `Todo reminder ${details?.count ?? "?"}/${limits.reminders}: ${details?.open ?? "?"} open item(s)`), options.outputPad, 0);
+  });
+
+  // Delegated children get the parent's open items as context, never write access.
+  pi.on("tool_call", (event) => {
+    if (!open(list).length) return;
+    const input = event.input as any;
+    const add = (target: any) => { const next = withParentTodos(target.context, list); if (next !== undefined) target.context = next; };
+    if (event.toolName === "rex_agent" || (event.toolName === "rex_send" && input.mode === "followup")) add(input);
+    else if (event.toolName === "subagent" && Array.isArray(input.tasks)) input.tasks.forEach(add);
+  });
+
+  function operation(params: any): Operation {
+    switch (params.action) {
+      case "add":
+        if (!params.items?.length) throw new Error('Provide "items" for add');
+        return { action: "add", items: params.items };
+      case "update":
+        if (params.id === undefined) throw new Error('Provide "id" for update');
+        return { action: "update", id: params.id, change: { text: params.text, status: params.status } };
+      case "remove":
+        if (params.id === undefined) throw new Error('Provide "id" for remove');
+        return { action: "remove", id: params.id };
+      default: throw new Error(`Unknown todo action: ${params.action}`);
+    }
+  }
+
+  pi.registerTool({
+    name: "todo",
+    label: "Todo",
+    description: "Session todo list. add: items; update: id, status/text; remove: id.",
+    parameters: Type.Object({
+      action: StringEnum(actions),
+      items: Type.Optional(Type.Array(Type.String())),
+      id: Type.Optional(Type.Integer()),
+      status: Type.Optional(StringEnum(statuses)),
+      text: Type.Optional(Type.String()),
+    }),
+    executionMode: "sequential",
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      let summary: string | undefined;
+      if (params.action !== "list") ({ list, summary } = apply(list, operation(params)));
+      refresh(ctx);
+      // Details carry the full snapshot so the branch can be restored.
+      const details: Details = { action: params.action, summary, ...list };
+      return { content: [{ type: "text", text: summary ? `${summary}. ${tally(list)}.` : format(list) }], details };
+    },
+    renderCall(args: any, theme) {
+      let text = theme.fg("toolTitle", theme.bold("todo ")) + theme.fg("muted", args.action ?? "");
+      if (args.id !== undefined) text += ` ${theme.fg("accent", `#${args.id}`)}`;
+      if (args.status) text += ` ${theme.fg("muted", `→ ${args.status}`)}`;
+      if (args.items?.length) text += ` ${theme.fg("dim", args.items.length === 1 ? `"${args.items[0]}"` : `${args.items.length} items`)}`;
+      return new Text(text, 0, 0);
+    },
+    renderResult(result, { expanded, isPartial }, theme, context) {
+      const details = result.details as Details | undefined;
+      if (isPartial) return new Text(theme.fg("muted", "Updating the todo list…"), 0, 0);
+      if (!details) {
+        const first = result.content[0];
+        const text = first?.type === "text" ? first.text : "";
+        return new Text(context.isError ? theme.fg("error", text) : text, 0, 0);
+      }
+      const lines = [theme.fg(details.summary ? "success" : "muted", details.summary ?? tally(details))];
+      const items = ordered(details.items);
+      const shown = expanded ? items : items.filter((item) => item.status !== "done").slice(0, 5);
+      for (const item of shown) {
+        const mark = item.status === "done" ? theme.fg("success", "✓") : item.status === "in_progress" ? theme.fg("accent", "▸") : theme.fg("dim", "○");
+        lines.push(`${mark} ${theme.fg("accent", `#${item.id}`)} ${item.status === "done" ? theme.fg("dim", item.text) : theme.fg("muted", item.text)}`);
+      }
+      if (shown.length < items.length) lines.push(theme.fg("dim", `… ${items.length - shown.length} more (${context.keyHint("app.tools.expand", "to expand")})`));
+      return new Text(lines.join("\n"), 0, 0);
+    },
+  });
+
+  const subcommands: Record<string, Status> = { start: "in_progress", done: "done", reopen: "pending" };
+  const usage = "Usage: /todos [list|add <text>|start <id>|done <id>|reopen <id>|rm <id>|clear]";
+  const id = (value: string) => {
+    if (!/^#?\d+$/.test(value)) throw new Error(usage);
+    return Number(value.replace("#", ""));
+  };
+  const change = (ctx: ExtensionContext, op: Operation) => { const result = apply(list, op); save(ctx, result.list); return result; };
+
+  async function panel(ctx: ExtensionCommandContext) {
+    let selected: number | undefined;
+    for (;;) {
+      const action = await showPanel(ctx, list, selected);
+      if (!action) return;
+      try {
+        if (action.kind === "add") {
+          const text = await ctx.ui.input("New todo", "Describe the item");
+          if (text?.trim()) selected = change(ctx, { action: "add", items: [text] }).list.nextId - 1;
+          continue;
+        }
+        if (action.kind === "clear") {
+          const { done } = counts(list.items);
+          if (done && await ctx.ui.confirm("Clear finished items?", `Remove ${done} finished item(s) from this session's list?`)) change(ctx, { action: "clear_done" });
+          continue;
+        }
+        selected = action.id;
+        const item = list.items.find((entry) => entry.id === action.id)!;
+        const update = (next: Item["status"]) => change(ctx, { action: "update", id: item.id, change: { status: next } });
+        if (action.kind === "toggle") { update(item.status === "done" ? "pending" : "done"); continue; }
+        const choices: Record<string, () => Promise<unknown> | unknown> = {};
+        if (item.status !== "in_progress") choices["Start"] = () => update("in_progress");
+        if (item.status !== "done") choices["Mark done"] = () => update("done");
+        if (item.status !== "pending") choices["Mark pending"] = () => update("pending");
+        choices["Edit text"] = async () => {
+          const text = await ctx.ui.editor(`Edit #${item.id}`, item.text);
+          if (text?.trim()) change(ctx, { action: "update", id: item.id, change: { text } });
+        };
+        choices["Edit note"] = async () => {
+          const note = await ctx.ui.editor(`Note for #${item.id} (empty removes it)`, item.note ?? "");
+          if (note !== undefined) change(ctx, { action: "update", id: item.id, change: { note } });
+        };
+        choices["Remove"] = async () => {
+          if (await ctx.ui.confirm(`Remove #${item.id}?`, item.text)) change(ctx, { action: "remove", id: item.id });
+        };
+        const choice = await ctx.ui.select(`#${item.id} ${item.text}`, [...Object.keys(choices), "Back"]);
+        if (choice && choices[choice]) await choices[choice]();
+      } catch (error) { ctx.ui.notify(error instanceof Error ? error.message : String(error), "error"); }
+    }
+  }
+
+  pi.registerCommand("todos", {
+    description: "Show or edit this session's todo list",
+    getArgumentCompletions: (prefix) => {
+      const items = ["list", "add", "start", "done", "reopen", "rm", "clear"].filter((name) => name.startsWith(prefix)).map((name) => ({ value: name, label: name }));
+      return items.length ? items : null;
+    },
+    handler: async (args, ctx) => {
+      const [verb = "", ...rest] = args.trim().split(/\s+/).filter(Boolean);
+      const value = rest.join(" ");
+      if (!verb && ctx.mode === "tui") { await panel(ctx); return; }
+      if (!verb || verb === "list") { report(ctx, format(list)); return; }
+      let op: Operation;
+      if (verb === "add" && value) op = { action: "add", items: [value] };
+      else if (Object.hasOwn(subcommands, verb) && rest.length === 1) op = { action: "update", id: id(value), change: { status: subcommands[verb] } };
+      else if (verb === "rm" && rest.length === 1) op = { action: "remove", id: id(value) };
+      else if (verb === "clear" && !value) op = { action: "clear_done" };
+      else throw new Error(usage);
+      report(ctx, `${change(ctx, op).summary}.`);
+    },
+  });
+}

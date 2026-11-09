@@ -36,6 +36,7 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Learning](docs/learning.md): session mining, skill drafts, and approval.
 - [Session search](docs/sessions.md): local historical search and original-entry retrieval.
 - [Retry](docs/retry.md): `/retry` and F5 rerun a failed or aborted turn.
+- [Todo list](docs/todo.md): a per-session list with stop reminders and delegated context.
 - [Herdr](docs/herdr.md): Desktop support and the separate TUI title bridge.
 - [Status line](docs/statusline.md): a one-line footer with Git, context, and cache use.
 - [Providers and search](docs/providers.md): Anthropic compatibility and nested web search.
