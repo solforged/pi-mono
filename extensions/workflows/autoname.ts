@@ -65,8 +65,10 @@ export function registerAutoname(pi: ExtensionAPI, source: ConfigSource, prompt:
       if (!signal.aborted && ctx.hasUI) ctx.ui.notify(`Automatic naming skipped: ${String(error)}`, "warning");
     } finally { busy = false; titleController = undefined; }
   }
-  pi.on("agent_settled", (_event, ctx) => {
-    if (configSnapshot(source).autoname && ctx.mode === "tui") void generate(ctx, false);
+  pi.on("message_end", (event, ctx) => {
+    if (event.message.role !== "user" || !configSnapshot(source).autoname || ctx.mode !== "tui") return;
+    // Pi persists the message after extension handlers return; wait so the branch includes it.
+    setTimeout(() => { void generate(ctx, false); }, 0);
   });
   pi.registerCommand("autoname", {
     description: "Generate a session title using the tiny role; leaves the main model unchanged",

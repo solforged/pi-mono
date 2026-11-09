@@ -24,7 +24,8 @@ their detailed behavior.
 
 ## Session naming
 
-Automatic naming runs after the first substantive exchange settles in the TUI.
+Automatic naming runs as soon as the first substantive user message is sent in
+the TUI.
 It uses the shared or fallback `TITLE_SYSTEM.md`, never overwrites a manual
 title, and makes at most one automatic attempt per session. Failures leave the
 session usable; `/autoname` retries explicitly. Naming does not run automatically

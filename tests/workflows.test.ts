@@ -32,7 +32,8 @@ test("automatic names cannot overwrite a manual name while a request is pending"
     getBranch: () => [{ type: "message", message: { role: "user", content: "Fix the naming race" } }],
   } } as any;
   registerAutoname(pi, config, "Name the task", new AbortController().signal);
-  events.session_start({}, ctx); events.agent_settled({}, ctx);
+  events.session_start({}, ctx); events.message_end({ message: { role: "user" } }, ctx);
+  await new Promise((resolve) => setTimeout(resolve, 0));
   name = "My explicit name"; events.session_info_changed();
   finish({ content: [{ type: "text", text: "<title>Fix the naming race</title>" }], stopReason: "stop", usage: {} });
   await new Promise(setImmediate);
