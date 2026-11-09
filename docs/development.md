@@ -58,6 +58,9 @@ pi --offline --no-extensions --no-skills --no-context-files \
   -e ./extensions/artifacts/index.ts -p '/artifacts check'
 ```
 
+The opt-in [Rex prototype checks](rex.md#checks) include live terminal smoke
+tests with a fixed-response provider; they make no external model requests.
+
 ## API references
 
 Read the installed Pi documentation and shipped `session-name.ts`,

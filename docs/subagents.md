@@ -1,5 +1,8 @@
 # Subagents
 
+For inspectable interactive children, see the opt-in [Rex prototype](rex.md).
+The headless runner described here remains unchanged.
+
 The model-callable `subagent` tool accepts `tasks`, an array of objects with
 `agent`, `task`, and optional selected `context`:
 

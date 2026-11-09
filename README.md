@@ -30,6 +30,7 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Model roles](docs/roles.md): profiles, local overrides, and the role editor.
 - [Workflows](docs/workflows.md): commands, naming, commits, and private state.
 - [Subagents](docs/subagents.md): delegation, retained worktrees, sandboxing, and cancellation.
+- [Rex prototype](docs/rex.md): named asynchronous children in a live deck and Agents window.
 - [Learning](docs/learning.md): session mining, skill drafts, and approval.
 - [Retry](docs/retry.md): `/retry` and F5 rerun a failed or aborted turn.
 - [Herdr](docs/herdr.md): Desktop support and the separate TUI title bridge.
