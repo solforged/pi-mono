@@ -6,6 +6,14 @@ import { addUsage, bounded, emptyUsage } from "../workflows/process.ts";
 import { privateDir, saveJson } from "../workflows/state.ts";
 import { claimOwner, readOwner, Frames, isId, LEASE_MS, MAX_MESSAGES, MAX_TASKS, record, send, taskPrompt, text, validateManifest, VERSION, type Manifest, type Outcome } from "./protocol.ts";
 
+/** `read docs/x.md`, `bash npm test`: the tool and its main argument, one line. */
+export function activity(tool: string, args: unknown) {
+  const a = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+  const detail = [a.path, a.file_path, a.command, a.pattern, a.query, a.url].find(v => typeof v === "string") as string | undefined;
+  const line = `${tool}${detail ? ` ${detail.split("\n")[0]}` : ""}`.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
 export class ChildState {
   active = false;
   finished = false;
@@ -134,11 +142,17 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
     if (owner !== "human" && (!current?.state.active || event.reason === "manual")) return { cancel: true };
   });
   pi.on("cache_warming_decision", () => owner !== "human" ? { action: "stop" } : undefined);
-  pi.on("message_end", event => current?.state.message(event.message));
+  pi.on("message_end", event => { current?.state.message(event.message); if (event.message.role === "assistant") progress(); });
   pi.on("session_compact", event => { if (current?.state.active) addUsage(current.state.usage, event.compactionEntry.usage); });
-  const progress = (message: string) => { if (current) emit({ type: "progress", taskId: current.id, text: bounded(message, 500) }); };
+  // Activity and running cost for the parent's strip and roster; no transcript content.
+  let note = "Running";
+  const progress = (message?: string) => {
+    if (!current) return;
+    if (message) note = bounded(message.replace(/\s+/g, " ").trim(), 200) || "Running";
+    emit({ type: "progress", taskId: current.id, text: note, cost: current.state.usage.cost.total });
+  };
   pi.on("agent_start", () => progress("Running"));
-  pi.on("tool_execution_start", event => progress(event.toolName));
+  pi.on("tool_execution_start", event => progress(activity(event.toolName, event.args)));
   pi.on("ui_prompt_start", event => progress(`Waiting for user: ${event.title ?? event.kind}`));
   pi.on("ui_prompt_end", () => progress("Running"));
   pi.on("agent_settled", event => {

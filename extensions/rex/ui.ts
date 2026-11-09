@@ -1,15 +1,21 @@
 // Pure presentation helpers: no Pi imports, so the regression suite can load them.
 import type { Run, TaskRun } from "./runner.ts";
 
-export type PickAction = "spotlight" | "focus" | "grid" | "park" | "auto" | "message" | "result" | "take" | "cancel" | "close";
+export type PickAction = "spotlight" | "zoom" | "focus" | "grid" | "park" | "auto" | "message" | "result" | "take" | "cancel" | "close";
 type Tone = "accent" | "success" | "error" | "warning" | "muted" | "dim";
 type Theme = { fg(tone: Tone, text: string): string; bold?(text: string): string };
 export type Group = "attention" | "running" | "done" | "failed" | "idle" | "yours";
-export interface Row { id: string; name: string; pinned: boolean; group: Group; glyph: string; tone: Tone; agent: string; title: string; state: string }
+export interface Row {
+  id: string; name: string; pinned: boolean; group: Group; glyph: string; tone: Tone; agent: string; title: string; state: string;
+  /** Settled usage plus the running task's live cost, in dollars. */
+  cost: number;
+  /** Elapsed time of the running task. */
+  elapsedMs?: number;
+}
 
-export const KEYS: Record<string, PickAction> = { enter: "spotlight", f: "focus", g: "grid", p: "park", a: "auto", m: "message", r: "result", t: "take", x: "cancel", c: "close" };
+export const KEYS: Record<string, PickAction> = { enter: "spotlight", z: "zoom", f: "focus", g: "grid", p: "park", a: "auto", m: "message", r: "result", t: "take", x: "cancel", c: "close" };
 export const SHORTCUT = "ctrl+shift+a";
-export const HINT = "↑↓ · enter pin to deck · f focus · g agents window · p park · a auto · m message · r result · t take · x cancel · c close · esc";
+export const HINT = "↑↓ · enter pin to deck · z zoom · f focus · g agents window · p park · a auto · m message · r result · t take · x cancel · c close · esc";
 const ORDER: Group[] = ["attention", "running", "failed", "done", "idle", "yours"];
 const STYLE: Record<Group, [string, Tone]> = {
   attention: ["!", "warning"], running: ["●", "accent"], failed: ["✗", "error"], done: ["✓", "success"], idle: ["○", "muted"], yours: ["◆", "muted"],
@@ -21,19 +27,23 @@ export const oneLine = (text: string, max: number) => {
 };
 
 /** Children needing the user first, then active work, then finished. Closed children are hidden. */
-export function rows(runs: Iterable<Run>, tasks: Map<string, TaskRun>): Row[] {
+export const taskCost = (task: TaskRun) => task.usageKnown ? task.usage.cost.total : task.liveCost ?? 0;
+export function rows(runs: Iterable<Run>, tasks: Map<string, TaskRun>, now = Date.now()): Row[] {
   return [...runs].filter(run => run.status !== "closed").map(run => {
     const last = tasks.get(run.activeTask ?? run.taskIds.at(-1) ?? "");
     let group: Group = "idle", state: string = run.status;
     if (run.owner === "human") { group = "yours"; state = "yours"; }
     else if (run.owner === "unknown") { group = "attention"; state = "needs inspection"; }
     else if (run.activeTask && /^Waiting for user/.test(run.note ?? "")) { group = "attention"; state = oneLine(run.note!, 32); }
-    else if (run.activeTask || run.status === "starting") { group = "running"; state = oneLine(run.note ?? run.status, 24); }
+    else if (run.activeTask || run.status === "starting") { group = "running"; state = oneLine(run.note ?? run.status, 40); }
     else if (last?.status === "succeeded") { group = "done"; state = "done"; }
     else if (last?.status === "failed" || last?.status === "cancelled") { group = "failed"; state = last.status; }
     if (run.owner === "retired" && group !== "attention") state += ", retired";
     const [glyph, tone] = STYLE[group];
-    return { id: run.id, name: run.name, pinned: !!run.pinned, group, glyph, tone, agent: run.agent, title: oneLine(last?.title ?? last?.task ?? "starting", 48), state };
+    const active = run.activeTask ? tasks.get(run.activeTask) : undefined;
+    const cost = run.taskIds.reduce((sum, id) => { const t = tasks.get(id); return sum + (t ? taskCost(t) : 0); }, 0);
+    return { id: run.id, name: run.name, pinned: !!run.pinned, group, glyph, tone, agent: run.agent, title: oneLine(last?.title ?? last?.task ?? "starting", 48), state,
+      cost, ...(active ? { elapsedMs: Math.max(0, now - active.started) } : {}) };
   }).sort((a, b) => ORDER.indexOf(a.group) - ORDER.indexOf(b.group));
 }
 
@@ -45,7 +55,14 @@ export function widgetLine(items: Row[], theme: Theme) {
     const [glyph, tone] = STYLE[group];
     return `${theme.fg(tone, glyph)} ${names.join(" ")}${group === "attention" ? theme.fg("warning", " needs you") : ""}`;
   }).filter(Boolean);
-  return `${theme.fg("accent", "Rex")} ${theme.fg("dim", String(items.length))}  ${groups.join("   ")}   ${theme.fg("dim", SHORTCUT)}`;
+  const total = items.reduce((sum, r) => sum + r.cost, 0);
+  return `${theme.fg("accent", "Rex")} ${theme.fg("dim", `${items.length}${total ? ` · ${money(total)}` : ""}`)}  ${groups.join("   ")}   ${theme.fg("dim", SHORTCUT)}`;
+}
+export const money = (dollars: number) => `$${dollars < 10 ? dollars.toFixed(2) : dollars.toFixed(1)}`;
+/** Plain-text roster/strip line: `● alpha   scout  read docs/x.md   2m10s  $0.18  Find auth entry points`. */
+export function activityLine(r: Row) {
+  const time = r.elapsedMs !== undefined ? duration(r.elapsedMs) : "";
+  return `${r.glyph}${r.pinned ? "▪" : " "}${r.name.padEnd(13)}${r.agent.padEnd(8)}${oneLine(r.state, 34).padEnd(36)}${time.padStart(6)}  ${(r.cost ? money(r.cost) : "").padStart(6)}  ${r.title}`;
 }
 export function pickerRow(r: Row, selected: boolean, theme: Theme) {
   return `${selected ? theme.fg("accent", "›") : " "} ${theme.fg(r.tone, r.glyph)}${r.pinned ? theme.fg("accent", "▪") : " "}${r.name.padEnd(9)} ${theme.fg("muted", r.agent.padEnd(7))} ${r.title}  ${theme.fg("muted", r.state)}`;

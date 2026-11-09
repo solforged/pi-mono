@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cells, columns, plan, ratioBetween, rosterCommand, rosterText, slotsFor, type DeckChild, type PlanInput } from "../extensions/rex/deck.ts";
+import { cells, columns, GRID_CELLS, plan, ratioBetween, rosterCommand, rosterText, slotsFor, stripFraction, stripText, type DeckChild, type PlanInput } from "../extensions/rex/deck.ts";
 
 type Spec = string | { d: "horizontal" | "vertical"; r?: number; a: Spec; b: Spec };
 const B = (n: string | number) => `block:${String(n).padStart(8, "0")}-0000-4000-8000-000000000000`;
@@ -22,6 +22,7 @@ function input(windows: any[], children: DeckChild[], extra: Partial<PlanInput> 
   return { view: { active_window_id: "window:home", windows }, blocks, parent: P, children, size: { columns: 240, rows: 63 }, now: 100_000, dwell: new Map(), ...extra };
 }
 const grid = { window: "window:grid", roster: R };
+const S = "block:0000005f-0000-4000-8000-000000000000";
 const deck3 = (focused?: string): Spec => ({ d: "horizontal", r: 0.55, a: P, b: { d: "vertical", r: 1 / 3, a: B(1), b: { d: "vertical", a: B(2), b: B(3) } } });
 
 test("ratios, columns and slots are read from the actual layout", () => {
@@ -76,12 +77,12 @@ test("attention and pins are promoted by swapping out the weakest unfocused, unp
   const kids = (p4: number, extra: Partial<DeckChild> = {}) => [child(1, { priority: 3 }), child(2, { priority: 1 }), child(3, { priority: 2 }), child(4, { priority: p4, ...extra })];
   assert.deepEqual(plan(input([home(), g], kids(4), { grid })), { kind: "swap", into: B(4), out: B(2) });
   const recent = new Map([[B(2), 99_000]]);
-  assert.equal(plan(input([home(), g], kids(3), { grid, dwell: recent })), undefined, "running waits for the dwell");
+  assert.deepEqual(plan(input([home(), g], kids(3), { grid, dwell: recent })), { kind: "strip" }, "running waits for the dwell; the strip is next");
   assert.deepEqual(plan(input([home(), g], kids(4), { grid, dwell: recent })), { kind: "swap", into: B(4), out: B(2) }, "attention does not wait");
   assert.deepEqual(plan(input([home(), g], kids(1, { pinned: true }), { grid })), { kind: "swap", into: B(4), out: B(2) });
   assert.deepEqual(plan(input([home(B(2)), g], kids(4), { grid })), { kind: "swap", into: B(4), out: B(3) }, "focused deck child stays");
   const pinnedDeck = [child(1, { pinned: true }), child(2, { pinned: true }), child(3, { pinned: true }), child(4, { priority: 4 })];
-  assert.equal(plan(input([home(), g], pinnedDeck, { grid })), undefined);
+  assert.deepEqual(plan(input([home(), g], pinnedDeck, { grid })), { kind: "strip" }, "a pinned deck is never swapped");
 });
 
 test("swaps protect only the active window's focus; moves still skip any window's focused pane", () => {
@@ -106,6 +107,47 @@ test("user placements, background children, narrow windows and stale grids are r
   assert.deepEqual(plan(input([win("window:home", P), win("window:grid", R)], [], { grid })), { kind: "close-grid" });
   const detachedParent = input([], [child(1)]);
   assert.equal(plan(detachedParent), undefined);
+});
+
+test("the strip sits atop the deck while a child is out of it, and closes before the deck empties", () => {
+  const withStrip = (windows: any[], kids: DeckChild[], placed: boolean) => {
+    const i = input(windows, kids, { strip: S, ...(windows.length > 1 ? { grid } : {}) }); i.blocks.push({ block_id: S, placement: placed ? "placed" : "detached" }); return i;
+  };
+  const g = win("window:grid", { d: "horizontal", a: R, b: B(4) });
+  const kids = [child(1), child(2), child(3), child(4)];
+  assert.deepEqual(plan(input([win("window:home", deck3()), g], kids, { grid })), { kind: "strip" });
+  assert.deepEqual(plan(withStrip([win("window:home", deck3()), g], kids, false)),
+    { kind: "place", block: S, anchor: B(1), direction: "vertical", ratio: 0.25, deck: false, side: "before" });
+  // Placed inside the first slot's leaf: weights still give it header + 1 line + title row.
+  const stacked: Spec = { d: "horizontal", r: 0.55, a: P, b: { d: "vertical", r: 1 / 3, a: { d: "vertical", r: 0.5, a: S, b: B(1) }, b: { d: "vertical", a: B(2), b: B(3) } } };
+  const f = stripFraction(1, 63), slot = (1 - f) / 3;
+  assert.deepEqual(plan(withStrip([win("window:home", stacked), g], kids, true)), { kind: "resize", before: B(1), after: B(2), direction: "vertical", ratio: f + slot });
+  // Every child in the deck: the strip goes; and it goes first when the deck empties.
+  assert.deepEqual(plan(withStrip([win("window:home", stacked)], kids.slice(0, 3), true)), { kind: "close-strip" });
+  assert.deepEqual(plan(withStrip([win("window:home", { d: "horizontal", a: P, b: S })], [child(5)], true)), { kind: "close-strip" });
+  const gone = input([win("window:home", deck3())], kids.slice(0, 3), { strip: S });
+  assert.deepEqual(plan(gone), { kind: "forget-strip" }, "a strip Rex no longer has is forgotten, never recreated blindly");
+});
+
+test("strip text lists children outside the deck, attention-first, capped with a count", () => {
+  const kids = [1, 2, 3, 4, 5, 6, 7].map(n => child(n, { line: `line ${n}\u001b[2J` }));
+  assert.equal(stripText(kids.slice(0, 3), new Set([B(1)])), "Not in the deck · 2\nline 2 [2J\nline 3 [2J");
+  assert.match(stripText(kids, new Set()), /^Not in the deck · 7\n(line \d \[2J\n){4}\+3 more · ctrl\+shift\+a in the parent$/);
+  assert.equal(stripFraction(0, 63), 0.06, "never thinner than a header"); assert.equal(stripFraction(20, 63), 7 / 63); assert.equal(stripFraction(3, 10), 0.4);
+});
+
+test("a full 3×3 grid leaves the rest detached; only an outranking child takes a cell, after the dwell", () => {
+  const gridSpec: Spec = { d: "horizontal", r: 1 / 3, a: { d: "vertical", r: 1 / 3, a: R, b: { d: "vertical", a: B(4), b: B(5) } },
+    b: { d: "horizontal", a: { d: "vertical", r: 1 / 3, a: B(6), b: { d: "vertical", a: B(7), b: B(8) } }, b: { d: "vertical", r: 1 / 3, a: B(9), b: { d: "vertical", a: B(10), b: B(11) } } } };
+  const g = win("window:grid", gridSpec), home = win("window:home", { d: "horizontal", r: 0.55, a: P, b: { d: "vertical", r: 0.2, a: S, b: { d: "vertical", r: 1 / 3, a: B(1), b: { d: "vertical", a: B(2), b: B(3) } } } });
+  assert.equal(cells(tree(gridSpec)).length, GRID_CELLS);
+  const kids = (p12: number) => [...[1, 2, 3].map(n => child(n, { priority: 3 })), ...[4, 5, 6, 7, 8, 9, 10, 11].map(n => child(n, { priority: n === 6 ? 1 : 2 })), child(12, { priority: p12 })];
+  const at = (p12: number, dwell = new Map<string, number>()) => { const i = input([home, g], kids(p12), { grid, strip: S, dwell, size: { columns: 240, rows: 63 } }); i.blocks.push({ block_id: S, placement: "placed" }); return i; };
+  const settled = plan(at(1));
+  assert(!settled || settled.kind === "resize", `an ordinary overflow child stays detached (got ${JSON.stringify(settled)})`);
+  assert.notDeepEqual(plan(at(3, new Map([[B(6), 99_000]]))), { kind: "detach", block: B(6) }, "running waits for the grid child's dwell");
+  assert.deepEqual(plan(at(3)), { kind: "detach", block: B(6) }, "running outranks the idle grid child");
+  assert.deepEqual(plan(at(4, new Map([[B(6), 99_000]]))), { kind: "detach", block: B(6) }, "attention does not wait");
 });
 
 test("roster text strips control sequences and its command exits with the parent", () => {
@@ -143,7 +185,11 @@ function simulator(slotsRows = 63, ignoreRatio = false) {
       const placed = new Set(view.windows.flatMap(w => cells(w.layers[0].layout).map(c => c.block)));
       return { view, blocks: [...all].map(block_id => ({ block_id, placement: placed.has(block_id) ? "placed" : "detached" })) };
     },
-    async place(_s: string, block: string, anchor: string, d: any, r: number) { rex.calls.push("place"); detach(block); for (const [id, spec] of windows) windows.set(id, replace(spec, anchor, leaf => ({ d, r: ignoreRatio ? 0.5 : r, a: leaf, b: block }))); },
+    async place(_s: string, block: string, anchor: string, d: any, r: number, _signal?: unknown, side = "after") {
+      rex.calls.push("place"); detach(block);
+      for (const [id, spec] of windows) windows.set(id, replace(spec, anchor, leaf => side === "before" ? { d, r: ignoreRatio ? 0.5 : r, a: block, b: leaf } : { d, r: ignoreRatio ? 0.5 : r, a: leaf, b: block }));
+    },
+    async create() { rex.calls.push("create"); all.add(S); return S; },
     async resizePane(_s: string, a: string, b: string, d: string, r: number) { rex.calls.push("resize"); for (const spec of windows.values()) resize(spec, a, b, d, r); },
     async swap(_s: string, a: string, b: string) { rex.calls.push("swap"); for (const [id, spec] of windows) windows.set(id, swapIn(spec, a, b)); },
     async detach(_s: string, block: string) { rex.calls.push("detach"); detach(block); },
@@ -153,33 +199,42 @@ function simulator(slotsRows = 63, ignoreRatio = false) {
   return { rex, windows, all, focus };
 }
 
-test("the manager converges 14 children into a balanced 3-slot deck and 4×4 grid, then promotes and cleans up", async t => {
+test("the manager converges 14 children into a 3-slot deck under a strip, a 3×3 grid and 3 detached, then promotes and cleans up", async t => {
   const { DeckManager } = await import("../extensions/rex/layout.ts");
   const { mkdtemp, readFile, rm } = await import("node:fs/promises");
   const dir = await mkdtemp("/tmp/rex-deck-"); t.after(() => rm(dir, { recursive: true, force: true }));
   // Like a window the Rex app is showing: move_block ignores ratio; resize_pane does not.
-  const sim = simulator(63, true), kids = new Map<number, DeckChild>(), grids: any[] = [], pauses: string[] = [];
-  const manager = new DeckManager({ rex: sim.rex, session: "session:x", parent: P, cwd: dir, rosterFile: `${dir}/roster.txt`,
+  const sim = simulator(63, true), kids = new Map<number, DeckChild>(), states: any[] = [], pauses: string[] = [];
+  const manager = new DeckManager({ rex: sim.rex, session: "session:x", parent: P, cwd: dir, rosterFile: `${dir}/roster.txt`, stripFile: `${dir}/strip.txt`,
     children: () => [...kids.values()], roster: () => ["Rex agents", ...[...kids.values()].map(k => k.name)],
-    onGrid: g => grids.push(g), onPause: r => pauses.push(r) });
-  for (let n = 1; n <= 14; n++) { kids.set(n, child(n, { priority: 3 })); sim.all.add(B(n)); await manager.run(); }
+    onState: g => states.push(g), onPause: r => pauses.push(r) });
+  for (let n = 1; n <= 14; n++) { kids.set(n, child(n, { priority: 3, line: `line ${n}` })); sim.all.add(B(n)); await manager.run(); }
   assert.deepEqual(pauses, []);
   const home = cells(tree(sim.windows.get("window:home")!)), gridCells = cells(tree(sim.windows.get("window:grid")!));
-  assert.equal(home.length, 4); assert.equal(gridCells.length, 12);
+  assert.equal(home.length, 5, "parent, strip and 3 slots"); assert.equal(gridCells.length, 9, "roster + 8");
+  assert.equal(sim.all.size - home.length - gridCells.length, 3, "three children stay detached");
   assert.equal((sim.windows.get("window:home") as any).r, 0.55, "the parent keeps its share");
-  for (const c of home.filter(c => c.block !== P)) assert(Math.abs(c.rect[3] - 1 / 3) < 0.03, "deck rows are even");
-  const cols = columns(gridCells);
-  assert.deepEqual(cols.map(c => c.length), [3, 3, 3, 3]);
-  for (const c of gridCells) { assert(Math.abs(c.rect[2] - 0.25) < 0.03); assert(Math.abs(c.rect[3] - 1 / 3) < 0.03); }
+  const strip = home.find(c => c.block === S)!, slots = home.filter(c => c.block !== P && c.block !== S);
+  assert(Math.abs(strip.rect[3] - 7 / 63) < 0.025, `the strip keeps a header and five lines (got ${strip.rect[3]})`);
+  assert(slots.every(c => c.rect[1] > strip.rect[1]), "the strip sits on top");
+  for (const c of slots) assert(Math.abs(c.rect[3] - (1 - 7 / 63) / 3) < 0.03, "deck rows are even below it");
+  assert.deepEqual(columns(gridCells).map(c => c.length), [3, 3, 3]);
+  for (const c of gridCells) { assert(Math.abs(c.rect[2] - 1 / 3) < 0.03); assert(Math.abs(c.rect[3] - 1 / 3) < 0.03); }
   assert.match(await readFile(`${dir}/roster.txt`, "utf8"), /^Rex agents\nc1\n/);
-  // Needing attention promotes into the deck without opening anything new.
-  const inGrid = gridCells.find(c => c.block !== R)!.block, n = Number(inGrid.slice(6, 14));
-  kids.set(n, { ...kids.get(n)!, priority: 4 }); await manager.run();
-  assert(cells(tree(sim.windows.get("window:home")!)).some(c => c.block === inGrid));
-  // When every child closes, the grid's roster closes and the deck empties.
+  assert.match(await readFile(`${dir}/strip.txt`, "utf8"), /^Not in the deck · 11\nline \d+\n(line \d+\n){3}\+7 more/);
+  assert.equal(states.at(-1).strip, S);
+  // A detached overflow child needing attention takes a grid cell, then a deck slot.
+  const shown = new Set(cells(tree(sim.windows.get("window:home")!)).concat(cells(tree(sim.windows.get("window:grid")!))).map(c => c.block));
+  const overflow = [...kids.keys()].find(k => !shown.has(B(k)))!;
+  kids.set(overflow, { ...kids.get(overflow)!, priority: 4 }); await manager.run();
+  assert.deepEqual(pauses, []);
+  assert(cells(tree(sim.windows.get("window:home")!)).some(c => c.block === B(overflow)));
+  assert.equal(cells(tree(sim.windows.get("window:grid")!)).length, 9, "the grid stays capped");
+  // When every child closes, the strip and the grid's roster close.
   for (const k of [...kids.keys()]) { sim.rex.detach("", B(k)); sim.all.delete(B(k)); kids.delete(k); }
   await manager.run();
-  assert(!sim.windows.has("window:grid")); assert.equal(grids.at(-1), undefined);
+  assert(!sim.windows.has("window:grid")); assert.deepEqual(states.at(-1), { grid: undefined, strip: undefined });
+  assert.deepEqual(cells(tree(sim.windows.get("window:home")!)).map(c => c.block), [P]);
 });
 
 test("a failing or non-converging mutation pauses layout instead of retrying", async t => {
@@ -189,8 +244,8 @@ test("a failing or non-converging mutation pauses layout instead of retrying", a
   const sim = simulator(), pauses: string[] = [];
   sim.all.add(B(1));
   sim.rex.place = async () => { sim.rex.calls.push("place"); }; // Rex accepted nothing.
-  const manager = new DeckManager({ rex: sim.rex, session: "session:x", parent: P, cwd: dir, rosterFile: `${dir}/roster.txt`,
-    children: () => [child(1)], roster: () => [], onGrid: () => {}, onPause: r => pauses.push(r) });
+  const manager = new DeckManager({ rex: sim.rex, session: "session:x", parent: P, cwd: dir, rosterFile: `${dir}/roster.txt`, stripFile: `${dir}/strip.txt`,
+    children: () => [child(1)], roster: () => [], onState: () => {}, onPause: r => pauses.push(r) });
   await manager.run();
   assert.match(pauses[0], /did not converge/); assert.equal(sim.rex.calls.filter((c: string) => c === "place").length, 1);
   const calls = sim.rex.calls.length;

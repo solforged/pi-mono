@@ -10,11 +10,11 @@ import { loadConfig, resolveRole } from "../workflows/roles.ts";
 import { registerChildUi } from "./child-ui.ts";
 import { RexRunner, yieldingWait, type Run, type TaskRun } from "./runner.ts";
 import { RexClient } from "./client.ts";
-import { DeckManager, type Grid } from "./layout.ts";
+import { DeckManager, type LayoutState } from "./layout.ts";
 import { scopeRoot } from "../workflows/state.ts";
 import { pick, widget } from "./picker.ts";
 import { completionRenderer, toolRenderers } from "./render.ts";
-import { fitResults, oneLine, priority, rows, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
+import { activityLine, fitResults, oneLine, priority, rows, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
 
 export default async function (pi: ExtensionAPI) {
   if (process.env.PI_REX_CHILD) { registerChildUi(pi, process.env.PI_REX_CHILD); return; }
@@ -43,23 +43,33 @@ export default async function (pi: ExtensionAPI) {
     if (ctx.mode !== "tui" || run.parentSession !== ctx.sessionManager.getSessionId()
       || (run.parentEntry && !ctx.sessionManager.getBranch().some(e => e.id === run.parentEntry))) throw new Error("Child belongs to another session or branch");
   }
+  // Activity and cost change on every child tool call; only placement-relevant
+  // changes re-plan the layout, the rest just rewrite the strip and roster text.
+  let layoutKey = "", ticker: ReturnType<typeof setInterval> | undefined;
   runner.onChange = () => {
     if (lifetime.signal.aborted || currentCtx?.mode !== "tui") return;
     const items = rows(runner.runs.values(), runner.tasks);
     currentCtx.ui.setWidget("rex-agents", items.length ? widget(items) : undefined);
-    deck?.schedule();
+    if (!deck) return;
+    const key = JSON.stringify(deckChildren().map(({ line: _line, ...placement }) => placement));
+    if (key !== layoutKey) { layoutKey = key; deck.schedule(); }
+    else void deck.refresh().catch(() => {});
+    // Elapsed times tick while work runs.
+    const busy = [...runner.tasks.values()].some(running);
+    if (busy && !ticker) { ticker = setInterval(() => void deck?.refresh().catch(() => {}), 2000); ticker.unref?.(); }
+    else if (!busy && ticker) { clearInterval(ticker); ticker = undefined; }
   };
   /** Children the deck/grid may arrange, with attention-first priority. */
   const deckChildren = () => rows(runner.runs.values(), runner.tasks).flatMap(row => {
     const run = runner.runs.get(row.id)!, last = runner.tasks.get(run.taskIds.at(-1) ?? "");
     if (!run.block || run.status === "closed") return [];
     return [{ block: run.block, name: run.name, priority: priority(row, !!last && !last.collected && !running(last)),
-      pinned: !!run.pinned, background: run.view === "background" }];
+      pinned: !!run.pinned, background: run.view === "background", line: activityLine(row) }];
   });
   const rosterLines = () => {
     const items = rows(runner.runs.values(), runner.tasks);
     return [`Rex agents · ${items.length} · ctrl+shift+a in the parent to pin, focus or message`, "",
-      ...items.map(r => `${r.glyph}${r.pinned ? "▪" : " "}${r.name.padEnd(10)}${r.agent.padEnd(8)}${r.state.padEnd(26)}${r.title}`)];
+      ...items.map(activityLine)];
   };
   // Completions are batched: with many children, one receipt per burst instead of one each.
   let batch: TaskRun[] = [], flushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -89,6 +99,7 @@ export default async function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     lifetime.abort(new Error("Parent session closed or reloaded"));
     if (flushTimer) clearTimeout(flushTimer);
+    if (ticker) clearInterval(ticker);
     currentCtx?.ui.setWidget("rex-agents", undefined);
     await deck?.stop();
     await runner.shutdown();
@@ -101,13 +112,15 @@ export default async function (pi: ExtensionAPI) {
     await runner.restore(refs, ctx);
     const session = process.env.REX_SESSION, parent = process.env.REX_BLOCK;
     if (ctx.mode === "tui" && session && parent) {
-      const grid = ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "rex-layout").at(-1) as any;
+      const saved = (ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "rex-layout").at(-1) as any)?.data;
+      const dir = join(await scopeRoot(runner.agentDir, config.profile, ctx.cwd), "rex"), sid = ctx.sessionManager.getSessionId();
       deck = new DeckManager({ rex, session, parent, cwd: ctx.cwd,
-        rosterFile: join(await scopeRoot(runner.agentDir, config.profile, ctx.cwd), "rex", `roster-${ctx.sessionManager.getSessionId()}.txt`),
+        rosterFile: join(dir, `roster-${sid}.txt`), stripFile: join(dir, `strip-${sid}.txt`),
         children: deckChildren, roster: rosterLines,
-        onGrid: (value: Grid | undefined) => pi.appendEntry("rex-layout", { grid: value ?? null }),
+        onState: (state: LayoutState) => pi.appendEntry("rex-layout", { grid: state.grid ?? null, strip: state.strip ?? null }),
         onPause: reason => currentCtx?.ui.notify(`Rex layout paused: ${reason}. Arrange panes in Rex, then /agents layout to resume.`, "warning") });
-      deck.grid = grid?.data?.grid ?? undefined;
+      deck.grid = saved?.grid ?? undefined;
+      deck.strip = saved?.strip ?? undefined;
     }
     runner.onChange();
   });
@@ -273,6 +286,10 @@ export default async function (pi: ExtensionAPI) {
       for (const old of pinned.slice(0, Math.max(0, pinned.length - 3))) { old.pinned = undefined; await runner.update(old); }
       await runner.update(run);
       ctx.ui.notify(run.pinned ? `${run.name} pinned to the deck` : `${run.name} unpinned`, "info");
+    } else if (action === "zoom") {
+      // Fills the child's window with it (and switches there) until focus moves.
+      if (!deck?.where.has(run.block)) throw new Error(`${run.name} is not on screen (detached or parked); Enter pins it to the deck`);
+      await rex.zoom(session, run.block);
     } else if (action === "focus") await rex.focus(session, { block: run.block });
     else if (action === "grid") {
       if (!deck?.grid) throw new Error("No Agents window yet; it opens when the deck is full");
@@ -321,13 +338,13 @@ export default async function (pi: ExtensionAPI) {
         if (byName) await control(ctx, byName, "result"); else report(ctx, describe(findTask(prefix)));
         return;
       }
-      if (!prefix || !["show", "peek", "hide", "keep", "park", "pin", "focus", "auto", "close", "cancel", "take", "send"].includes(action) || (action !== "send" && rest.length)) throw new Error("Usage: /agents [check|list|layout|pin NAME|focus NAME|park NAME|auto NAME|peek NAME|hide NAME|keep NAME|send NAME message|result NAME|take NAME|cancel NAME|close NAME]");
+      if (!prefix || !["show", "peek", "hide", "keep", "park", "pin", "zoom", "focus", "auto", "close", "cancel", "take", "send"].includes(action) || (action !== "send" && rest.length)) throw new Error("Usage: /agents [check|list|layout|pin NAME|zoom NAME|focus NAME|park NAME|auto NAME|peek NAME|hide NAME|keep NAME|send NAME message|result NAME|take NAME|cancel NAME|close NAME]");
       if (ctx.mode !== "tui") throw new Error("Rex controls require interactive Pi");
       const run = find(prefix);
       if (action === "send") {
         if (!rest.length) throw new Error("Message text is required");
         await control(ctx, run, "message", rest.join(" "));
-      } else if (["take", "cancel", "close", "park", "focus", "auto"].includes(action)) await control(ctx, run, action as PickAction);
+      } else if (["take", "cancel", "close", "park", "zoom", "focus", "auto"].includes(action)) await control(ctx, run, action as PickAction);
       else if (action === "pin") await control(ctx, run, "spotlight");
       else await runner.action(run, action as "show" | "peek" | "hide" | "keep" | "park");
     },

@@ -52,7 +52,7 @@ export interface Result {
 }
 export type ChildMessage = Ready | Result | {
   type: "accepted" | "ack" | "error"; id: string; seq: number; requestId: string; taskId?: string; text?: string;
-} | { type: "progress"; id: string; seq: number; taskId: string; text: string }
+} | { type: "progress"; id: string; seq: number; taskId: string; text: string; cost?: number }
   | { type: "ownership"; id: string; seq: number; requestId?: string; owner: "human" }
   | { type: "retired"; id: string; seq: number; text: string };
 export type ParentMessage = { type: "dispatch"; id: string; requestId: string; taskId: string; task: string; context: string; deadline: number }

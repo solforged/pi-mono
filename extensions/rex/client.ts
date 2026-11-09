@@ -39,6 +39,7 @@ const LAYOUT_METHODS: Record<string, string[]> = {
   "session.new_window": ["session_id", "layout", "focus", "window_label"],
   "session.focus_block": ["session_id", "block_id"],
   "session.focus_window": ["session_id", "window_id"],
+  "session.zoom_block": ["session_id", "block_id", "zoom"],
   "block.method": ["session_id", "block_id", "method", "args"],
 };
 
@@ -377,10 +378,10 @@ export class RexClient {
     if (!Array.isArray(listed.blocks)) throw new Error("Rex session.list_blocks: blocks unavailable");
     return { view, blocks: listed.blocks.filter((b: any) => b.host_id === this.identity!.hostId) };
   }
-  async place(sessionId: string, blockId: string, anchorBlock: string, direction: "horizontal" | "vertical", ratio: number, signal?: AbortSignal) {
+  async place(sessionId: string, blockId: string, anchorBlock: string, direction: "horizontal" | "vertical", ratio: number, signal?: AbortSignal, side: "before" | "after" = "after") {
     id(blockId, "block"); id(anchorBlock, "block");
     if (!(ratio > 0 && ratio < 1)) throw new Error("Invalid split ratio");
-    await this.mutate(sessionId, "session.move_block", { block_id: blockId, anchor_block_id: anchorBlock, direction, side: "after", ratio }, signal);
+    await this.mutate(sessionId, "session.move_block", { block_id: blockId, anchor_block_id: anchorBlock, direction, side, ratio }, signal);
   }
   async resizePane(sessionId: string, before: string, after: string, direction: "horizontal" | "vertical", ratio: number, signal?: AbortSignal) {
     id(before, "block"); id(after, "block");
@@ -404,6 +405,11 @@ export class RexClient {
     if (typeof result.window_id !== "string" || !result.window_id.startsWith("window:")) throw new Error("Rex session.new_window returned no window; outcome may be unknown");
     id(blockId, "block");
     return { windowId: result.window_id, blockId };
+  }
+  /** Fills the block's window with it (focusing it and activating its window) until focus moves. */
+  async zoom(sessionId: string, blockId: string, signal?: AbortSignal) {
+    id(blockId, "block");
+    await this.mutate(sessionId, "session.zoom_block", { block_id: blockId, zoom: true }, signal);
   }
   async focus(sessionId: string, target: { block?: string; window?: string }, signal?: AbortSignal) {
     if (target.block) { id(target.block, "block"); await this.mutate(sessionId, "session.focus_block", { block_id: target.block }, signal); }

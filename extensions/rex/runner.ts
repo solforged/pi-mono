@@ -40,7 +40,9 @@ export interface Run {
   view?: "auto" | "background"; pinned?: number;
 }
 export interface TaskRun {
-  id: string; childId: string; requestId: string; task: string; title?: string; status: "starting" | "running" | Outcome;
+  id: string; childId: string; requestId: string; task: string; title?: string;
+  /** Running cost reported by the child; the settled usage replaces it. */
+  liveCost?: number; status: "starting" | "running" | Outcome;
   text: string; usage: Usage; usageKnown: boolean; started: number; elapsedMs: number; resultFile: string;
   collected: boolean; notified: boolean; background: boolean;
 }
@@ -258,7 +260,12 @@ export class RexRunner {
       task.status = "running"; await this.saveTask(task); this.onChange(); return;
     }
     if (message.type === "progress") {
-      if (run.activeTask === message.taskId) { run.note = message.text; this.onChange(); }
+      if (run.activeTask === message.taskId) {
+        run.note = message.text;
+        const task = this.tasks.get(message.taskId);
+        if (task && typeof message.cost === "number") task.liveCost = message.cost;
+        this.onChange();
+      }
       return;
     }
     const task = this.tasks.get(message.taskId);

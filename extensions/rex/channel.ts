@@ -64,7 +64,8 @@ export class Channel {
           } else if (["accepted", "ack", "error"].includes(type)) {
             if (!isId(message.requestId) || (message.taskId !== undefined && !isId(message.taskId)) || !text(message.text ?? "", 2000)) throw new Error("Invalid child receipt");
           } else if (type === "progress") {
-            if (!isId(message.taskId) || !text(message.text, 1000)) throw new Error("Invalid child progress");
+            if (!isId(message.taskId) || !text(message.text, 1000)
+              || (message.cost !== undefined && !(typeof message.cost === "number" && Number.isFinite(message.cost) && message.cost >= 0))) throw new Error("Invalid child progress");
           } else if (type === "ownership") {
             if (message.owner !== "human" || (message.requestId !== undefined && !isId(message.requestId))) throw new Error("Invalid ownership receipt");
           } else if (type !== "retired" || !text(message.text, 2000)) throw new Error("Unknown child event");

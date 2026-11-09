@@ -1,7 +1,9 @@
 // Deck + grid layout for many Rex children.
 //
 // The deck is a column of 1–3 live slots beside the parent pane; the grid is a
-// background "Rex agents" window holding every other child plus a small roster.
+// background "Rex agents" window holding up to 8 more children plus a small roster.
+// Children beyond that stay detached and running. A short "strip" pane atop the
+// deck lists every child not in the deck, so nothing is out of sight.
 // Planning is pure: each step reads the actual Rex view, proposes at most one
 // mutation, and the manager re-reads before the next. User placements (floating,
 // other windows) are never touched; focused blocks are never moved; uncertain
@@ -9,23 +11,28 @@
 
 type Obj = Record<string, any>;
 type Direction = "horizontal" | "vertical";
-export interface DeckChild { block: string; name: string; priority: number; pinned: boolean; background: boolean }
+export interface DeckChild { block: string; name: string; priority: number; pinned: boolean; background: boolean; /** Strip/roster text. */ line?: string }
 export interface Cell { block: string; rect: number[] }
 export type Op =
-  | { kind: "place"; block: string; anchor: string; direction: Direction; ratio: number; deck: boolean }
+  | { kind: "place"; block: string; anchor: string; direction: Direction; ratio: number; deck: boolean; side?: "before" }
   | { kind: "resize"; before: string; after: string; direction: Direction; ratio: number }
   | { kind: "swap"; into: string; out: string }
   | { kind: "detach"; block: string }
   | { kind: "grid" }
   | { kind: "forget-grid" }
-  | { kind: "close-grid" };
+  | { kind: "close-grid" }
+  | { kind: "strip" }
+  | { kind: "forget-strip" }
+  | { kind: "close-strip" };
 export interface PlanInput {
-  view: Obj; blocks: Obj[]; parent: string; grid?: { window: string; roster: string };
+  view: Obj; blocks: Obj[]; parent: string; grid?: { window: string; roster: string }; strip?: string;
   children: DeckChild[]; size?: { columns: number; rows: number }; now: number; dwell: Map<string, number>;
   /** Set briefly after the deck is created: hold the parent at this share of the width. */
   share?: number;
 }
 export const PARENT_SHARE = 0.55, DWELL_MS = 8000, TOLERANCE = 0.02;
+/** The grid tops out at 3×3 (roster + 8): smaller cells are not readable TUIs. */
+export const GRID_CELLS = 9, STRIP_LINES = 5;
 
 /** Every block in a layout tree with its window-relative rect. */
 export function cells(node: Obj | undefined): Cell[] {
@@ -88,12 +95,30 @@ export function classify(input: PlanInput) {
   }
   deck.sort(byPosition);
   const parentRect = homeCells.find(c => c.block === parent)?.rect;
-  return { home, deck, inGrid, unplaced, focused, activeFocus, gridWindow, gridLayer, gridCells, parentRect };
+  const deckBlocks = new Set(deck.map(d => d.block));
+  const offscreen = input.children.filter(ch => !deckBlocks.has(ch.block) && blocks.some(b => b.block_id === ch.block));
+  const stripPlaced = !!input.strip && homeCells.some(cell => cell.block === input.strip);
+  const stripDetached = !!input.strip && blocks.find(b => b.block_id === input.strip)?.placement === "detached";
+  return { home, deck, inGrid, unplaced, focused, activeFocus, gridWindow, gridLayer, gridCells, parentRect, offscreen, stripPlaced, stripDetached };
+}
+/** The strip's share of the deck column: a header, one line per child (capped), and Rex's title row. */
+export function stripFraction(offscreen: number, rows: number) {
+  return Math.min(0.4, Math.max(0.06, (Math.min(offscreen, STRIP_LINES) + 2) / Math.max(rows, 1)));
+}
+/** Strip text: children not in the deck, attention-first as given, capped with a count. */
+export function stripText(children: DeckChild[], onDeck: Set<string>) {
+  const off = children.filter(ch => !onDeck.has(ch.block));
+  const shown = off.length > STRIP_LINES ? off.slice(0, STRIP_LINES - 1) : off;
+  return rosterText([`Not in the deck · ${off.length}`, ...shown.map(ch => ch.line ?? ch.name),
+    ...(off.length > shown.length ? [`+${off.length - shown.length} more · ctrl+shift+a in the parent`] : [])]);
 }
 
 export function plan(input: PlanInput): Op | undefined {
   const c = classify(input);
   if (input.grid && !c.gridWindow) return { kind: "forget-grid" };
+  if (input.strip && !input.blocks.some(b => b.block_id === input.strip)) return { kind: "forget-strip" };
+  // A strip without a deck would anchor the next deck beside it: close it first.
+  if (input.strip && !c.deck.length && (c.stripPlaced || c.stripDetached)) return { kind: "close-strip" };
   if (!c.home || c.home.layer.kind !== "tiled" || !c.parentRect) return undefined; // Parent floating/detached: wait.
   // Slots follow the parent plus deck width, so an existing deck does not shrink itself.
   const size = input.size, share = (c.parentRect[2] + (c.deck[0]?.rect[2] ?? 0)) / Math.max(c.parentRect[2], 0.01);
@@ -103,12 +128,15 @@ export function plan(input: PlanInput): Op | undefined {
     ? { kind: "place", block, anchor: c.deck.at(-1)!.block, direction: "vertical", ratio: 0.5, deck: true }
     : { kind: "place", block, anchor: input.parent, direction: "horizontal", ratio: PARENT_SHARE, deck: true };
 
-  // 1. Place new or re-adopted children: deck first, then the grid.
-  const forGrid = Math.max(0, c.unplaced.length - Math.max(0, slots - c.deck.length));
-  for (const child of c.unplaced) {
+  // 1. Place new or re-adopted children, most important first: deck, then the
+  // grid while it has room. The rest stay detached (still running, listed in the strip).
+  const unplaced = [...c.unplaced].sort((a, b) => rank(b) - rank(a));
+  const forGrid = Math.max(0, unplaced.length - Math.max(0, slots - c.deck.length));
+  for (const child of unplaced) {
     if (c.deck.length < slots) return deckPlace(child.block);
     if (!input.grid || !c.gridLayer) return input.grid ? undefined : { kind: "grid" };
-    return gridPlace(child.block, c.gridCells, c.gridCells.length + forGrid, c.inGrid.filter(g => free(g.block)).map(g => g.block));
+    if (c.gridCells.length >= GRID_CELLS) break;
+    return gridPlace(child.block, c.gridCells, Math.min(GRID_CELLS, c.gridCells.length + forGrid), c.inGrid.filter(g => free(g.block)).map(g => g.block));
   }
   // 2. A free deck slot takes the most important grid child.
   const candidates = c.inGrid.filter(g => free(g.block)).sort((a, b) => rank(b) - rank(a));
@@ -119,13 +147,29 @@ export function plan(input: PlanInput): Op | undefined {
   const best = c.inGrid.filter(g => swappable(g.block)).sort((a, b) => rank(b) - rank(a))[0], weakest = victims[0];
   if (best && weakest && rank(best) > rank(weakest)
     && (best.priority >= 4 || best.pinned || input.now - (input.dwell.get(weakest.block) ?? 0) >= DWELL_MS)) return { kind: "swap", into: best.block, out: weakest.block };
-  // 4. Keep deck rows and grid rows/columns even.
+  // 3b. With a full grid, an overflow child that outranks the weakest grid child
+  // takes its cell: detach that one (it keeps running); step 1 then places the other.
+  if (unplaced.length && c.gridCells.length >= GRID_CELLS) {
+    const overflow = unplaced[0], gridWeakest = c.inGrid.filter(g => free(g.block) && !g.pinned)
+      .sort((a, b) => rank(a) - rank(b) || (input.dwell.get(a.block) ?? 0) - (input.dwell.get(b.block) ?? 0))[0];
+    if (gridWeakest && rank(overflow) > rank(gridWeakest)
+      && (overflow.priority >= 4 || overflow.pinned || input.now - (input.dwell.get(gridWeakest.block) ?? 0) >= DWELL_MS)) return { kind: "detach", block: gridWeakest.block };
+  }
+  // 4. The strip sits atop the deck while any child is out of the deck.
+  const wantStrip = c.deck.length > 0 && c.offscreen.length > 0 && !!size;
+  const fraction = size ? stripFraction(c.offscreen.length, size.rows) : 0;
+  if (wantStrip && !input.strip) return { kind: "strip" };
+  if (wantStrip && c.stripDetached) return { kind: "place", block: input.strip!, anchor: c.deck[0].block, direction: "vertical", ratio: 0.25, deck: false, side: "before" };
+  if (!wantStrip && (c.stripPlaced || c.stripDetached)) return { kind: "close-strip" };
+  // 5. Keep deck rows and grid rows/columns even; the strip keeps its few rows.
   const parentLayout = c.home.layer.layout;
   if (input.share && c.deck.length) {
     const have = ratioBetween(parentLayout, input.parent, c.deck[0].block, "horizontal");
     if (have !== undefined && Math.abs(have - input.share) > TOLERANCE) return { kind: "resize", before: input.parent, after: c.deck[0].block, direction: "horizontal", ratio: input.share };
   }
-  const deckBalance = balance(parentLayout, c.deck.map(d => d.block), "vertical");
+  const weights = new Map<string, number>(c.deck.map(d => [d.block, 1]));
+  if (c.stripPlaced && c.deck.length) weights.set(input.strip!, fraction * c.deck.length / (1 - fraction));
+  const deckBalance = balanceTree(parentLayout, weights, "vertical");
   if (deckBalance) return deckBalance;
   if (c.gridLayer) {
     const cols = columns(c.gridCells);
@@ -133,7 +177,7 @@ export function plan(input: PlanInput): Op | undefined {
     if (across) return across;
     for (const col of cols) { const down = balance(c.gridLayer.layout, col.map(cell => cell.block), "vertical"); if (down) return down; }
   }
-  // 5. An empty grid window goes away; it returns when the deck overflows again.
+  // 6. An empty grid window goes away; it returns when the deck overflows again.
   if (input.grid && !c.inGrid.length && c.gridCells.every(cell => cell.block === input.grid!.roster)) return { kind: "close-grid" };
   return undefined;
 }
@@ -149,6 +193,19 @@ function gridPlace(block: string, gridCells: Cell[], target: number, movable: st
   }
   const shortest = [...cols].sort((a, b) => a.length - b.length)[0];
   return { kind: "place", block, anchor: shortest.at(-1)!.block, direction: "vertical", ratio: 0.5, deck: false };
+}
+/** Each split between weighted blocks gives its before side its share of the weight, whatever the nesting. */
+function balanceTree(node: Obj | undefined, weights: Map<string, number>, direction: Direction): Op | undefined {
+  const split = node?.split;
+  if (!split) return undefined;
+  const before = cells(split.before), after = cells(split.after);
+  if (split.direction === direction && before.length && after.length && [...before, ...after].every(cell => weights.has(cell.block))) {
+    const weigh = (list: Cell[]) => list.reduce((sum, cell) => sum + weights.get(cell.block)!, 0);
+    const want = weigh(before) / (weigh(before) + weigh(after));
+    // resize_pane picks the innermost split with these two on opposite sides: this one.
+    if (Math.abs(split.ratio - want) > TOLERANCE) return { kind: "resize", before: before.at(-1)!.block, after: after[0].block, direction, ratio: want };
+  }
+  return balanceTree(split.before, weights, direction) ?? balanceTree(split.after, weights, direction);
 }
 /** Right-nested splits are even when the i-th border gives 1/(n−i) to the cell before it. */
 function balance(layout: Obj, ordered: string[], direction: Direction): Op | undefined {

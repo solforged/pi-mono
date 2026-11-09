@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { displayTaskPrompt, taskPrompt } from "../extensions/rex/protocol.ts";
-import { callLine, childFooter, fitResults, pickerRow, rows, splitResult, taskLine, waitingLine, widgetLine, type TaskMeta } from "../extensions/rex/ui.ts";
+import { activityLine, callLine, childFooter, KEYS, money, fitResults, pickerRow, rows, splitResult, taskLine, waitingLine, widgetLine, type TaskMeta } from "../extensions/rex/ui.ts";
 
 const run = (name: string, extra: object = {}) => ({ id: `${name}-id`, name, agent: "scout", owner: "managed", status: "idle", taskIds: [], ...extra }) as any;
 const task = (id: string, status: string, text = "Read AGENTS.md and report") => [id, { id, status, task: text }] as const;
@@ -61,4 +61,19 @@ test("batched results always include the first, then fit the budget; waits and c
   const f = childFooter({ status: "Managed task\n· /take when idle", input: 58_000, output: 2_300, cost: 0.913, percent: 22.1, model: "gpt-6-astra", thinking: "high" });
   assert.deepEqual(f, { left: "Managed task · /take when idle", right: "↑58k ↓2.3k · $0.91 · 22% · gpt-6-astra high" });
   assert.equal(childFooter({ status: "", input: 0, output: 0, cost: 0, model: "m", thinking: "off" }).right, "↑0 ↓0 · m");
+});
+
+test("rows carry cost (settled usage, else live) and running time; widget and activity lines show them", () => {
+  const usage = (total: number) => ({ cost: { total } });
+  const tasks = new Map<string, any>([
+    ["a1", { id: "a1", status: "succeeded", task: "first", usageKnown: true, usage: usage(0.5), liveCost: 0.4 }],
+    ["a2", { id: "a2", status: "running", task: "second", title: "Find auth entry points", usageKnown: false, liveCost: 0.25, started: 1_000 }],
+    ["b1", { id: "b1", status: "failed", task: "x", usageKnown: false, liveCost: 0.1 }],
+  ]);
+  const items = rows([run("alpha", { status: "running", activeTask: "a2", taskIds: ["a1", "a2"], note: "read docs/rex.md" }), run("bravo", { taskIds: ["b1"] })], tasks, 131_000);
+  assert.equal(items[0].cost, 0.75); assert.equal(items[0].elapsedMs, 130_000); assert.equal(items[1].cost, 0.1); assert.equal(items[1].elapsedMs, undefined);
+  assert.match(widgetLine(items, theme), /^Rex 2 · \$0\.85 {2}/);
+  const line = activityLine(items[0]);
+  assert.match(line, /^● alpha {8}scout {3}read docs\/rex\.md +2m10s +\$0\.75 {2}Find auth entry points$/);
+  assert.equal(money(12.345), "$12.3"); assert.equal(KEYS.z, "zoom");
 });

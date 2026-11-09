@@ -61,12 +61,17 @@ nothing is cancelled, the parent answers you, then waits again. A follow-up
 already queued when the wait began does not end it.
 
 Tool rows render compactly, e.g. `✓ birch scout · succeeded · 18s · 2.5k tok`,
-one line per result in a batch; expand a row to read the answer as Markdown with its file paths. The widget is a
-single line grouping names by state, with children needing you first:
+one line per result in a batch; expand a row to read the answer as Markdown
+with its file paths. The widget is a single line with the total cost, grouping
+names by state with children needing you first:
 
 ```text
-Rex 9  ! oak needs you   ● birch cedar fern   ✓ elm pine   ✗ ash   ctrl+shift+a
+Rex 9 · $1.62  ! oak needs you   ● birch cedar fern   ✓ elm pine   ✗ ash   ctrl+shift+a
 ```
+
+Children report their current tool and its main argument (`read docs/x.md`,
+`bash npm test`) and their running cost; settled usage replaces the estimate.
+No transcript content is sent.
 
 Background completions that finish together become one status receipt for the
 parent's next turn; they never start a model call. Receipts identify sender and
@@ -88,15 +93,29 @@ Children are arranged automatically, designed for up to about 14 at once:
   otherwise; a window narrower than 160 columns gets no deck. The deck starts
   with the parent at 55% of the width; resize it freely afterwards. Rows are
   kept even.
+- **Strip:** while any child is outside the deck, a short pane atop the deck
+  lists those children, attention-first, one line each (up to five, then a
+  count) with activity, running time and cost:
+
+  ```text
+  Not in the deck · 8
+  ! oak      scout   Waiting for user: Allow bash?            1m02s   $0.21  Check CI config
+  ● fern     worker  bash npm test                              48s   $0.40  Fix flaky retry test
+  ```
 - **Agents window:** a background Rex window (tab) opened when the deck
-  overflows. It holds every other child in an even grid (4×4 at 14 children)
-  with a small roster pane listing all children and their states. It never takes
-  focus; switch to it like any Rex tab. It closes when it holds no children.
+  overflows. It holds up to 8 more children in an even grid (at most 3×3,
+  since smaller cells are no longer readable) with a roster pane listing every
+  child in the same format. It never takes focus; switch to it like any Rex tab.
+  It closes when it holds no children.
+- **Overflow:** beyond that, children stay detached and keep running. They are
+  listed in the strip and roster, and the picker reaches them.
 
 A child that starts waiting for you is swapped into the deck at once; others
 wait until the deck child they would replace has been there 8 seconds. Swaps
 use Rex's native `session.swap_blocks`, so every child keeps running and its
-terminal is never recreated. Pinned children stay in the deck.
+terminal is never recreated. Pinned children stay in the deck. With a full
+grid, an overflow child that outranks the weakest grid child (by the same rule)
+takes that cell; the displaced child is detached, not stopped.
 
 The layout manager re-reads Rex's view before every step and leaves your
 choices alone: a child you float, move to another window, or focus is not moved;
@@ -112,6 +131,7 @@ Press `ctrl+shift+a`, or run `/agents`, to open the agent picker:
 | Key | Action |
 |---|---|
 | Enter | Pin to the deck, or unpin (at most one pin per slot) |
+| `z` | Zoom the child to fill its window (and switch there) until focus moves |
 | `f` / `g` | Focus the child's terminal / switch to the Agents window |
 | `p` / `a` | Park (detach, keeps running) / return to automatic placement |
 | `m` | Steer the active task, or start a follow-up when idle |
@@ -126,6 +146,7 @@ controls are available by name for scripts:
 /agents check             Check local Rex and configured workflow roles
 /agents layout            Resume paused automatic layout
 /agents pin NAME          Pin to the deck, or unpin
+/agents zoom NAME         Zoom the child to fill its window until focus moves
 /agents focus NAME        Focus the child's terminal
 /agents park NAME         Detach without stopping; automatic layout leaves it
 /agents auto NAME         Return a parked or moved child to automatic layout
@@ -235,8 +256,8 @@ and immutable results through real Pi, and captures the child's screen to check
 its named header and compact task display. They use an isolated fixed-response
 provider with `fetch` disabled, never credentials or external model requests.
 The deck check arranges placeholder terminals in two background windows and
-checks even sizes, the parent's share, overflow, an attention swap, and
-unchanged focus. `--show` briefly displays the test window in Rex.app, then
+checks even sizes, the parent's share, the strip, the 3×3 grid cap with
+detached overflow, attention promotion, and unchanged focus. `--show` briefly displays the test window in Rex.app, then
 switches back: in a displayed window, `session.move_block` splits 50/50 and the
 app may reset a split shortly afterwards, so the manager holds the parent's
 share with `session.resize_pane` for a few seconds after creating the deck.

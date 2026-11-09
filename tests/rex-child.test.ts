@@ -4,7 +4,7 @@ import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
-import { registerChild } from "../extensions/rex/child.ts";
+import { activity, registerChild } from "../extensions/rex/child.ts";
 import { claimOwner, readOwner, Frames, LEASE_MS, record, send, VERSION, type Manifest } from "../extensions/rex/protocol.ts";
 import { saveJson } from "../extensions/workflows/state.ts";
 import { config, root } from "./helpers.ts";
@@ -170,4 +170,12 @@ test("model and turn policy is enforced for each managed task", async t => {
   await h.emit("turn_start"); assert(h.aborts > 0);
   h.ctx.model = { ...h.ctx.model, id: "other" }; await h.emit("model_select"); await h.settle(task);
   assert.equal(h.events.find(v => v.type === "result").status, "failed");
+});
+
+test("activity names the tool and its main argument on one bounded line", () => {
+  assert.equal(activity("read", { path: "docs/rex.md", offset: 3 }), "read docs/rex.md");
+  assert.equal(activity("bash", { command: "npm test\nrm -rf /" }), "bash npm test");
+  assert.equal(activity("grep", { pattern: "a\u001b[2Jb" }), "grep a [2Jb");
+  assert.equal(activity("todo", undefined), "todo");
+  assert.equal(activity("bash", { command: "x".repeat(200) }).length, 80);
 });
