@@ -313,3 +313,24 @@ test("closing a child whose terminal the user already closed records it as close
   await h.runner.action(run, "close");
   assert.equal(run.status, "closed"); assert.equal(run.note, "Terminal was already closed");
 });
+
+test("the parent closes only idle managed children whose results have all been read", async t => {
+  const h = await harness(t, "wait"), run = await h.open();
+  const task = await h.runner.submit(run.id, "Work", "", signal());
+  await assert.rejects(h.runner.closeIdle(run.id), /is working/);
+  h.fake.children.get(run.id)!.emit({ type: "result", taskId: task.id, status: "succeeded", text: "done", usage: emptyUsage() });
+  await h.runner.wait(task.id, signal());
+  await assert.rejects(h.runner.closeIdle(run.id), /1 unread result/);
+  assert(!h.fake.calls.includes("close"), "nothing closed before the result is read");
+  await h.runner.collect(task.id);
+  await h.runner.closeIdle(run.id);
+  assert.equal(run.status, "closed"); assert(h.fake.calls.includes("close"));
+  await assert.rejects(h.runner.closeIdle(run.id), /not available/, "a closed child cannot be closed again");
+});
+
+test("the parent cannot close a child the user has taken over", async t => {
+  const h = await harness(t), run = await h.open();
+  await h.runner.take(run.id);
+  await assert.rejects(h.runner.closeIdle(run.id), /not available for parent-directed work/);
+  assert(!h.fake.calls.includes("close"));
+});

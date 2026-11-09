@@ -181,7 +181,7 @@ export default async function (pi: ExtensionAPI) {
     name: "rex_agent", label: "Rex agent", executionMode: "sequential",
     description: "Start a persistent interactive Pi child in local Rex. Each child has a short unique name (pass name, or one is assigned); use it with rex_send. Returns immediately by default; use rex_result next=true to wait for whichever task finishes first, rather than polling each child. Children appear in a deck of live slots beside the parent (needing-attention and running work first) and an Agents window grid for the rest; view=background keeps one detached. Advisor/scout are read-only; workers get clean-HEAD worktrees. subagents.rexConcurrency limits live managed children. No recursion, remote hosts or model fallback. Worktrees/tool routing are not a security sandbox.",
     promptSnippet: "Delegate work asynchronously to inspectable Rex children",
-    promptGuidelines: ["Give each Rex child a short title; put details in task, not the title.", "Use rex_agent for independent work. Select context explicitly. Use rex_result to read actual results before reporting success. Review worker changes before integrating them."],
+    promptGuidelines: ["Give each Rex child a short title; put details in task, not the title.", "Close idle Rex children you no longer need with rex_send mode=close; never close Rex panes with shell commands.", "Use rex_agent for independent work. Select context explicitly. Use rex_result to read actual results before reporting success. Review worker changes before integrating them."],
     parameters: Type.Object({ agent: StringEnum(["advisor", "scout", "worker"] as const),
       name: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{1,15}$", description: "Short unique child name, e.g. auth-scan" })),
       title: Type.Optional(Type.String({ maxLength: 60, description: "2–6 word label for the pane and roster, e.g. Find auth entry points" })), task: Type.String({ minLength: 1, maxLength: 16000 }),
@@ -207,13 +207,17 @@ export default async function (pi: ExtensionAPI) {
   pi.registerTool({
     ...toolRenderers("rex_send"),
     name: "rex_send", label: "Message Rex child", executionMode: "sequential",
-    description: "Send a follow-up task to an idle managed Rex child, steer its active task, or cancel it. A steer requires the exact active task ID and never spills into a later task. Messages are labelled as parent-agent messages. Follow-ups retain the child conversation/worktree and original model/tool policy. They return immediately unless wait=true. No sibling messaging or human takeover through this tool.",
-    parameters: Type.Object({ child: Type.String({ description: "Child name (or ID prefix)" }), mode: StringEnum(["followup", "steer", "cancel"] as const),
+    description: "Send a follow-up task to an idle managed Rex child, steer its active task, cancel it, or close an idle child you no longer need (after reading its results; files, session and worktree are kept). A steer requires the exact active task ID and never spills into a later task. Messages are labelled as parent-agent messages. Follow-ups retain the child conversation/worktree and original model/tool policy. They return immediately unless wait=true. No sibling messaging or human takeover through this tool.",
+    parameters: Type.Object({ child: Type.String({ description: "Child name (or ID prefix)" }), mode: StringEnum(["followup", "steer", "cancel", "close"] as const),
       text: Type.Optional(Type.String({ minLength: 1, maxLength: 16000 })), title: Type.Optional(Type.String({ maxLength: 60, description: "Short label for a follow-up task" })), taskId: Type.Optional(Type.String()),
       context: Type.Optional(Type.String({ maxLength: 16000 })), wait: Type.Optional(Type.Boolean()) }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal]), run = find(params.child);
       checkBranch(run, ctx);
+      if (params.mode === "close") {
+        await runner.closeIdle(run.id);
+        return { content: [{ type: "text", text: `Closed ${run.name}. Its results${run.worktree ? ", session file and worktree (not integrated)" : " and session file"} are retained.` }], details: {} };
+      }
       if (params.mode === "cancel") {
         const taskId = run.activeTask;
         await runner.cancel(run.id);

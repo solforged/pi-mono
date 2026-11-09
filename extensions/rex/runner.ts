@@ -399,6 +399,18 @@ export class RexRunner {
     else if (action === "keep") await this.rex.keep(run.rexSession, run.block, run.parentBlock, signal);
     else await this.rex.hide(run.rexSession, run.block, signal);
   }
+  /**
+   * Parent-directed close: only an idle child the parent still manages, after
+   * every result has been read. Human-owned, retired and transferring children
+   * are refused (by `managed`); files, session and worktree are retained.
+   */
+  async closeIdle(id: string) {
+    const run = this.managed(id).run;
+    if (run.activeTask) throw new Error(`${run.name} is working; wait for its result or cancel the task first`);
+    const unread = run.taskIds.filter(taskId => { const task = this.tasks.get(taskId); return task && !task.collected; });
+    if (unread.length) throw new Error(`${run.name} has ${unread.length} unread result(s); read them with rex_result first`);
+    await this.action(run, "close");
+  }
   /** Persist presentation intent (view/pin); policy fields are not changed here. */
   async update(run: Run) { await this.save(run); this.onChange(); }
   /** A blocking wait was given up: report the task's completion like background work. */

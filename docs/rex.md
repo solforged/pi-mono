@@ -47,7 +47,10 @@ The model has three tools:
 - `rex_agent`: start an advisor, scout, or worker and its first task.
 - `rex_send`: addressed by `child` name. `followup` starts another task in an
   idle child; `steer` sends a message to an exact active `taskId`; `cancel`
-  stops the current task.
+  stops the current task; `close` ends an idle child once all its results have
+  been read. Closing keeps results, the session file and any worktree, and is
+  refused for children you have taken over, retired children, and children with
+  work running. The parent is told never to close panes through the shell.
 - `rex_result`: `next: true` returns every unread result, oldest first and up
   to 64 KB, or waits for whichever task finishes next across all children. One
   call collects a whole batch, so the parent spends fewer turns resending its
