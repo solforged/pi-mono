@@ -59,3 +59,17 @@ failures since this extension loaded. These are byte counts, not tokenizer or
 billing estimates. `/artifacts off` disables new archival until `on` or reload;
 previous artifacts remain retrievable. This deliberately starts with preventing
 large output from entering history, not semantic eviction of consumed evidence.
+
+## Prompt size
+
+Every request carries the system prompt and the active tools' declarations
+before any conversation. `/prompt-size` shows both: the prompt by section
+(tools list, rules, project instructions, skills and so on) and the
+declarations grouped by the extension that registered them. Sizes are
+characters of text or JSON, with tokens estimated at four characters each.
+
+This repository's tools keep their declarations small. Each description says
+when to use the tool; parameter limits are enforced in code, with errors that
+explain them, rather than in the schema. Tools add no rule or tool-list lines,
+except the ask tool's two deliberate guidelines. `tests/fixtures/prompt-size-smoke.ts`
+holds a size budget for every repo tool and fails when one grows past it.

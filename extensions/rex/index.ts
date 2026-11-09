@@ -14,6 +14,9 @@ import { DeckManager, type LayoutState } from "./layout.ts";
 import { scopeRoot } from "../workflows/state.ts";
 import { pick, widget } from "./picker.ts";
 import { completionRenderer, toolRenderers } from "./render.ts";
+import { switchTools, TOOLS_ENTRY } from "./tools.ts";
+
+const str = () => Type.Optional(Type.String());
 import { activityLine, fitResults, oneLine, priority, rows, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
 
 export default async function (pi: ExtensionAPI) {
@@ -106,6 +109,11 @@ export default async function (pi: ExtensionAPI) {
   });
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    // Tool sets are restored with the session, so decide again at every start.
+    const removedBefore = ((ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === TOOLS_ENTRY).at(-1) as any)?.data?.removed ?? []) as string[];
+    const tools = switchTools(pi.getActiveTools(), pi.getAllTools().map(t => t.name), !!(process.env.REX_SESSION && process.env.REX_BLOCK), removedBefore);
+    if (tools.changed) pi.setActiveTools(tools.active);
+    if (tools.recordChanged) pi.appendEntry(TOOLS_ENTRY, { removed: tools.removed });
     const config = await loadConfig(root, runner.agentDir);
     const refs = ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "rex-run")
       .map(e => ({ id: (e as any).data?.id, profile: (e as any).data?.profile ?? config.profile }));
@@ -179,13 +187,11 @@ export default async function (pi: ExtensionAPI) {
   pi.registerTool({
     ...toolRenderers("rex_agent"),
     name: "rex_agent", label: "Rex agent", executionMode: "sequential",
-    description: "Start a persistent interactive Pi child in local Rex. Each child has a short unique name (pass name, or one is assigned); use it with rex_send. Returns immediately by default; use rex_result next=true to wait for whichever task finishes first, rather than polling each child. Children appear in a deck of live slots beside the parent (needing-attention and running work first) and an Agents window grid for the rest; view=background keeps one detached. Advisor/scout are read-only; workers get clean-HEAD worktrees. subagents.rexConcurrency limits live managed children. No recursion, remote hosts or model fallback. Worktrees/tool routing are not a security sandbox.",
-    promptSnippet: "Delegate work asynchronously to inspectable Rex children",
-    promptGuidelines: ["Give each Rex child a short title; put details in task, not the title.", "Close idle Rex children you no longer need with rex_send mode=close; never close Rex panes with shell commands.", "Use rex_agent for independent work. Select context explicitly. Use rex_result to read actual results before reporting success. Review worker changes before integrating them."],
-    parameters: Type.Object({ agent: StringEnum(["advisor", "scout", "worker"] as const),
-      name: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{1,15}$", description: "Short unique child name, e.g. auth-scan" })),
-      title: Type.Optional(Type.String({ maxLength: 60, description: "2–6 word label for the pane and roster, e.g. Find auth entry points" })), task: Type.String({ minLength: 1, maxLength: 16000 }),
-      context: Type.Optional(Type.String({ maxLength: 16000 })), wait: Type.Optional(Type.Boolean()), view: Type.Optional(StringEnum(["deck", "background"] as const)) }),
+    // Declarations are sent with every request: keep them short. The runner validates
+    // names, lengths and limits; layout and lifecycle details are in docs/rex.md.
+    description: "Start a named Pi child in a Rex pane for independent work; returns at once. advisor/scout only read; worker edits a clean-HEAD worktree you must review. Give a 2-6 word title, a self-contained task and selected context. Collect with rex_result next=true.",
+    parameters: Type.Object({ agent: StringEnum(["advisor", "scout", "worker"] as const), name: str(), title: str(), task: Type.String(),
+      context: str(), wait: Type.Optional(Type.Boolean()), view: Type.Optional(StringEnum(["deck", "background"] as const)) }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal]);
       const config = await loadConfig(root, runner.agentDir);
@@ -207,10 +213,9 @@ export default async function (pi: ExtensionAPI) {
   pi.registerTool({
     ...toolRenderers("rex_send"),
     name: "rex_send", label: "Message Rex child", executionMode: "sequential",
-    description: "Send a follow-up task to an idle managed Rex child, steer its active task, cancel it, or close an idle child you no longer need (after reading its results; files, session and worktree are kept). A steer requires the exact active task ID and never spills into a later task. Messages are labelled as parent-agent messages. Follow-ups retain the child conversation/worktree and original model/tool policy. They return immediately unless wait=true. No sibling messaging or human takeover through this tool.",
-    parameters: Type.Object({ child: Type.String({ description: "Child name (or ID prefix)" }), mode: StringEnum(["followup", "steer", "cancel", "close"] as const),
-      text: Type.Optional(Type.String({ minLength: 1, maxLength: 16000 })), title: Type.Optional(Type.String({ maxLength: 60, description: "Short label for a follow-up task" })), taskId: Type.Optional(Type.String()),
-      context: Type.Optional(Type.String({ maxLength: 16000 })), wait: Type.Optional(Type.Boolean()) }),
+    description: "Message a Rex child by name. followup: new task for an idle child; steer: text for its active taskId; cancel; close: an idle child whose results you have read. Never close Rex panes from the shell.",
+    parameters: Type.Object({ child: Type.String(), mode: StringEnum(["followup", "steer", "cancel", "close"] as const),
+      text: str(), title: str(), taskId: str(), context: str(), wait: Type.Optional(Type.Boolean()) }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal]), run = find(params.child);
       checkBranch(run, ctx);
@@ -237,7 +242,7 @@ export default async function (pi: ExtensionAPI) {
   pi.registerTool({
     ...toolRenderers("rex_result"),
     name: "rex_result", label: "Rex results",
-    description: "next=true returns every unread finished result (oldest first, up to 64 KB), or waits for the next task to finish across all children; prefer it to polling. Any wait ends early, cancelling nothing, when the user queues a message: respond to them, then call again. With taskId, read that immutable result (up to configured 50 KB); wait=true waits for it. With neither, list children by name with recent task IDs. Cancelling a wait does not cancel background work. Usage is accounted once when a result is first read; full files remain available.",
+    description: "Rex child results; read them before reporting success. next=true: all unread results, or wait for the next (instead of polling; a user message ends the wait, so answer it and call again). taskId: that result; wait=true waits. Neither: list children.",
     parameters: Type.Object({ next: Type.Optional(Type.Boolean()), taskId: Type.Optional(Type.String()), wait: Type.Optional(Type.Boolean()) }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal]);

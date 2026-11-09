@@ -67,6 +67,10 @@ pi --offline --no-extensions --no-skills --no-context-files \
   -e ./extensions/intercom/index.ts -p '/intercom list'
 ```
 
+To see what your installed extensions, instructions and skills add to every
+request, run `pi --offline --no-session -p /prompt-size` once `mise run
+install` has linked the extensions.
+
 The opt-in [Rex prototype checks](rex.md#checks) include live terminal smoke
 tests with a fixed-response provider; they make no external model requests.
 

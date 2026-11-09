@@ -73,6 +73,12 @@ export default function (pi: ExtensionAPI) {
           { type: "message", id: "entry", parentId: null, timestamp: date, message: { role: "user", content: "smoke lexical decision" } },
         ].map(v => JSON.stringify(v)).join("\n") + "\n");
         assert.deepEqual(tools.map(t => t.name), ["session_search", "session_read"]);
+        // Every request carries both declarations; keep them small.
+        for (const [tool, budget] of [[tools[0], 520], [tools[1], 620]]) {
+          const size = JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }).length;
+          assert.ok(size <= budget, `${tool.name} declaration grew to ${size} characters`);
+          assert.equal(tool.promptSnippet ?? tool.promptGuidelines, undefined);
+        }
         assert.ok(pi.getAllTools().some(t => t.name === "session_search"));
         const fake = { ...ctx, sessionManager: { getSessionDir: () => store, getSessionId: () => "live", getSessionFile: () => undefined } };
         const search = await tools[0].execute("search", { query: "smoke decision" }, undefined, undefined, fake);

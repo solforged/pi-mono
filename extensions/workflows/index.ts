@@ -80,18 +80,17 @@ export default async function (pi: ExtensionAPI) {
   const run = createRunner(pi, getConfig, root, agentDir, lifetime.signal);
   const item = Type.Object({
     agent: StringEnum(["advisor", "scout", "worker"] as const),
-    task: Type.String({ minLength: 1, maxLength: 16000, description: "Self-contained task and expected result" }),
-    context: Type.Optional(Type.String({ maxLength: 16000, description: "Selected context; do not copy the entire conversation" })),
+    task: Type.String(),
+    context: Type.Optional(Type.String()),
   });
   function summarize(results: ChildResult[]) {
     return results.map((r) => `${r.agent} · ${r.provider}/${r.model} · ${r.status}\n${r.text}\nTranscript: ${r.transcript}${r.worktree ? `\nDetached worktree (not integrated): ${r.worktree}` : ""}`).join("\n\n");
   }
   pi.registerTool({
     name: "subagent", label: "Subagent",
-    description: `Delegate 1-${config.subagents.maxTasks} independent tasks. Advisor/scout are read/search-only; workers use separate clean-HEAD Git worktrees. Inherits parent tool-routing extensions, not a new security boundary. No recursive delegation. Results are capped at ${config.subagents.outputBytes} bytes each; full private transcripts are retained.`,
-    promptSnippet: "Delegate focused work to an advisor, scout, or isolated editing worker",
-    promptGuidelines: ["Use subagent for independent bounded tasks. Include the context it needs and an expected result. Review worker changes before integrating them; never assume a worktree changed the main checkout."],
-    parameters: Type.Object({ tasks: Type.Array(item, { minItems: 1, maxItems: config.subagents.maxTasks }) }),
+    // Sent with every request: keep it short. The runner validates tasks; limits are in docs/subagents.md.
+    description: `Run 1-${config.subagents.maxTasks} independent bounded tasks in parallel. advisor/scout only read; worker edits a clean-HEAD worktree, which you must review and integrate. Give each task its context (not the whole conversation) and the expected result.`,
+    parameters: Type.Object({ tasks: Type.Array(item) }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const results = await run(params.tasks, ctx, approvedInstructions, signal ?? lifetime.signal, (text) => {
         if (!lifetime.signal.aborted) onUpdate?.({ content: [{ type: "text", text }] });

@@ -56,17 +56,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
-    description: "Search the web for current information. Prefers the live Grok or Codex backend, then falls through to the other, then Exa.",
-    promptSnippet: "Search the web for current information and sources",
-    promptGuidelines: [
-      "Use web_search for current events, docs, and facts beyond the knowledge cutoff.",
-      "Prefer primary sources from web_search results and cite their URLs in the final answer.",
-    ],
-    parameters: Type.Object({
-      query: Type.String({ description: "Search query. Google-style site:, after:, and quoted phrases are passed through." }),
-      recency: Type.Optional(Recency),
-      limit: Type.Optional(Type.Number({ description: "Maximum sources to keep from a backend that supports a cap." })),
-    }),
+    // Sent with every request: keep it short. Backend order is in docs/providers.md.
+    description: "Search the web for current events, docs and facts beyond your knowledge. site:, after: and quotes work. Prefer primary sources; cite their URLs.",
+    parameters: Type.Object({ query: Type.String(), recency: Type.Optional(Recency), limit: Type.Optional(Type.Number()) }),
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       onUpdate?.({ content: [{ type: "text", text: "Searching..." }] });
       const query = sessionQuery(ctx, {

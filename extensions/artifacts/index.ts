@@ -32,16 +32,15 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "artifact_read",
     label: "Artifact read",
-    description: "Retrieve bounded verbatim text from an archived tool result by its artifact UUID. offset is a 1-based line number; query filters lines by a case-sensitive literal substring. Use column to continue a clipped long line. Never accepts arbitrary file paths.",
-    promptSnippet: "Retrieve omitted evidence from archived tool output",
-    promptGuidelines: ["Archived tool excerpts are incomplete. Use artifact_read with a literal query or line range when omitted evidence could affect the answer."],
+    // Sent with every request: keep it short. readExcerpt validates arguments.
+    description: "Read lines omitted from an archived tool result, by the artifact id in its receipt (not a file path). Use when omitted evidence could matter. offset, limit (max 80 lines); query: literal substring filter; column continues a clipped line.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({
-      id: Type.String({ description: "Artifact UUID from the tool result receipt" }),
-      offset: Type.Optional(Type.Integer({ minimum: 1, description: "Starting line, 1-based; default 1" })),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 80, description: "Maximum returned lines; default 40. Output is also capped at 6000 bytes." })),
-      query: Type.Optional(Type.String({ minLength: 1, maxLength: 500, description: "Case-sensitive literal substring, not a regular expression" })),
-      column: Type.Optional(Type.Integer({ minimum: 1, description: "Starting Unicode character on the first returned line, 1-based; default 1" })),
+      id: Type.String(),
+      offset: Type.Optional(Type.Integer()),
+      limit: Type.Optional(Type.Integer()),
+      query: Type.Optional(Type.String()),
+      column: Type.Optional(Type.Integer()),
     }),
     async execute(_toolCallId, params) {
       const text = await store.read(params.id);
