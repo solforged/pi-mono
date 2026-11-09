@@ -1,7 +1,7 @@
 # Setup
 
 Use an existing Pi installation and keep this checkout in a stable location,
-usually `~/src/pi-sol`. Pi and Node can be managed with mise; this repository
+usually `~/src/pi-mono`. Pi and Node can be managed with mise; this repository
 needs no npm installation. Run the [checks](development.md#checks) before
 loading the extensions.
 

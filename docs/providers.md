@@ -76,7 +76,7 @@ there too. For this checkout location, merge this into `roles.local.json`:
   "profiles": {
     "anthropic": {
       "subagents": {
-        "childExtensions": ["~/src/pi-sol/extensions/anthropic/index.ts"]
+        "childExtensions": ["~/src/pi-mono/extensions/anthropic/index.ts"]
       }
     }
   }

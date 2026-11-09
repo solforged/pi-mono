@@ -7,7 +7,7 @@ milestone supplies the computer, not an autonomous assistant service.
 ## Start here
 
 This prototype is separate from the host extensions. Use
-`node ~/src/pi-sol/computer/cli.mjs` directly, or link the executable as
+`node ~/src/pi-mono/computer/cli.mjs` directly, or link the executable as
 `assistant-computer` in a directory on `PATH` for the commands below. Supply the
 host requirements separately; installing extensions does not create or start a VM.
 
