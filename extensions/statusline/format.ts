@@ -1,0 +1,136 @@
+// Pure helpers for the status line; index.ts wires them to Pi.
+
+export const icons = {
+  model: "\uEC19",
+  folder: "\uF115",
+  branch: "\uF126",
+  context: "\uE70F",
+  auto: "\u{F0068}",
+  cache: "\uF1C0",
+  subscription: "\u{F067A}",
+};
+
+const thinkingLabels: Record<string, string> = { minimal: "min", medium: "med" };
+export const thinkingLabel = (level: string) => thinkingLabels[level] ?? level;
+// The circle fills with the level (Material Design circle slices); max is a flame.
+const thinkingIcons: Record<string, string> = {
+  off: "\u{F0766}", minimal: "\u{F0A9E}", low: "\u{F0A9F}", medium: "\u{F0AA1}",
+  high: "\u{F0AA3}", xhigh: "\u{F0AA5}", max: "\uF06D",
+};
+export const thinkingIcon = (level: string) => thinkingIcons[level] ?? thinkingIcons.medium;
+// Vendor prefixes repeat what the model family already says.
+export const modelLabel = (name: string) => name.replace(/^Claude\s+/i, "");
+export const thinkingColor = (level: string) => `thinking${level[0].toUpperCase()}${level.slice(1)}`;
+
+export function formatTokens(n: number): string {
+  if (n >= 1e6) return `${+(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
+  return `${n}`;
+}
+
+export function formatCost(cost: number): string {
+  return `$${cost.toFixed(cost >= 1 ? 2 : 3)}`;
+}
+
+export function displayPath(cwd: string, home: string | undefined, max = 40): string {
+  let path = cwd;
+  if (home && (cwd === home || cwd.startsWith(`${home}/`))) path = `~${cwd.slice(home.length)}`;
+  if (path.length <= max) return path;
+  // Keep whole trailing directories; the last one is kept even when it alone is too long.
+  const parts = path.split("/");
+  let tail = parts.pop()!;
+  while (parts.length && tail.length + parts[parts.length - 1].length + 3 <= max) tail = `${parts.pop()}/${tail}`;
+  return `…/${tail}`;
+}
+
+export type Git = {
+  branch?: string; // Undefined when HEAD is detached.
+  oid?: string;
+  ahead: number;
+  behind: number;
+  staged: number;
+  unstaged: number;
+  untracked: number;
+  conflicts: number;
+};
+
+// Parses `git status --porcelain=v2 --branch`.
+export function parseGitStatus(stdout: string): Git {
+  const git: Git = { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicts: 0 };
+  for (const line of stdout.split("\n")) {
+    if (line.startsWith("# branch.head ")) {
+      const head = line.slice(14);
+      if (head !== "(detached)") git.branch = head;
+    } else if (line.startsWith("# branch.oid ")) {
+      const oid = line.slice(13);
+      if (oid !== "(initial)") git.oid = oid;
+    } else if (line.startsWith("# branch.ab ")) {
+      const [ahead, behind] = line.slice(12).split(" ");
+      git.ahead = Math.abs(Number(ahead)) || 0;
+      git.behind = Math.abs(Number(behind)) || 0;
+    } else if (line.startsWith("1 ") || line.startsWith("2 ")) {
+      if (line[2] !== ".") git.staged++;
+      if (line[3] !== ".") git.unstaged++;
+    } else if (line.startsWith("u ")) git.conflicts++;
+    else if (line.startsWith("? ")) git.untracked++;
+  }
+  return git;
+}
+
+type Usage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } };
+export type Stats = { cost: number; cacheHit?: number };
+
+// Cost covers every entry Pi bills, including abandoned branches, like the built-in footer.
+// The cache hit rate is from the latest request that sent a prompt; failed requests keep the previous rate.
+export function sessionStats(entries: readonly any[]): Stats {
+  let cost = 0;
+  let cacheHit: number | undefined;
+  const add = (usage: Usage | undefined) => { cost += usage?.cost?.total ?? 0; };
+  for (const entry of entries) {
+    if (entry.type === "usage") add(entry.usage);
+    else if ((entry.type === "branch_summary" || entry.type === "compaction")) add(entry.usage);
+    else if (entry.type === "message" && entry.message.role === "toolResult") add(entry.message.usage);
+    else if (entry.type === "message" && entry.message.role === "assistant") {
+      const usage: Usage = entry.message.usage;
+      add(usage);
+      const prompt = usage.input + usage.cacheRead + usage.cacheWrite;
+      if (prompt > 0) cacheHit = (usage.cacheRead / prompt) * 100;
+    }
+  }
+  return { cost, cacheHit };
+}
+
+export type Segment = { text: string; priority: number; compact?: string };
+export type Measure = { width: (text: string) => number; truncate: (text: string, width: number) => string };
+
+// Fits segments into one line: compacts, then drops, the lowest-priority segments first.
+export function fitSegments(segments: Segment[], separator: string, width: number, measure: Measure): string {
+  const parts = segments.map((segment) => ({ ...segment }));
+  const join = () => parts.map((part) => part.text).join(separator);
+  const order = [...parts].sort((a, b) => a.priority - b.priority);
+  for (const part of order) {
+    if (measure.width(join()) <= width) break;
+    if (part.compact !== undefined) part.text = part.compact;
+  }
+  for (const part of order) {
+    if (parts.length <= 1 || measure.width(join()) <= width) break;
+    parts.splice(parts.indexOf(part), 1);
+  }
+  return measure.truncate(join(), width);
+}
+
+// Right-aligns extension statuses and the session name when they fit beside the segments;
+// otherwise statuses move to a second line and the session name yields first.
+export function layout(left: string, statuses: string[], name: string | undefined, width: number, measure: Measure): string[] {
+  const gap = 2;
+  const room = width - measure.width(left) - gap;
+  const right = [...statuses, ...(name ? [name] : [])].join("  ");
+  if (!right) return [left];
+  if (measure.width(right) <= room) return [left + " ".repeat(width - measure.width(left) - measure.width(right)) + right];
+  if (!statuses.length) {
+    if (room < 12) return [left];
+    const short = measure.truncate(name!, room);
+    return [left + " ".repeat(width - measure.width(left) - measure.width(short)) + short];
+  }
+  return [left, measure.truncate(right, width)];
+}

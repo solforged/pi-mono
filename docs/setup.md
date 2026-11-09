@@ -22,6 +22,7 @@ for resource in \
   extensions/retry \
   extensions/anthropic \
   extensions/herdr-title \
+  extensions/statusline \
   extensions/artifacts \
   roles.json; do
   target="$agent_dir/$resource"

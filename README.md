@@ -34,5 +34,6 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Learning](docs/learning.md): session mining, skill drafts, and approval.
 - [Retry](docs/retry.md): `/retry` and F5 rerun a failed or aborted turn.
 - [Herdr](docs/herdr.md): Desktop support and the separate TUI title bridge.
+- [Status line](docs/statusline.md): a one-line footer with Git, context, and cache use.
 - [Providers and search](docs/providers.md): Anthropic compatibility and nested web search.
 - [Context management](docs/context.md): Snapcompact and output artifacts.
