@@ -69,8 +69,8 @@ names by state with children needing you first:
 Rex 9 · $1.62  ! oak needs you   ● birch cedar fern   ✓ elm pine   ✗ ash   ctrl+shift+a
 ```
 
-Children report their current tool and its main argument (`read docs/x.md`,
-`bash npm test`) and their running cost; settled usage replaces the estimate.
+Children report their current tool and its main argument, with paths relative
+to their directory (`read docs/x.md`, `bash npm test`), and their running cost; settled usage replaces the estimate.
 No transcript content is sent.
 
 Background completions that finish together become one status receipt for the

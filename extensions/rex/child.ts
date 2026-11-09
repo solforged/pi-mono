@@ -7,10 +7,15 @@ import { privateDir, saveJson } from "../workflows/state.ts";
 import { claimOwner, readOwner, Frames, isId, LEASE_MS, MAX_MESSAGES, MAX_TASKS, record, send, taskPrompt, text, validateManifest, VERSION, type Manifest, type Outcome } from "./protocol.ts";
 
 /** `read docs/x.md`, `bash npm test`: the tool and its main argument, one line. */
-export function activity(tool: string, args: unknown) {
+export function activity(tool: string, args: unknown, cwd?: string) {
   const a = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
   const detail = [a.path, a.file_path, a.command, a.pattern, a.query, a.url].find(v => typeof v === "string") as string | undefined;
-  const line = `${tool}${detail ? ` ${detail.split("\n")[0]}` : ""}`.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  // Paths relative to the child's directory: the column is narrow.
+  let shown = detail?.split("\n")[0];
+  if (shown && cwd) shown = shown.split(`${cwd}/`).join("").split(cwd).join(".");
+  const home = process.env.HOME;
+  if (shown && home) shown = shown.split(`${home}/`).join("~/");
+  const line = `${tool}${shown ? ` ${shown}` : ""}`.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
   return line.length > 80 ? `${line.slice(0, 79)}…` : line;
 }
 
@@ -152,7 +157,7 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
     emit({ type: "progress", taskId: current.id, text: note, cost: current.state.usage.cost.total });
   };
   pi.on("agent_start", () => progress("Running"));
-  pi.on("tool_execution_start", event => progress(activity(event.toolName, event.args)));
+  pi.on("tool_execution_start", event => progress(activity(event.toolName, event.args, manifest?.cwd)));
   pi.on("ui_prompt_start", event => progress(`Waiting for user: ${event.title ?? event.kind}`));
   pi.on("ui_prompt_end", () => progress("Running"));
   pi.on("agent_settled", event => {

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { PEEK_BOUNDS, RexClient, type RexExecutor, type RexExecutionOptions, type RexExecutionResult } from "../extensions/rex/client.ts";
+import { BlockGone, PEEK_BOUNDS, RexClient, type RexExecutor, type RexExecutionOptions, type RexExecutionResult } from "../extensions/rex/client.ts";
 
 const HOST = "11111111-1111-4111-8111-111111111111";
 const INSTANCE = "22222222-2222-4222-8222-222222222222";
@@ -386,4 +386,13 @@ test("mutation failure or malformed returned IDs never cause an automatic retry"
   h.intercept = (call) => call.method === "block.close" ? result({ block_id: PARENT }) : undefined;
   await assert.rejects(h.client.close(SESSION, BLOCK), /different block ID/);
   assert.equal(h.mutations().length, 1);
+});
+
+test("a block the user already closed is reported as gone, distinct from remote or misplaced blocks", async () => {
+  const h = harness();
+  h.blocks.splice(1, 1);
+  await assert.rejects(h.client.close(SESSION, BLOCK), (e: unknown) => e instanceof BlockGone && e.blockId === BLOCK);
+  assert.equal(h.mutations().length, 0, "nothing was mutated");
+  const remote = harness(); remote.blocks[1].host_id = "99999999-9999-4999-8999-999999999999";
+  await assert.rejects(remote.client.close(SESSION, BLOCK), (e: unknown) => !(e instanceof BlockGone) && /missing, remote/.test(String(e)));
 });

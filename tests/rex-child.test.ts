@@ -177,5 +177,8 @@ test("activity names the tool and its main argument on one bounded line", () => 
   assert.equal(activity("bash", { command: "npm test\nrm -rf /" }), "bash npm test");
   assert.equal(activity("grep", { pattern: "a\u001b[2Jb" }), "grep a [2Jb");
   assert.equal(activity("todo", undefined), "todo");
+  assert.equal(activity("read", { path: "/repo/src/a.ts" }, "/repo"), "read src/a.ts");
+  assert.equal(activity("find", { path: "/repo" }, "/repo"), "find .");
+  assert.equal(activity("read", { path: `${process.env.HOME}/notes.md` }, "/repo"), "read ~/notes.md");
   assert.equal(activity("bash", { command: "x".repeat(200) }).length, 80);
 });

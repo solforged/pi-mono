@@ -68,8 +68,12 @@ try {
   console.log(`Arranged ${count}: strip ${Math.round(stripCell.rect[3] * 100)}% + deck ${deck.length}, grid ${cols.map(c => c.length).join("+")} (incl. roster), ${detached} detached, in ${Date.now() - started} ms`);
   // The strip pane redraws its file within a second.
   await new Promise(r => setTimeout(r, 1500));
-  const stripScreen = execFileSync("rex", ["--autostart=false", "capture", "-s", session, "-b", strip!, "--trim"], { encoding: "utf8" });
-  assert.match(stripScreen, new RegExp(`Not in the deck · ${count - deck.length}`)); assert.match(stripScreen, /smoke-\d+ {2}sleeping/);
+  // Only the visible rows: the header must never scroll out of a short pane.
+  const stripRows = (await rex.rows(session, strip!)).rows;
+  const visible = execFileSync("rex", ["--autostart=false", "capture", "-s", session, "-b", strip!], { encoding: "utf8" }).replace(/\n$/, "").split("\n").slice(-stripRows);
+  assert.match(visible[0], new RegExp(`^Not in the deck · ${count - deck.length}`), `strip header visible in ${stripRows} rows: ${JSON.stringify(visible)}`);
+  assert(stripRows >= Math.min(count - deck.length, 5) + 1, `strip shows every line (${stripRows} rows)`);
+  assert.match(visible[1], /smoke-\d+ {2}sleeping/);
   // Attention promotes into the deck: from the grid by swapping, or from overflow via a grid cell.
   const shown = new Set([...column, ...gridCells].map(c => c.block));
   const promoted = (detached ? kids.find(k => !shown.has(k.block)) : kids.find(k => gridCells.some(c => c.block === k.block)))!;

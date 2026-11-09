@@ -32,7 +32,7 @@ export interface PlanInput {
 }
 export const PARENT_SHARE = 0.55, DWELL_MS = 8000, TOLERANCE = 0.02;
 /** The grid tops out at 3×3 (roster + 8): smaller cells are not readable TUIs. */
-export const GRID_CELLS = 9, STRIP_LINES = 5;
+export const GRID_CELLS = 9, STRIP_LINES = 5, PANE_CHROME = 3;
 
 /** Every block in a layout tree with its window-relative rect. */
 export function cells(node: Obj | undefined): Cell[] {
@@ -103,7 +103,8 @@ export function classify(input: PlanInput) {
 }
 /** The strip's share of the deck column: a header, one line per child (capped), and Rex's title row. */
 export function stripFraction(offscreen: number, rows: number) {
-  return Math.min(0.4, Math.max(0.06, (Math.min(offscreen, STRIP_LINES) + 2) / Math.max(rows, 1)));
+  // Rex's pane title bar and borders take about three of the window's rows (measured).
+  return Math.min(0.4, Math.max(0.06, (1 + Math.min(offscreen, STRIP_LINES) + PANE_CHROME) / Math.max(rows, 1)));
 }
 /** Strip text: children not in the deck, attention-first as given, capped with a count. */
 export function stripText(children: DeckChild[], onDeck: Set<string>) {
@@ -219,9 +220,14 @@ function balance(layout: Obj, ordered: string[], direction: Direction): Op | und
 export function rosterText(lines: string[]) {
   return lines.map(line => line.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")).join("\n").slice(0, 16_000);
 }
-/** argv for the roster pane: redraws on change; exits when the parent process does. */
+/**
+ * argv for the roster and strip panes: redraws on change or resize; exits when
+ * the parent process does. Lines never wrap and never exceed the pane's height,
+ * with no trailing newline, so the header cannot scroll out of a short pane.
+ */
 export function rosterCommand(file: string, parentPid: number): string[] {
-  const script = 'printf "\\033[?25l"; old=; while kill -0 "$2" 2>/dev/null; do new=$(cat "$1" 2>/dev/null); '
-    + 'if [ "$new" != "$old" ]; then printf "\\033[H\\033[2J%s\\n" "$new"; old=$new; fi; sleep 1; done';
+  const script = 'printf "\\033[?25l\\033[?7l"; old=; while kill -0 "$2" 2>/dev/null; do '
+    + 'rows=$(stty size </dev/tty 2>/dev/null | cut -d" " -f1); text=$(cat "$1" 2>/dev/null); new="$rows|$text"; '
+    + 'if [ "$new" != "$old" ]; then printf "\\033[H\\033[2J%s" "$(printf "%s\\n" "$text" | head -n "${rows:-200}")"; old=$new; fi; sleep 1; done';
   return ["/bin/sh", "-c", script, "rex-roster", file, String(parentPid)];
 }

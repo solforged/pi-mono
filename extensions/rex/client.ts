@@ -111,6 +111,12 @@ const execute: RexExecutor = async (command, args, options) => {
   });
 };
 
+/** The block does not exist on the verified local server (e.g. the user closed it). */
+export class BlockGone extends Error {
+  readonly blockId: string;
+  constructor(blockId: string) { super(`Rex block ${blockId} is missing: it no longer exists`); this.blockId = blockId; }
+}
+
 /** Local-only CLI adapter. No command is interpreted by a shell; mutations are never retried. */
 export class RexClient {
   private identity?: { hostId: string; instanceId: string };
@@ -209,6 +215,8 @@ export class RexClient {
 
   private target(state: { hostId: string; blocks: ObjectValue[] }, blockId: string, placed = false) {
     const matches = state.blocks.filter((block) => block.block_id === blockId);
+    // Read during preflight from the identity-checked local server: absence is certain.
+    if (!matches.length) throw new BlockGone(blockId);
     if (matches.length !== 1 || matches[0].host_id !== state.hostId || (placed && matches[0].placement !== "placed")) {
       throw new Error(`Rex block ${blockId} is missing, remote, or not placed as required`);
     }

@@ -121,7 +121,9 @@ test("the strip sits atop the deck while a child is out of it, and closes before
   // Placed inside the first slot's leaf: weights still give it header + 1 line + title row.
   const stacked: Spec = { d: "horizontal", r: 0.55, a: P, b: { d: "vertical", r: 1 / 3, a: { d: "vertical", r: 0.5, a: S, b: B(1) }, b: { d: "vertical", a: B(2), b: B(3) } } };
   const f = stripFraction(1, 63), slot = (1 - f) / 3;
-  assert.deepEqual(plan(withStrip([win("window:home", stacked), g], kids, true)), { kind: "resize", before: B(1), after: B(2), direction: "vertical", ratio: f + slot });
+  const resize: any = plan(withStrip([win("window:home", stacked), g], kids, true));
+  assert.deepEqual({ ...resize, ratio: undefined }, { kind: "resize", before: B(1), after: B(2), direction: "vertical", ratio: undefined });
+  assert(Math.abs(resize.ratio - (f + slot)) < 1e-9);
   // Every child in the deck: the strip goes; and it goes first when the deck empties.
   assert.deepEqual(plan(withStrip([win("window:home", stacked)], kids.slice(0, 3), true)), { kind: "close-strip" });
   assert.deepEqual(plan(withStrip([win("window:home", { d: "horizontal", a: P, b: S })], [child(5)], true)), { kind: "close-strip" });
@@ -133,7 +135,7 @@ test("strip text lists children outside the deck, attention-first, capped with a
   const kids = [1, 2, 3, 4, 5, 6, 7].map(n => child(n, { line: `line ${n}\u001b[2J` }));
   assert.equal(stripText(kids.slice(0, 3), new Set([B(1)])), "Not in the deck · 2\nline 2 [2J\nline 3 [2J");
   assert.match(stripText(kids, new Set()), /^Not in the deck · 7\n(line \d \[2J\n){4}\+3 more · ctrl\+shift\+a in the parent$/);
-  assert.equal(stripFraction(0, 63), 0.06, "never thinner than a header"); assert.equal(stripFraction(20, 63), 7 / 63); assert.equal(stripFraction(3, 10), 0.4);
+  assert.equal(stripFraction(0, 63), 4 / 63, "a header and pane chrome"); assert.equal(stripFraction(0, 200), 0.06); assert.equal(stripFraction(20, 63), 9 / 63); assert.equal(stripFraction(3, 10), 0.4);
 });
 
 test("a full 3×3 grid leaves the rest detached; only an outranking child takes a cell, after the dwell", () => {
@@ -215,9 +217,9 @@ test("the manager converges 14 children into a 3-slot deck under a strip, a 3×3
   assert.equal(sim.all.size - home.length - gridCells.length, 3, "three children stay detached");
   assert.equal((sim.windows.get("window:home") as any).r, 0.55, "the parent keeps its share");
   const strip = home.find(c => c.block === S)!, slots = home.filter(c => c.block !== P && c.block !== S);
-  assert(Math.abs(strip.rect[3] - 7 / 63) < 0.025, `the strip keeps a header and five lines (got ${strip.rect[3]})`);
+  assert(Math.abs(strip.rect[3] - 9 / 63) < 0.025, `the strip keeps a header, five lines and pane chrome (got ${strip.rect[3]})`);
   assert(slots.every(c => c.rect[1] > strip.rect[1]), "the strip sits on top");
-  for (const c of slots) assert(Math.abs(c.rect[3] - (1 - 7 / 63) / 3) < 0.03, "deck rows are even below it");
+  for (const c of slots) assert(Math.abs(c.rect[3] - (1 - 9 / 63) / 3) < 0.03, "deck rows are even below it");
   assert.deepEqual(columns(gridCells).map(c => c.length), [3, 3, 3]);
   for (const c of gridCells) { assert(Math.abs(c.rect[2] - 1 / 3) < 0.03); assert(Math.abs(c.rect[3] - 1 / 3) < 0.03); }
   assert.match(await readFile(`${dir}/roster.txt`, "utf8"), /^Rex agents\nc1\n/);

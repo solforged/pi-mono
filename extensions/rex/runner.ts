@@ -6,7 +6,7 @@ import { agents, childExtensions, createWorktree, piInvocation, type Task } from
 import { bounded, emptyUsage, type Usage } from "../workflows/process.ts";
 import { resolveRole, type Config } from "../workflows/roles.ts";
 import { atomicWrite, privateDir, readJson, saveJson, scopeRoot } from "../workflows/state.ts";
-import { RexClient } from "./client.ts";
+import { BlockGone, RexClient } from "./client.ts";
 import { Channel } from "./channel.ts";
 import { claimOwner, readOwner, isId, MAX_TASKS, VERSION, waitFor, text, validUsage, type ChildMessage, type Manifest, type Outcome, type Result } from "./protocol.ts";
 export { validateReady, waitFor } from "./protocol.ts";
@@ -352,7 +352,10 @@ export class RexRunner {
         await live.channel.close();
         if (mayClose && live.run.block) {
           try { await this.rex.close(live.run.rexSession, live.run.block, AbortSignal.timeout(10_000)); live.run.status = "closed"; }
-          catch (error) { live.run.note = `Terminal cleanup needs attention: ${String(error)}`; }
+          catch (error) {
+            if (error instanceof BlockGone) { live.run.status = "closed"; live.run.note = "Terminal was already closed"; }
+            else live.run.note = `Terminal cleanup needs attention: ${String(error)}`;
+          }
         }
         await this.save(live.run);
       } finally {

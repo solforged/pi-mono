@@ -5,6 +5,7 @@ import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { ChildState } from "../extensions/rex/child.ts";
+import { BlockGone } from "../extensions/rex/client.ts";
 import { childCommand, RexRunner, yieldingWait, validateReady, waitFor, type RexBackend } from "../extensions/rex/runner.ts";
 import { claimOwner, FRAME_BYTES, Frames, record, send, validateManifest, VERSION, type Manifest } from "../extensions/rex/protocol.ts";
 import { emptyUsage } from "../extensions/workflows/process.ts";
@@ -29,7 +30,7 @@ async function until(predicate: () => unknown) {
   while (!predicate()) { if (Date.now() > limit) throw new Error("Timed out"); await new Promise(resolve => setTimeout(resolve, 5)); }
 }
 function backend(behavior: "success" | "disconnect" | "wait" | "no-hello" | "lost-receipt" | "lost-take" | "late-cancel" = "success") {
-  const calls: string[] = [], labels: string[] = [], messages: any[] = [], children = new Map<string, { socket: ReturnType<typeof connect>; emit: (v: any) => void; manifest: Manifest; block: string }>();
+  const gone = new Set<string>(), calls: string[] = [], labels: string[] = [], messages: any[] = [], children = new Map<string, { socket: ReturnType<typeof connect>; emit: (v: any) => void; manifest: Manifest; block: string }>();
   const rex: RexBackend = {
     async probe() { return identity; },
     async create(_s, label, command, cwd) {
@@ -69,12 +70,15 @@ function backend(behavior: "success" | "disconnect" | "wait" | "no-hello" | "los
       if (behavior === "lost-receipt") { await new Promise(resolve => setTimeout(resolve, 10)); throw new Error("creation response timed out; outcome unknown"); }
       return block;
     },
-    async close(_s, block) { calls.push("close"); [...children.values()].find(c => c.block === block)?.socket.destroy(); },
+    async close(_s, block) {
+      calls.push("close"); [...children.values()].find(c => c.block === block)?.socket.destroy();
+      if (gone.has(block)) throw new BlockGone(block);
+    },
     async show() { calls.push("show"); }, async hide() { calls.push("park"); }, async keep() { calls.push("keep"); },
     async peek() { calls.push("peek"); }, async minimize() { calls.push("minimize"); },
     async toggle() { calls.push("toggle"); return "floating" as const; },
   };
-  return { rex, calls, labels, messages, children };
+  return { rex, calls, labels, messages, children, gone };
 }
 async function harness(t: any, behavior: Parameters<typeof backend>[0] = "success") {
   environment(t); const dir = await temporary(t), fake = backend(behavior), runner = new RexRunner(pi, root, dir, fake.rex);
@@ -300,4 +304,12 @@ test("noninteractive modes and missing roles refuse launch", async t => {
 });
 test("waitFor handles a pre-aborted signal without unhandled rejection", async () => {
   await assert.rejects(waitFor(Promise.reject(new Error("late")), AbortSignal.abort(new Error("cancel"))), /cancel/);
+});
+
+test("closing a child whose terminal the user already closed records it as closed, not as needing attention", async t => {
+  const h = await harness(t);
+  const run = await h.open();
+  h.fake.gone.add(run.block!);
+  await h.runner.action(run, "close");
+  assert.equal(run.status, "closed"); assert.equal(run.note, "Terminal was already closed");
 });
