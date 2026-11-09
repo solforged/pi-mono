@@ -62,6 +62,9 @@ pi --offline --no-extensions --no-skills --no-context-files \
 pi --offline --no-extensions --no-skills --no-context-files \
   --no-prompt-templates --no-session \
   -e ./extensions/todo/index.ts -p '/todos list'
+pi --offline --no-extensions --no-skills --no-context-files \
+  --no-prompt-templates --no-session \
+  -e ./extensions/intercom/index.ts -p '/intercom list'
 ```
 
 The opt-in [Rex prototype checks](rex.md#checks) include live terminal smoke
