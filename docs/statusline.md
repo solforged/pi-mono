@@ -24,6 +24,17 @@ From left to right:
 - Session cost from every billed entry, as in Pi's footer. On a subscription,
   a crossed-out dollar replaces `$`: the amount is what API billing would have
   charged.
+- Segments other extensions contribute, ordered by key.
+
+An extension adds or replaces a segment with
+
+```ts
+pi.events.emit("statusline:segment", { key: "my-ext", text: "label", color: "warning", priority: 1 });
+```
+
+and removes it by emitting the same key with no text. `color` names a theme
+color (default `muted`); `priority` ranks the segment against the built-in ones
+when the line is too narrow (default 1, the same as cost).
 
 Extension statuses and the session name are right-aligned when they fit. When
 they don't, the session name moves to a second line, followed by statuses if

@@ -103,6 +103,29 @@ export function sessionStats(entries: readonly any[]): Stats {
 }
 
 export type Segment = { text: string; priority: number; compact?: string };
+
+// Another extension's segment, from
+//   pi.events.emit("statusline:segment", { key, text, color?, priority? })
+// color names a theme color (default "muted"); priority ranks it with the
+// built-in segments (default 1, the cost's). An empty text removes the key.
+export const SEGMENT_EVENT = "statusline:segment";
+export type Contribution = { text: string; color: string; priority: number };
+
+export function readContribution(data: unknown): { key: string; contribution?: Contribution } | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const { key, text, color, priority } = data as Record<string, unknown>;
+  if (typeof key !== "string" || !key) return undefined;
+  const clean = typeof text === "string" ? text.replace(/[\r\n\t]+/g, " ").trim() : "";
+  if (!clean) return { key };
+  return {
+    key,
+    contribution: {
+      text: clean,
+      color: typeof color === "string" && color ? color : "muted",
+      priority: typeof priority === "number" && Number.isFinite(priority) ? priority : 1,
+    },
+  };
+}
 export type Measure = { width: (text: string) => number; truncate: (text: string, width: number) => string };
 
 // Fits segments into one line: compacts, then drops, the lowest-priority segments first.

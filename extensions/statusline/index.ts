@@ -1,8 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
-  displayPath, fitSegments, formatCost, formatTokens, icons, layout, parseGitStatus, sessionStats,
-  modelLabel, thinkingColor, thinkingIcon, thinkingLabel, type Git, type Segment, type Stats,
+  displayPath, fitSegments, formatCost, formatTokens, icons, layout, parseGitStatus, readContribution, sessionStats,
+  modelLabel, thinkingColor, thinkingIcon, thinkingLabel, SEGMENT_EVENT, type Contribution, type Git, type Segment, type Stats,
 } from "./format.ts";
 
 const POLL_MS = 10_000; // Catches changes made outside Pi.
@@ -14,10 +14,19 @@ type Footer = { refreshGit: () => void; render: () => void; close: () => void };
 export default function (pi: ExtensionAPI) {
   let footer: Footer | undefined;
   const close = () => { footer?.close(); footer = undefined; };
+  // Kept across sessions: a contributor may publish before the footer exists.
+  const contributed = new Map<string, Contribution>();
+  pi.events.on(SEGMENT_EVENT, (data) => {
+    const update = readContribution(data);
+    if (!update) return;
+    if (update.contribution) contributed.set(update.key, update.contribution);
+    else contributed.delete(update.key);
+    footer?.render();
+  });
 
   pi.on("session_start", (_event, ctx) => {
     close();
-    if (ctx.mode === "tui") footer = install(pi, ctx);
+    if (ctx.mode === "tui") footer = install(pi, ctx, contributed);
   });
   pi.on("session_shutdown", close);
   pi.on("tool_execution_end", () => footer?.refreshGit());
@@ -27,7 +36,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("thinking_level_select", () => footer?.render());
 }
 
-function install(pi: ExtensionAPI, ctx: ExtensionContext): Footer {
+function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyMap<string, Contribution>): Footer {
   const cwd = ctx.sessionManager.getCwd?.() ?? ctx.cwd;
   let git: Git | undefined;
   let render = () => {};
@@ -118,6 +127,12 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext): Footer {
 
         const subscription = model ? usingSubscription(ctx, model) : false;
         if (cost > 0 || subscription) segments.push({ priority: 1, text: theme.fg("muted", formatCost(cost, subscription)) });
+
+        for (const [, { text, color, priority }] of [...contributed].sort(([a], [b]) => a.localeCompare(b))) {
+          let painted: string;
+          try { painted = theme.fg(color as any, text); } catch { painted = theme.fg("muted", text); }
+          segments.push({ priority, text: painted });
+        }
 
         const left = fitSegments(segments, dim(" · "), width, measure);
         const statuses = [...footerData.getExtensionStatuses().entries()]

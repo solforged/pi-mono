@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { displayPath, fitSegments, formatCost, formatTokens, layout, parseGitStatus, sessionStats, modelLabel, thinkingColor, thinkingIcon, thinkingLabel } from "../extensions/statusline/format.ts";
+import { displayPath, fitSegments, formatCost, formatTokens, layout, parseGitStatus, readContribution, sessionStats, modelLabel, thinkingColor, thinkingIcon, thinkingLabel } from "../extensions/statusline/format.ts";
 
 const measure = { width: (text: string) => [...text].length, truncate: (text: string, width: number) => [...text].slice(0, width).join("") };
 const usage = (input: number, cacheRead: number, cacheWrite: number, total: number) => ({ input, output: 10, cacheRead, cacheWrite, cost: { total } });
@@ -73,4 +73,12 @@ test("right-aligns statuses and names, moving the name and then statuses below",
   assert.deepEqual(layout("left", [], "a-long-session-name-that-overflows", 20, measure), ["left", "a-long-session-name-"]);
   assert.deepEqual(layout("left", ["status"], "a-long-session-name", 20, measure), ["left          status", "a-long-session-name"]);
   assert.deepEqual(layout("left", ["a-long-status-text"], "name", 20, measure), ["left", "a-long-status-text  "]);
+});
+
+test("reads segments other extensions contribute, and removals", () => {
+  assert.deepEqual(readContribution({ key: "x", text: " a\tb\n", color: "warning", priority: 4 }), { key: "x", contribution: { text: "a b", color: "warning", priority: 4 } });
+  assert.deepEqual(readContribution({ key: "x", text: "a" }), { key: "x", contribution: { text: "a", color: "muted", priority: 1 } });
+  assert.deepEqual(readContribution({ key: "x", text: "a", priority: Number.NaN }), { key: "x", contribution: { text: "a", color: "muted", priority: 1 } });
+  assert.deepEqual([readContribution({ key: "x" }), readContribution({ key: "x", text: "  " })], [{ key: "x" }, { key: "x" }]);
+  assert.deepEqual([undefined, null, "x", { text: "a" }, { key: "" }].map(readContribution), [undefined, undefined, undefined, undefined, undefined]);
 });
