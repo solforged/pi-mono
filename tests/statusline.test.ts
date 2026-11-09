@@ -13,7 +13,8 @@ test("labels thinking levels, token counts, and costs compactly", () => {
   assert.equal(new Set(levels).size, levels.length);
   assert.deepEqual(["Claude Opus 5.5", "GPT-6.1 Sol", "claude-x"].map(modelLabel), ["Opus 5.5", "GPT-6.1 Sol", "claude-x"]);
   assert.deepEqual([999, 1500, 272_000, 1_000_000, 1_048_576].map(formatTokens), ["999", "2k", "272k", "1M", "1M"]);
-  assert.deepEqual([0.0421, 12.345].map(formatCost), ["$0.042", "$12.35"]);
+  assert.deepEqual([0.0421, 12.345].map((cost) => formatCost(cost)), ["$0.042", "$12.35"]);
+  assert.deepEqual([formatCost(2.744, true), formatCost(0, true)], ["\u{F067A} 2.74", "\u{F067A}"]);
 });
 
 test("shortens paths under home and keeps whole trailing directories", () => {
@@ -65,10 +66,11 @@ test("fits segments by compacting, then dropping, lowest priorities first", () =
   assert.equal(segments[1].text, "~/src/project");
 });
 
-test("right-aligns statuses and names, wrapping statuses when needed", () => {
+test("right-aligns statuses and names, moving the name and then statuses below", () => {
   assert.deepEqual(layout("left", [], undefined, 20, measure), ["left"]);
   assert.deepEqual(layout("left", ["s1"], "name", 20, measure), ["left        s1  name"]);
-  assert.deepEqual(layout("left", [], "a-long-session-name", 20, measure), ["left  a-long-session"]);
-  assert.deepEqual(layout("left", [], "a-long-session-name", 15, measure), ["left"]);
-  assert.deepEqual(layout("left", ["status"], "a-long-session-name", 20, measure), ["left", "status  a-long-sessi"]);
+  assert.deepEqual(layout("left", [], "a-long-session-name", 20, measure), ["left", "a-long-session-name"]);
+  assert.deepEqual(layout("left", [], "a-long-session-name-that-overflows", 20, measure), ["left", "a-long-session-name-"]);
+  assert.deepEqual(layout("left", ["status"], "a-long-session-name", 20, measure), ["left          status", "a-long-session-name"]);
+  assert.deepEqual(layout("left", ["a-long-status-text"], "name", 20, measure), ["left", "a-long-status-text  "]);
 });

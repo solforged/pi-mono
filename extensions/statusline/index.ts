@@ -116,11 +116,8 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext): Footer {
           segments.push({ priority: 2, text: theme.fg(cacheHit < 50 ? "warning" : "muted", `${icons.cache} ${Math.round(cacheHit)}%`) });
         }
 
-        const subscription = model ? usingSubscription(ctx, model.provider) : false;
-        if (cost > 0 || subscription) {
-          const text = [subscription ? icons.subscription : "", cost > 0 ? formatCost(cost) : ""].filter(Boolean).join(" ");
-          segments.push({ priority: 1, text: theme.fg("muted", text) });
-        }
+        const subscription = model ? usingSubscription(ctx, model) : false;
+        if (cost > 0 || subscription) segments.push({ priority: 1, text: theme.fg("muted", formatCost(cost, subscription)) });
 
         const left = fitSegments(segments, dim(" · "), width, measure);
         const statuses = [...footerData.getExtensionStatuses().entries()]
@@ -144,10 +141,11 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext): Footer {
   };
 }
 
-function usingSubscription(ctx: ExtensionContext, provider: string): boolean {
+// Mirrors Pi's footer. The extension registry's isUsingOAuth takes a model, not a provider ID.
+function usingSubscription(ctx: ExtensionContext, model: NonNullable<ExtensionContext["model"]>): boolean {
   const registry: any = ctx.modelRegistry;
-  if (provider === "kimi-coding") return true;
+  if (model.provider === "kimi-coding") return true;
   try {
-    return Boolean(registry.isUsingOAuth?.(provider) && registry.getProvider?.(provider)?.auth?.oauth?.isSubscription);
+    return Boolean(registry.isUsingOAuth?.(model) && registry.getProvider?.(model.provider)?.auth?.oauth?.isSubscription);
   } catch { return false; }
 }

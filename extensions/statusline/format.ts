@@ -4,10 +4,10 @@ export const icons = {
   model: "\uEC19",
   folder: "\uF115",
   branch: "\uF126",
-  context: "\uE70F",
+  context: "\u{F029A}", // gauge
   auto: "\u{F0068}",
   cache: "\uF1C0",
-  subscription: "\u{F067A}",
+  noBilling: "\u{F067A}", // crossed-out dollar
 };
 
 const thinkingLabels: Record<string, string> = { minimal: "min", medium: "med" };
@@ -28,8 +28,10 @@ export function formatTokens(n: number): string {
   return `${n}`;
 }
 
-export function formatCost(cost: number): string {
-  return `$${cost.toFixed(cost >= 1 ? 2 : 3)}`;
+// Subscriptions are not billed per token, so their API-equivalent cost gets a crossed-out dollar.
+export function formatCost(cost: number, subscription = false): string {
+  const amount = cost > 0 ? cost.toFixed(cost >= 1 ? 2 : 3) : "";
+  return subscription ? `${icons.noBilling}${amount && ` ${amount}`}` : `$${amount || "0"}`;
 }
 
 export function displayPath(cwd: string, home: string | undefined, max = 40): string {
@@ -119,18 +121,14 @@ export function fitSegments(segments: Segment[], separator: string, width: numbe
   return measure.truncate(join(), width);
 }
 
-// Right-aligns extension statuses and the session name when they fit beside the segments;
-// otherwise statuses move to a second line and the session name yields first.
+// Right-aligns extension statuses and the session name when they fit beside the segments.
+// Whatever does not fit moves, untruncated where possible, to a second line; the name moves first.
 export function layout(left: string, statuses: string[], name: string | undefined, width: number, measure: Measure): string[] {
-  const gap = 2;
-  const room = width - measure.width(left) - gap;
-  const right = [...statuses, ...(name ? [name] : [])].join("  ");
-  if (!right) return [left];
-  if (measure.width(right) <= room) return [left + " ".repeat(width - measure.width(left) - measure.width(right)) + right];
-  if (!statuses.length) {
-    if (room < 12) return [left];
-    const short = measure.truncate(name!, room);
-    return [left + " ".repeat(width - measure.width(left) - measure.width(short)) + short];
-  }
-  return [left, measure.truncate(right, width)];
+  const room = width - measure.width(left) - 2;
+  const beside = (right: string) => left + " ".repeat(width - measure.width(left) - measure.width(right)) + right;
+  const all = [...statuses, ...(name ? [name] : [])];
+  if (!all.length) return [left];
+  if (measure.width(all.join("  ")) <= room) return [beside(all.join("  "))];
+  if (statuses.length && name && measure.width(statuses.join("  ")) <= room) return [beside(statuses.join("  ")), measure.truncate(name, width)];
+  return [left, measure.truncate(all.join("  "), width)];
 }

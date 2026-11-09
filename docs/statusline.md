@@ -5,7 +5,7 @@ style of OMP's status line. It needs a Nerd Font and is active only in the
 interactive TUI.
 
 ```text
- Opus 4.5 · 󰪡 med ·  ~/src/pi-sol ·  main +2 *4 ?16 ⇡1 ·  2.5%/1M 󰁨 ·  96% · 󰙺 $0.340
+ Opus 5.5 · 󰪡 med ·  ~/src/pi-sol ·  main +2 *4 ?16 ⇡1 · 󰊚 2.5%/1M 󰁨 ·  96% · 󰙺 2.74
 ```
 
 From left to right:
@@ -21,12 +21,13 @@ From left to right:
   It turns yellow past 70% and red past 90%.
 - Cache hit rate of the latest request: cache reads over all prompt tokens.
   Failed requests keep the previous rate; below 50% is yellow.
-- Session cost from every billed entry, as in Pi's footer, with 󰙺 for
-  subscription providers.
+- Session cost from every billed entry, as in Pi's footer. On a subscription,
+  a crossed-out dollar replaces `$`: the amount is what API billing would have
+  charged.
 
 Extension statuses and the session name are right-aligned when they fit. When
-they don't, statuses move to a second line and the name is shortened or left
-out. Narrow terminals shorten the path and Git segment first, then drop cost,
+they don't, the session name moves to a second line, followed by statuses if
+they don't fit either. Narrow terminals shorten the path and Git segment first, then drop cost,
 cache, path, Git, context, and thinking in that order.
 
 Per-direction token totals are left out; `/session` still reports them.
