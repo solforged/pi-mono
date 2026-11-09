@@ -8,7 +8,7 @@ roles never switch the main conversation model or copy credentials.
 
 The extensions load by symlink from this checkout, using an existing Pi
 installation. No npm installation is required. See the [setup guide](docs/setup.md)
-for the seven extension links, agent-directory overrides, and removal.
+for extension links, agent-directory overrides, and removal.
 
 To try one extension without deployment:
 
@@ -31,6 +31,7 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Workflows](docs/workflows.md): commands, naming, commits, and private state.
 - [Subagents](docs/subagents.md): delegation, retained worktrees, sandboxing, and cancellation.
 - [Learning](docs/learning.md): session mining, skill drafts, and approval.
+- [Retry](docs/retry.md): `/retry` and F5 rerun a failed or aborted turn.
 - [Herdr](docs/herdr.md): Desktop support and the separate TUI title bridge.
 - [Providers and search](docs/providers.md): Anthropic compatibility and nested web search.
 - [Context management](docs/context.md): Snapcompact and output artifacts.

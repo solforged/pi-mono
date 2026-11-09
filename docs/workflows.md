@@ -37,8 +37,8 @@ for shared title instructions and [Herdr](herdr.md) for terminal integration.
 In the interactive TUI, submit `.` on its own to send a normal `Continue.`
 user message. Surrounding whitespace is ignored. Other input, dots with image
 attachments, extension-injected messages, and noninteractive sessions are
-unchanged. This does not rewind history or retry failed turns; no retry shortcut
-is registered.
+unchanged. This does not rewind history or retry failed turns; see
+[retry](retry.md) for that.
 
 ## Commits
 

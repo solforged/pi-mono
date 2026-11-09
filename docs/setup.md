@@ -8,7 +8,7 @@ loading the extensions.
 ## Link the extensions
 
 Pi discovers each extension directory through its `index.ts` entry point. From
-the repository root, link the seven public extensions and the role defaults:
+the repository root, link the public extensions and the role defaults:
 
 ```sh
 repo="$PWD"
@@ -19,6 +19,7 @@ for resource in \
   extensions/web-search \
   extensions/snapcompact \
   extensions/continue \
+  extensions/retry \
   extensions/anthropic \
   extensions/herdr-title \
   extensions/artifacts \
