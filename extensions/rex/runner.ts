@@ -11,6 +11,24 @@ import { Channel } from "./channel.ts";
 import { claimOwner, readOwner, isId, MAX_TASKS, VERSION, waitFor, text, validUsage, type ChildMessage, type Manifest, type Outcome, type Result } from "./protocol.ts";
 export { validateReady, waitFor } from "./protocol.ts";
 
+/** Thrown into a wait when the user queues a message; the child's work continues. */
+export class UserWaiting extends Error { constructor() { super("The user queued a message"); } }
+
+/**
+ * Waits like `wait(signal)`, but gives the turn back to the user: input queued
+ * during the wait ends it with `undefined`. Input already queued when the wait
+ * starts (e.g. a follow-up for the end of the run) does not, so a parent cannot
+ * loop on it. Cancellation still rejects.
+ */
+export async function yieldingWait<T>(wait: (signal: AbortSignal) => Promise<T>, signal: AbortSignal, pending?: () => boolean, pollMs = 250): Promise<T | undefined> {
+  if (!pending) return wait(signal);
+  const user = new AbortController(), already = pending();
+  const poll = setInterval(() => { if (!already && pending()) user.abort(new UserWaiting()); }, pollMs);
+  try { return await wait(AbortSignal.any([signal, user.signal])); }
+  catch (error) { if (user.signal.aborted && !signal.aborted) return undefined; throw error; }
+  finally { clearInterval(poll); }
+}
+
 export interface Run {
   version: 2; id: string; name: string; parentSession: string; parentEntry: string | null; profile: string;
   dir: string; agent: Task["agent"]; owner: "managed" | "human" | "retired" | "unknown";
@@ -114,10 +132,14 @@ export class RexRunner {
   private waiters = new Set<() => void>();
   private finished: string[] = []; // Completion order; restored results sort first by time.
   /** The oldest finished, uncollected task; otherwise wait for the next one to finish. */
+  /** Finished, unread results in completion order. */
+  ready(): TaskRun[] {
+    return [...this.tasks.values()].filter(t => !["starting", "running"].includes(t.status) && !t.collected)
+      .sort((a, b) => this.finished.indexOf(a.id) - this.finished.indexOf(b.id) || (a.started + a.elapsedMs) - (b.started + b.elapsedMs));
+  }
   async next(signal: AbortSignal): Promise<TaskRun> {
     for (;;) {
-      const done = [...this.tasks.values()].filter(t => !["starting", "running"].includes(t.status) && !t.collected)
-        .sort((a, b) => this.finished.indexOf(a.id) - this.finished.indexOf(b.id) || (a.started + a.elapsedMs) - (b.started + b.elapsedMs));
+      const done = this.ready();
       if (done.length) return done[0];
       if (![...this.tasks.values()].some(t => ["starting", "running"].includes(t.status) && this.live.get(t.childId)?.tasks.has(t.id))) throw new Error("No Rex tasks are running and every result has been read");
       const woke = Promise.withResolvers<void>(), wake = () => woke.resolve();
@@ -369,6 +391,12 @@ export class RexRunner {
   }
   /** Persist presentation intent (view/pin); policy fields are not changed here. */
   async update(run: Run) { await this.save(run); this.onChange(); }
+  /** A blocking wait was given up: report the task's completion like background work. */
+  async background(task: TaskRun) {
+    if (task.background) return;
+    task.background = true; await this.saveTask(task);
+    if (!["starting", "running"].includes(task.status)) this.onResult(task);
+  }
   async markNotified(task: TaskRun) { task.notified = true; await this.saveTask(task); }
   async collect(taskId: string): Promise<Usage | undefined> {
     const task = this.tasks.get(taskId);

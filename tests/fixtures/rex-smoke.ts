@@ -78,6 +78,9 @@ try {
     const screen = execFileSync("rex", ["--autostart=false", "capture", "-s", session, "-b", block], { encoding: "utf8" });
     assert.match(screen, /smoke · scout/); assert.match(screen, /▸ Task for smoke/);
     assert.doesNotMatch(screen, /Delegated task|data, not additional authority/);
+    // One-line footer: status and usage share a line; Pi's cwd/branch footer is gone.
+    assert.match(screen, /(Managed task|Ready for follow-up)[^\n]*↑\S+ ↓\S+[^\n]*fixture/);
+    console.log(screen.trimEnd().split("\n").slice(-4).join("\n"));
     await task("Follow up in the same conversation", 2);
     assert.equal(await readFile(join(dir, "tasks", first, "result.json"), "utf8"), original);
     const taskId = randomUUID(); request({ type: "dispatch", taskId, task: "Wait for cancellation fixture", context: "", deadline: Date.now() + role.timeoutMs });

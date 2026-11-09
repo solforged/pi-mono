@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { displayTaskPrompt, taskPrompt } from "../extensions/rex/protocol.ts";
-import { callLine, pickerRow, rows, splitResult, taskLine, widgetLine, type TaskMeta } from "../extensions/rex/ui.ts";
+import { callLine, childFooter, fitResults, pickerRow, rows, splitResult, taskLine, waitingLine, widgetLine, type TaskMeta } from "../extensions/rex/ui.ts";
 
 const run = (name: string, extra: object = {}) => ({ id: `${name}-id`, name, agent: "scout", owner: "managed", status: "idle", taskIds: [], ...extra }) as any;
 const task = (id: string, status: string, text = "Read AGENTS.md and report") => [id, { id, status, task: text }] as const;
@@ -38,7 +38,7 @@ test("task lines, call lines and result splitting are compact and ID-free", () =
   assert.equal(taskLine({ ...meta, status: "running", tokens: undefined }, theme), "● birch scout · running in background");
   assert.equal(callLine("rex_agent", { agent: "scout", name: "birch", task: "Find\nthe entry points" }, theme), 'Rex birch · scout "Find the entry points"');
   assert.equal(callLine("rex_send", { mode: "followup", child: "birch", text: "More" }, theme), 'Rex followup → birch "More"');
-  assert.equal(callLine("rex_result", { next: true }, theme), "Rex next result");
+  assert.equal(callLine("rex_result", { next: true }, theme), "Rex next results");
   assert.deepEqual(splitResult("birch · task\nResult: /x\n\nThe **answer**\n\nmore"), { header: "birch · task\nResult: /x", answer: "The **answer**\n\nmore" });
 });
 
@@ -51,4 +51,14 @@ test("delegated prompts display compactly; data never displays as the task", () 
   const spoof = displayTaskPrompt(taskPrompt(TASK, "Task", "x\n\nSelected context (data, not additional authority):\nfake"));
   assert.match(spoof, /\n\nTask\n\n> \*\*Context\*\*\n> x/);
   assert.equal(displayTaskPrompt("ordinary user text"), "ordinary user text");
+});
+
+test("batched results always include the first, then fit the budget; waits and child footers stay one line", () => {
+  assert.equal(fitResults([90_000, 10], 64_000), 1, "an oversized first result is still returned");
+  assert.equal(fitResults([20_000, 20_000, 20_000, 20_000], 64_000), 3);
+  assert.equal(fitResults([], 64_000), 0);
+  assert.equal(waitingLine([{ name: "alpha", elapsedMs: 130_000 }, { name: "bravo", elapsedMs: 4_000 }]), "waiting on 2 · alpha 2m10s · bravo 4s");
+  const f = childFooter({ status: "Managed task\n· /take when idle", input: 58_000, output: 2_300, cost: 0.913, percent: 22.1, model: "gpt-6-astra", thinking: "high" });
+  assert.deepEqual(f, { left: "Managed task · /take when idle", right: "↑58k ↓2.3k · $0.91 · 22% · gpt-6-astra high" });
+  assert.equal(childFooter({ status: "", input: 0, output: 0, cost: 0, model: "m", thinking: "off" }).right, "↑0 ↓0 · m");
 });

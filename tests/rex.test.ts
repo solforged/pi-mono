@@ -5,7 +5,7 @@ import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { ChildState } from "../extensions/rex/child.ts";
-import { childCommand, RexRunner, validateReady, waitFor, type RexBackend } from "../extensions/rex/runner.ts";
+import { childCommand, RexRunner, yieldingWait, validateReady, waitFor, type RexBackend } from "../extensions/rex/runner.ts";
 import { claimOwner, FRAME_BYTES, Frames, record, send, validateManifest, VERSION, type Manifest } from "../extensions/rex/protocol.ts";
 import { emptyUsage } from "../extensions/workflows/process.ts";
 import { saveJson } from "../extensions/workflows/state.ts";
@@ -243,6 +243,35 @@ test("children get unique names, labels, and name lookup; invalid or duplicate n
   assert.equal(h.fake.calls.filter(v => v === "create").length, 2);
   assert.equal((await h.open("", undefined, c)).name, "cedar");
 });
+test("waits give the turn back to queued user input once, without cancelling work", async () => {
+  const forever = (s: AbortSignal) => new Promise<string>((_, reject) => s.addEventListener("abort", () => reject(s.reason), { once: true }));
+  let pending = false;
+  const yielded = yieldingWait(forever, signal(), () => pending, 5);
+  setTimeout(() => { pending = true; }, 15);
+  assert.equal(await yielded, undefined);
+  // Input already queued (e.g. an end-of-run follow-up) never ends a wait, so a parent cannot loop.
+  assert.equal(await yieldingWait(s => new Promise(r => setTimeout(() => r("done"), 30))  as Promise<string>, signal(), () => true, 5), "done");
+  await assert.rejects(yieldingWait(forever, AbortSignal.timeout(20), () => false, 5), /timed out|abort/i, "cancellation still rejects");
+  assert.equal(await yieldingWait(async () => "plain", signal()), "plain");
+});
+
+test("ready lists every unread result in completion order; an abandoned blocking wait reports like background work", async t => {
+  const h = await harness(t, "wait"), c = { ...config, subagents: { ...config.subagents, rexConcurrency: 3 } };
+  const a = await h.open("", "a-one", c), b = await h.open("", "b-two", c);
+  const ta = await h.runner.submit(a.id, "A", "", signal()), tb = await h.runner.submit(b.id, "B", "", signal(), false);
+  const reported: string[] = []; h.runner.onResult = task => { if (task.background) reported.push(task.id); };
+  h.fake.children.get(b.id)!.emit({ type: "result", taskId: tb.id, status: "succeeded", text: "B done", usage: emptyUsage() });
+  await h.runner.wait(tb.id, signal());
+  assert.deepEqual(reported, [], "a blocking task is not reported while someone waits for it");
+  await h.runner.background(tb);
+  assert.deepEqual(reported, [tb.id], "giving up the wait reports the finished task");
+  h.fake.children.get(a.id)!.emit({ type: "result", taskId: ta.id, status: "succeeded", text: "A done", usage: emptyUsage() });
+  await h.runner.wait(ta.id, signal());
+  assert.deepEqual(h.runner.ready().map(x => x.id), [tb.id, ta.id]);
+  await h.runner.collect(tb.id);
+  assert.deepEqual(h.runner.ready().map(x => x.id), [ta.id]);
+});
+
 test("next returns unread results oldest first, then waits across children", async t => {
   const h = await harness(t, "wait"), c = { ...config, subagents: { ...config.subagents, rexConcurrency: 3 } };
   const a = await h.open("", "a-one", c), b = await h.open("", "b-two", c);

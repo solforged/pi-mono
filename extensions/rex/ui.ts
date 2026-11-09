@@ -86,8 +86,23 @@ export function callLine(tool: "rex_agent" | "rex_send" | "rex_result", args: Re
   const rex = theme.fg("accent", "Rex");
   if (tool === "rex_agent") return `${rex} ${args.name ? `${args.name} · ` : ""}${args.agent ?? ""}${quote(args.title ?? args.task)}${args.view && args.view !== "background" ? theme.fg("muted", ` · ${args.view}`) : ""}`;
   if (tool === "rex_send") return `${rex} ${args.mode ?? "send"} → ${args.child ?? ""}${quote(args.text)}`;
-  if (args.next) return `${rex} next result`;
+  if (args.next) return `${rex} next results`;
   return `${rex} ${args.taskId ? `result ${String(args.taskId).slice(0, 8)}${args.wait ? " (wait)" : ""}` : "list"}`;
+}
+/** Child pane footer facts: status on the left, usage and model on the right. */
+export function childFooter(f: { status: string; input: number; output: number; cost: number; percent?: number; model: string; thinking?: string }) {
+  const usage = [`↑${compact(f.input)} ↓${compact(f.output)}`, ...(f.cost ? [`$${f.cost.toFixed(2)}`] : []), ...(f.percent != null ? [`${Math.round(f.percent)}%`] : [])];
+  return { left: oneLine(f.status, 80), right: `${usage.join(" · ")} · ${f.model}${f.thinking && f.thinking !== "off" ? ` ${f.thinking}` : ""}` };
+}
+/** How many results fit one rex_result reply: always the first, then while under budget. */
+export function fitResults(sizes: number[], budget: number) {
+  let used = 0, count = 0;
+  for (const size of sizes) { if (count && used + size > budget) break; used += size; count++; }
+  return count;
+}
+/** Live status while rex_result waits: `waiting on 3 · alpha 2m10s · bravo 45s · charlie 3s`. */
+export function waitingLine(items: Array<{ name: string; elapsedMs: number }>) {
+  return `waiting on ${items.length}${items.map(i => ` · ${i.name} ${duration(i.elapsedMs)}`).join("")}`;
 }
 /** Batched completion receipts: one line per finished task. */
 export function completionLines(items: TaskMeta[], theme: Theme) {

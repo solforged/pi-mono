@@ -5,16 +5,16 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { bounded } from "../workflows/process.ts";
+import { addUsage, bounded, emptyUsage, type Usage } from "../workflows/process.ts";
 import { loadConfig, resolveRole } from "../workflows/roles.ts";
 import { registerChildUi } from "./child-ui.ts";
-import { RexRunner, type Run, type TaskRun } from "./runner.ts";
+import { RexRunner, yieldingWait, type Run, type TaskRun } from "./runner.ts";
 import { RexClient } from "./client.ts";
 import { DeckManager, type Grid } from "./layout.ts";
 import { scopeRoot } from "../workflows/state.ts";
 import { pick, widget } from "./picker.ts";
 import { completionRenderer, toolRenderers } from "./render.ts";
-import { oneLine, priority, rows, SHORTCUT, taskMeta, type PickAction, type TaskMeta } from "./ui.ts";
+import { fitResults, oneLine, priority, rows, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
 
 export default async function (pi: ExtensionAPI) {
   if (process.env.PI_REX_CHILD) { registerChildUi(pi, process.env.PI_REX_CHILD); return; }
@@ -114,8 +114,50 @@ export default async function (pi: ExtensionAPI) {
   pi.on("session_before_tree", (_event, ctx) => {
     if ([...runner.tasks.values()].some(running)) { ctx.ui.notify("Finish or cancel Rex tasks before changing conversation branches.", "warning"); return { cancel: true }; }
   });
-  async function result(task: TaskRun, wait: boolean, signal: AbortSignal) {
-    if (wait) task = await runner.wait(task.id, signal);
+  const RESULTS_BYTES = 64_000;
+  const runningTasks = () => [...runner.tasks.values()].filter(running).filter(t => runner.runs.get(t.childId))
+    .map(t => ({ name: runner.runs.get(t.childId)!.name, elapsedMs: Date.now() - t.started }));
+  /** A wait the user interrupted: nothing is cancelled, and the model is told how to resume. */
+  const yielded = (what: string) => {
+    const still = runningTasks();
+    return { content: [{ type: "text" as const, text: `Stopped waiting for ${what}: the user queued a message. Respond to it first. Still running: ${still.map(s => s.name).join(", ") || "none"}. Nothing was cancelled; call rex_result again to continue.` }],
+      details: { yielded: true } };
+  };
+  /** Streams who the parent is waiting on, so a long wait is never a blank row. */
+  function progress(onUpdate: ((u: any) => void) | undefined, signal: AbortSignal) {
+    if (!onUpdate) return () => {};
+    const tick = () => { const items = runningTasks(); if (items.length) onUpdate({ content: [{ type: "text", text: waitingLine(items) }], details: {} }); };
+    tick(); const timer = setInterval(tick, 1000);
+    const stop = () => clearInterval(timer);
+    signal.addEventListener("abort", stop, { once: true });
+    return stop;
+  }
+  /** Every unread finished result that fits, oldest first, after waiting for at least one. */
+  async function nextResults(signal: AbortSignal, ctx: ExtensionContext, onUpdate?: (u: any) => void) {
+    const stop = progress(onUpdate, signal);
+    let first: TaskRun | undefined;
+    try { first = await yieldingWait(s => runner.next(s), signal, () => ctx.hasPendingMessages()); }
+    finally { stop(); }
+    if (!first) return yielded("results");
+    const ready = runner.ready(), texts = ready.map(describe), count = fitResults(texts.map(t => Buffer.byteLength(t)), RESULTS_BYTES);
+    if (count === 1) return result(ready[0], false, signal);
+    const picked = ready.slice(0, count), usage = emptyUsage();
+    let known = false;
+    for (const task of picked) { const u = await runner.collect(task.id); if (u) { addUsage(usage, u); known = true; } }
+    const more = runner.ready().length, parts = texts.slice(0, count);
+    const text = parts.join("\n\n") + (more ? `\n\n${more} more result(s) ready; call rex_result next=true again.` : "");
+    return { content: [{ type: "text" as const, text }], usage: known ? usage : undefined as Usage | undefined,
+      details: { tasks: picked.map(t => taskMeta(runner.runs.get(t.childId)!, t)), parts: parts.map(p => p.length), more } };
+  }
+  async function result(task: TaskRun, wait: boolean, signal: AbortSignal, ctx?: ExtensionContext, onUpdate?: (u: any) => void) {
+    if (wait) {
+      const stop = progress(onUpdate, signal);
+      let done: TaskRun | undefined;
+      try { done = await yieldingWait(s => runner.wait(task.id, s), signal, ctx && (() => ctx.hasPendingMessages())); }
+      finally { stop(); }
+      if (!done) { await runner.background(task); return yielded(runner.runs.get(task.childId)?.name ?? "the child"); }
+      task = done;
+    }
     signal.throwIfAborted();
     const usage = await runner.collect(task.id);
     return { content: [{ type: "text" as const, text: describe(task) }], details: { task: taskMeta(runner.runs.get(task.childId)!, task) }, usage,
@@ -141,7 +183,7 @@ export default async function (pi: ExtensionAPI) {
         combined.throwIfAborted();
         task = await runner.submit(run.id, params.task, params.context ?? "", combined, !params.wait, params.title);
         onUpdate?.({ content: [{ type: "text", text: `${run.name} started task ${task.id}` }], details: { task: taskMeta(run, task) } });
-        return await result(task, !!params.wait, combined);
+        return await result(task, !!params.wait, combined, ctx, onUpdate);
       } catch (error) {
         if (task && params.wait && combined.aborted && running(task)) await runner.cancel(run.id).catch(() => {});
         else if (!task && run.owner === "managed") await runner.action(run, "close").catch(() => {});
@@ -156,7 +198,7 @@ export default async function (pi: ExtensionAPI) {
     parameters: Type.Object({ child: Type.String({ description: "Child name (or ID prefix)" }), mode: StringEnum(["followup", "steer", "cancel"] as const),
       text: Type.Optional(Type.String({ minLength: 1, maxLength: 16000 })), title: Type.Optional(Type.String({ maxLength: 60, description: "Short label for a follow-up task" })), taskId: Type.Optional(Type.String()),
       context: Type.Optional(Type.String({ maxLength: 16000 })), wait: Type.Optional(Type.Boolean()) }),
-    async execute(_id, params, signal, _update, ctx) {
+    async execute(_id, params, signal, onUpdate, ctx) {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal]), run = find(params.child);
       checkBranch(run, ctx);
       if (params.mode === "cancel") {
@@ -171,23 +213,23 @@ export default async function (pi: ExtensionAPI) {
         return { content: [{ type: "text", text: `Message accepted for ${run.name}, task ${params.taskId}. Delivery is at Pi's next steering boundary.` }], details: {} };
       }
       const task = await runner.submit(run.id, params.text, params.context ?? "", combined, !params.wait, params.title);
-      try { return await result(task, !!params.wait, combined); }
+      try { return await result(task, !!params.wait, combined, ctx, onUpdate); }
       catch (error) { if (params.wait && combined.aborted && running(task)) await runner.cancel(run.id).catch(() => {}); throw error; }
     },
   });
   pi.registerTool({
     ...toolRenderers("rex_result"),
     name: "rex_result", label: "Rex results",
-    description: "next=true returns the oldest unread finished result, or waits for the next task to finish across all children; prefer it to polling. With taskId, read that immutable result (up to configured 50 KB); wait=true waits for it. With neither, list children by name with recent task IDs. Cancelling a wait does not cancel background work. Usage is accounted once when a result is first read; full files remain available.",
+    description: "next=true returns every unread finished result (oldest first, up to 64 KB), or waits for the next task to finish across all children; prefer it to polling. Any wait ends early, cancelling nothing, when the user queues a message: respond to them, then call again. With taskId, read that immutable result (up to configured 50 KB); wait=true waits for it. With neither, list children by name with recent task IDs. Cancelling a wait does not cancel background work. Usage is accounted once when a result is first read; full files remain available.",
     parameters: Type.Object({ next: Type.Optional(Type.Boolean()), taskId: Type.Optional(Type.String()), wait: Type.Optional(Type.Boolean()) }),
-    async execute(_id, params, signal) {
+    async execute(_id, params, signal, onUpdate, ctx) {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal]);
       if (params.next) {
         if (params.taskId) throw new Error("Use either next or taskId");
-        return result(await runner.next(combined), false, combined);
+        return nextResults(combined, ctx, onUpdate);
       }
       if (!params.taskId) return { content: [{ type: "text", text: list() }], details: {} };
-      return result(findTask(params.taskId), !!params.wait, combined);
+      return result(findTask(params.taskId), !!params.wait, combined, ctx, onUpdate);
     },
   });
   pi.registerMessageRenderer("rex-completion", completionRenderer);

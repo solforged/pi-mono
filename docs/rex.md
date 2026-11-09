@@ -48,13 +48,20 @@ The model has three tools:
 - `rex_send`: addressed by `child` name. `followup` starts another task in an
   idle child; `steer` sends a message to an exact active `taskId`; `cancel`
   stops the current task.
-- `rex_result`: `next: true` returns the oldest unread result, or waits for
-  whichever task finishes next across all children, so the parent need not poll
-  each one. `taskId` reads a specific result (`wait: true` waits for it). With
+- `rex_result`: `next: true` returns every unread result, oldest first and up
+  to 64 KB, or waits for whichever task finishes next across all children. One
+  call collects a whole batch, so the parent spends fewer turns resending its
+  context. `taskId` reads a specific result (`wait: true` waits for it). With
   neither, it lists children by name. Cancelling a wait leaves work running.
 
-Tool rows render compactly, e.g. `✓ birch scout · succeeded · 18s · 2.5k tok`;
-expand a row to read the answer as Markdown with its file paths. The widget is a
+While the parent waits, its tool row shows who it is waiting on
+(`waiting on 3 · alpha 2m10s · …`). Any wait, including `wait: true` on
+`rex_agent` or `rex_send`, ends early when you type a message during it:
+nothing is cancelled, the parent answers you, then waits again. A follow-up
+already queued when the wait began does not end it.
+
+Tool rows render compactly, e.g. `✓ birch scout · succeeded · 18s · 2.5k tok`,
+one line per result in a batch; expand a row to read the answer as Markdown with its file paths. The widget is a
 single line grouping names by state, with children needing you first:
 
 ```text
@@ -65,7 +72,8 @@ Background completions that finish together become one status receipt for the
 parent's next turn; they never start a model call. Receipts identify sender and
 task and are not treated as new human instructions.
 
-In the child terminal, a compact header replaces Pi's banner, and delegated
+In the child terminal, a compact header replaces Pi's banner, a one-line
+footer (status, tokens, cost, context and model) replaces Pi's three, and delegated
 tasks display as `▸ Task for birch` with selected context quoted and shortened.
 This is display-only: the model receives the exact delegated framing. Parent
 messages display as `↳ Parent`, and the terminal title follows the current task.
