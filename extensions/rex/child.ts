@@ -2,6 +2,7 @@ import { connect, type Socket } from "node:net";
 import { readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { TOOL as ASK } from "../ask/model.ts";
 import { addUsage, bounded, emptyUsage } from "../workflows/process.ts";
 import { privateDir, saveJson } from "../workflows/state.ts";
 import { claimOwner, readOwner, Frames, isId, LEASE_MS, MAX_MESSAGES, MAX_TASKS, record, send, taskPrompt, text, validateManifest, VERSION, type Manifest, type Outcome } from "./protocol.ts";
@@ -157,9 +158,23 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
     emit({ type: "progress", taskId: current.id, text: note, cost: current.state.usage.cost.total });
   };
   pi.on("agent_start", () => progress("Running"));
-  pi.on("tool_execution_start", event => progress(activity(event.toolName, event.args, manifest?.cwd)));
-  pi.on("ui_prompt_start", event => progress(`Waiting for user: ${event.title ?? event.kind}`));
-  pi.on("ui_prompt_end", () => progress("Running"));
+  // Custom dialogs carry no title; an ask names its first question instead.
+  let asking: string | undefined, waitingSince: number | undefined;
+  pi.on("tool_execution_start", event => {
+    if (event.toolName === ASK) asking = (event.args as any)?.questions?.[0]?.question;
+    // The parent's deadline clock follows the note, so an open prompt keeps it.
+    if (waitingSince === undefined) progress(activity(event.toolName, event.args, manifest?.cwd));
+  });
+  pi.on("ui_prompt_start", event => {
+    waitingSince ??= Date.now();
+    progress(`Waiting for user: ${event.title ?? asking ?? event.kind}`);
+  });
+  pi.on("ui_prompt_end", () => {
+    // The parent stops its deadline clock for the same span.
+    if (current && waitingSince !== undefined) current.deadline += Date.now() - waitingSince;
+    waitingSince = asking = undefined;
+    progress("Running");
+  });
   pi.on("agent_settled", event => {
     if (current) current.state.settling = true;
     return enqueue(() => finish(event.aborted));
@@ -253,7 +268,7 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
       timer = setInterval(() => {
         if (owner !== "managed") return;
         if (Date.now() - lastPing > LEASE_MS) { void enqueue(() => retire("Parent lease expired", !!current)).catch(() => {}); return; }
-        if (current && Date.now() > current.deadline && !current.state.cancelled) {
+        if (current && waitingSince === undefined && Date.now() > current.deadline && !current.state.cancelled) {
           current.state.cancelled = "Task deadline expired"; ctx!.abort();
           if (ctx!.isIdle()) void enqueue(() => finish(true)).catch(() => {});
         }

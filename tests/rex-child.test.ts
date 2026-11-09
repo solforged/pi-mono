@@ -171,6 +171,27 @@ test("model and turn policy is enforced for each managed task", async t => {
   h.ctx.model = { ...h.ctx.model, id: "other" }; await h.emit("model_select"); await h.settle(task);
   assert.equal(h.events.find(v => v.type === "result").status, "failed");
 });
+test("an ask names the wait, and waiting for the user extends the task deadline", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"] });
+  const h = await harness(t), taskId = randomUUID();
+  const requestId = h.request({ type: "dispatch", taskId, task: "Ask", context: "", deadline: Date.now() + 2000 });
+  await h.until(() => h.prompts.some(v => v.includes(taskId))); assert(h.events.some(v => v.requestId === requestId && v.type === "accepted"));
+  await h.emit("tool_execution_start", { toolName: "ask_user_question", args: { questions: [{ question: "Which database?" }] } });
+  await h.emit("ui_prompt_start", { kind: "custom" });
+  await h.until(() => h.events.some(v => v.type === "progress" && v.text === "Waiting for user: Which database?"));
+  t.mock.timers.tick(5000); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.aborts, 0);
+  await h.emit("tool_execution_start", { toolName: "read", args: { path: "x" } });
+  await h.answer("Still asking");
+  await h.until(() => h.events.filter(v => v.type === "progress").length >= 3);
+  assert.equal(h.events.filter(v => v.type === "progress").at(-1).text, "Waiting for user: Which database?");
+  await h.emit("ui_prompt_end", { kind: "custom" });
+  await h.until(() => h.events.at(-1)?.text === "Running");
+  t.mock.timers.tick(1000); assert.equal(h.aborts, 0);
+  t.mock.timers.tick(1500); assert(h.aborts > 0);
+  await h.settle(taskId, true);
+  assert.match(h.events.find(v => v.type === "result").text, /deadline expired/);
+});
 
 test("activity names the tool and its main argument on one bounded line", () => {
   assert.equal(activity("read", { path: "docs/rex.md", offset: 3 }), "read docs/rex.md");

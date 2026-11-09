@@ -52,3 +52,15 @@ result from context, the extension adds one hidden message after the
 compaction summary listing those decisions. It is derived from the current
 branch on each request, works with both Pi's summary and snapcompact, and
 changes only when a compaction does, so cached prefixes are unaffected.
+
+## Subagents
+
+[Rex children](rex.md) inherit the tool when it is active in the parent,
+including advisors and scouts. The question appears in the child's pane, the
+deck shows `! name needs you` with the first question, and time spent waiting
+for you does not count against the role's deadline. Since you cannot chat with
+a managed child, Esc there hands the questions back: the child stops and lists
+them for the parent. Headless
+[subagents](subagents.md) cannot ask; their definitions tell them to state the
+assumption and list the question under "Open questions" instead, so the parent
+can ask them all at once.

@@ -19,7 +19,8 @@ Advisor/scout have `read`, `grep`, `find`, and `ls`, not Bash. Workers also get
 Bash, edit, and write. Each child gets approved context-file instructions and
 its authored definition from [agent-definitions/](../agent-definitions/); it
 does not inherit the whole conversation or discover project resources.
-Recursive delegation is not allowed. Concurrency, batch, turn, and per-role
+Headless children cannot [ask you questions](ask.md#subagents); they list them
+under "Open questions". Recursive delegation is not allowed. Concurrency, batch, turn, and per-role
 output/time limits are configured in [roles.json](../roles.json), with
 [local role overrides](roles.md#profiles-and-local-overrides).
 

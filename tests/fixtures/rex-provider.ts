@@ -13,7 +13,9 @@ export default function (pi: ExtensionAPI) {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 1024 }],
     streamSimple(model, _context, options) {
       const stream = createAssistantMessageEventStream();
-      const waiting = JSON.stringify(_context.messages.at(-1)).includes("Wait for cancellation fixture");
+      const last: any = _context.messages.at(-1);
+      const waiting = JSON.stringify(last).includes("Wait for cancellation fixture");
+      const asking = last?.role === "user" && JSON.stringify(last).includes("Ask the user fixture");
       let timer: ReturnType<typeof setTimeout> | undefined, finished = false;
       const finish = () => {
         if (finished) return;
@@ -27,9 +29,17 @@ export default function (pi: ExtensionAPI) {
           stream.push({ type: "error", reason: "aborted", error: output }); stream.end(); return;
         }
         stream.push({ type: "start", partial: output });
+        if (asking) {
+          const call = { type: "toolCall" as const, id: `ask-${Date.now()}`, name: "ask_user_question", arguments: { questions: [{ question: "Pick one?", options: [{ label: "Alpha" }, { label: "Beta" }] }] } };
+          output.content.push(call); output.stopReason = "toolUse";
+          stream.push({ type: "toolcall_start", contentIndex: 0, partial: output });
+          stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: call, partial: output });
+          stream.push({ type: "done", reason: "toolUse", message: output }); stream.end(); return;
+        }
         const block = { type: "text" as const, text: "" }; output.content.push(block);
         stream.push({ type: "text_start", contentIndex: 0, partial: output });
-        block.text = `Rex fixture completed without a model request. User messages: ${_context.messages.filter(m => m.role === "user").length}.`;
+        block.text = last.role === "toolResult" ? `Rex fixture asked. ${JSON.stringify(last.content)}`
+          : `Rex fixture completed without a model request. User messages: ${_context.messages.filter(m => m.role === "user").length}.`;
         stream.push({ type: "text_delta", contentIndex: 0, delta: block.text, partial: output });
         stream.push({ type: "text_end", contentIndex: 0, content: block.text, partial: output });
         output.stopReason = "stop";

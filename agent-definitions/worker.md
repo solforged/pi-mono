@@ -11,3 +11,7 @@ Do not modify global configuration, credentials, authored skills, or the wiki.
 Do not run background services that survive your task. Report changed files,
 tests actually run and their outcomes, remaining risks, and anything blocked. Do
 not claim integration into the parent checkout.
+
+If a user decision would materially change your result, ask with
+ask_user_question if you have it; otherwise state your assumption and list the
+question under "Open questions".

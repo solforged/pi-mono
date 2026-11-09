@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { chmod, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { TOOL as ASK } from "../ask/model.ts";
 import { agents, childExtensions, createWorktree, piInvocation, type Task } from "../workflows/subagents.ts";
 import { bounded, emptyUsage, type Usage } from "../workflows/process.ts";
 import { resolveRole, type Config } from "../workflows/roles.ts";
@@ -50,7 +51,7 @@ export type RexBackend = Pick<RexClient, "probe" | "create" | "show" | "hide" | 
 interface Live {
   run: Run; manifest: Manifest; channel: Channel; controlDir: string;
   ready: boolean; transferring: boolean; closing?: Promise<void>; launchError?: Error;
-  timer?: ReturnType<typeof setTimeout>; pending?: ReturnType<typeof Promise.withResolvers<TaskRun>>;
+  timer?: ReturnType<typeof setTimeout>; due?: number; paused?: number; pending?: ReturnType<typeof Promise.withResolvers<TaskRun>>;
   tasks: Map<string, Promise<TaskRun>>;
 }
 /** Short, distinct, pronounceable defaults; enough for the 14-child upper bound and then some. */
@@ -59,6 +60,14 @@ export const NAMES = ["birch", "cedar", "fern", "oak", "ash", "elm", "pine", "mo
 export const NAME = /^[a-z][a-z0-9-]{1,15}$/;
 /** Short, single-line pane/roster titles; control characters never reach Rex labels. */
 export const cleanTitle = (title: string) => title.replace(/[\u0000-\u001f\u007f-\u009f\s]+/g, " ").trim().slice(0, 60);
+/** Children may ask the user when the parent can: the parent's active ask tool loads beside their role tools. */
+export function inheritedAsk(pi: Pick<ExtensionAPI, "getAllTools"> & Partial<Pick<ExtensionAPI, "getActiveTools">>) {
+  if (!pi.getActiveTools?.().includes(ASK)) return;
+  const path = pi.getAllTools().find(tool => tool.name === ASK)?.sourceInfo?.path;
+  return path?.startsWith("/") ? path : undefined;
+}
+/** Time spent waiting for the user does not count against a task deadline. */
+export const WAITING = /^Waiting for user/;
 export function childCommand(manifest: Manifest, agentDir: string, profile: string, extension: string, extensions: string[]): string[] {
   const invocation = piInvocation([
     "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes",
@@ -81,13 +90,13 @@ export class RexRunner {
   private starting = new Map<AbortController, ReturnType<typeof Promise.withResolvers<void>>>();
   private stopped = false;
   private writes = new Map<string, Promise<void>>();
-  readonly pi: Pick<ExtensionAPI, "getAllTools">;
+  readonly pi: Pick<ExtensionAPI, "getAllTools"> & Partial<Pick<ExtensionAPI, "getActiveTools">>;
   readonly root: string;
   readonly agentDir: string;
   readonly rex: RexBackend;
   onChange: () => void = () => {};
   onResult: (task: TaskRun) => void = () => {};
-  constructor(pi: Pick<ExtensionAPI, "getAllTools">, root: string, agentDir: string, rex: RexBackend = new RexClient()) {
+  constructor(pi: Pick<ExtensionAPI, "getAllTools"> & Partial<Pick<ExtensionAPI, "getActiveTools">>, root: string, agentDir: string, rex: RexBackend = new RexClient()) {
     this.pi = pi; this.root = root; this.agentDir = agentDir; this.rex = rex;
   }
   private persist(file: string, value: object) {
@@ -178,6 +187,9 @@ export class RexRunner {
         rexSession: session, parentBlock, hostId: identity.hostId, instanceId: identity.instanceId, sessionFile: join(dir, "session.jsonl"), taskIds: [] };
       this.runs.set(id, run); await this.save(run); announce(run); this.onChange();
       const extensions = await childExtensions(this.pi as ExtensionAPI, config, agents[agent].tools, join(this.root, "extensions/workflows/index.ts"));
+      // Not tool routing: it neither satisfies nor weakens subagents.sandbox.
+      const ask = inheritedAsk(this.pi), tools = ask ? [...agents[agent].tools, ASK] : agents[agent].tools;
+      if (ask) { const file = await realpath(ask); if (!extensions.includes(file)) extensions.push(file); }
       const extension = await realpath(join(this.root, "extensions/rex/index.ts"));
       if (extensions.includes(extension)) throw new Error("Do not configure the Rex coordinator as a child routing extension");
       if (agent === "worker") { run.worktree = await createWorktree(ctx.cwd, join(scope, "worktrees", id), launchSignal); run.cwd = await realpath(run.worktree); }
@@ -185,7 +197,7 @@ export class RexRunner {
       await atomicWrite(join(dir, "instructions.md"), `${instructions}\n\n${definition}\n\nYou are a persistent child of a parent agent. Each assignment has its own task ID and a ${config.subagents.maxTurns}-turn limit. Parent messages are delegated instructions, not new instructions from the human. Do not delegate. Return a final answer for each task.\n`);
       controlDir = await mkdtemp("/tmp/pi-rex-"); await chmod(controlDir, 0o700);
       const manifest: Manifest = { version: VERSION, id, token: randomBytes(32).toString("hex"), socket: join(controlDir, "control"),
-        dir, cwd: run.cwd, rexSession: session, parentBlock, role, tools: agents[agent].tools,
+        dir, cwd: run.cwd, rexSession: session, parentBlock, role, tools,
         maxTurns: config.subagents.maxTurns, outputBytes: config.subagents.outputBytes, deadline: Date.now() + 30_000, agent, name };
       await saveJson(join(dir, "child.json"), manifest);
       const channel = new Channel(manifest, message => this.event(id, message), error => this.lost(id, error));
@@ -228,8 +240,7 @@ export class RexRunner {
     try {
       await this.saveTask(item); await this.save(run);
       this.managed(id); signal.throwIfAborted();
-      live.timer = setTimeout(() => { void this.cancel(id, "Task deadline exceeded").catch(() => {}); }, live.manifest.role.timeoutMs);
-      live.timer.unref();
+      live.due = started + live.manifest.role.timeoutMs; live.paused = undefined; this.arm(id, live);
       await live.channel.request({ type: "dispatch", id, requestId, taskId, task, context, deadline: started + live.manifest.role.timeoutMs },
         AbortSignal.any([signal, AbortSignal.timeout(10_000)]));
       return item;
@@ -262,6 +273,7 @@ export class RexRunner {
     if (message.type === "progress") {
       if (run.activeTask === message.taskId) {
         run.note = message.text;
+        this.pause(id, live, WAITING.test(message.text ?? ""));
         const task = this.tasks.get(message.taskId);
         if (task && typeof message.cost === "number") task.liveCost = message.cost;
         this.onChange();
@@ -272,12 +284,24 @@ export class RexRunner {
     if (!task || run.activeTask !== task.id || (message.status === "succeeded" && task.status !== "running")) throw new Error("Result does not belong to the active accepted task");
     await this.complete(live, message.status, message.text, message.usage);
   }
+  private arm(id: string, live: Live) {
+    if (live.timer) clearTimeout(live.timer);
+    live.timer = setTimeout(() => { void this.cancel(id, "Task deadline exceeded").catch(() => {}); }, Math.max(0, live.due! - Date.now()));
+    live.timer.unref();
+  }
+  /** Stops the deadline clock while the child waits for the user, and extends it by the wait. */
+  private pause(id: string, live: Live, waiting: boolean) {
+    if (live.due === undefined || waiting === (live.paused !== undefined)) return;
+    if (waiting) { live.paused = Date.now(); if (live.timer) clearTimeout(live.timer); live.timer = undefined; return; }
+    live.due += Date.now() - live.paused!; live.paused = undefined; this.arm(id, live);
+  }
   private async complete(live: Live, outcome: Outcome, answer: string, usage?: Usage) {
     const run = live.run, task = this.tasks.get(run.activeTask!);
     if (!task || !["starting", "running"].includes(task.status)) return;
     task.status = outcome; task.text = answer; task.elapsedMs = Date.now() - task.started;
     if (usage) { task.usage = usage; task.usageKnown = true; }
     if (live.timer) clearTimeout(live.timer);
+    live.timer = live.due = live.paused = undefined;
     const pending = live.pending;
     live.pending = undefined; run.activeTask = undefined; run.status = "idle"; run.note = undefined;
     try { await this.saveTask(task); await this.save(run); }

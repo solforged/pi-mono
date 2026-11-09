@@ -186,6 +186,11 @@ working directory across tasks. Each task receives fresh turn/time limits and
 separate usage accounting. Parent model selection never changes. Missing models,
 authentication, Rex identity, or required routing fail without fallback.
 
+When `ask_user_question` is active in the parent, every child also gets it and
+loads the [ask extension](ask.md); it is not tool routing for
+`subagents.sandbox`. Time a child spends waiting for you, in any dialog, does
+not count against its task deadline.
+
 `subagents.rexConcurrency` (default 6, at most 16) limits live managed
 children, including idle ones; it is separate from the headless runner's
 `subagents.concurrency`. Raise it in `roles.local.json` for larger batches. Each
@@ -249,6 +254,7 @@ Explicit live checks create and remove their own test terminals:
 ```sh
 node tests/fixtures/rex-smoke.ts
 node tests/fixtures/rex-smoke.ts --dispatch
+node tests/fixtures/rex-smoke.ts --ask        # --dispatch plus a question answered in the child
 node tests/fixtures/rex-deck-smoke.ts 14
 node tests/fixtures/rex-deck-smoke.ts 6 --show   # needs Rex.app Remote Control
 ```
