@@ -36,8 +36,16 @@ out of the tool to keep its declaration, which every request carries, under
   turn at once.
 - An **aside** is delivered as a steering message, after the receiver's
   current tool calls and before its next model call.
-- The sender's answer says whether the receiver started a turn or queued the
-  note. Delivery means Pi accepted the note, not that the agent acted on it.
+- A quiet note to a busy session from a peer it wrote to in the last 30
+  minutes is treated as the **reply** it is waiting for and delivered as an
+  aside. Without this, an answer would wait for the asker's whole run and
+  arrive after it had moved on.
+- Any other quiet note to a busy session is **queued**. The receiving model
+  is told it waited, so it may predate the work done since.
+- The sender's answer says which of these happened: a turn started, the note
+  arrives at the next step, or it waits for the current run. Delivery means Pi
+  accepted the note, not that the agent acted on it. Cards show `(reply)`,
+  `(queued)` or `(held)` beside the sender.
 - The receiver's model sees the note inside an `<intercom from="…">` block,
   followed by a line marking it as a peer's note rather than the user's
   instruction. The peer's text cannot close that block.

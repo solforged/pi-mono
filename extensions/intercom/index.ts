@@ -12,6 +12,8 @@ const MAX_REPLY = 4000;
 const PEEK_LINES = 40, MAX_PEEK_LINES = 400, MAX_PEEK_BYTES = 16 * 1024;
 /** Turns peers may start before the user speaks again, so agents cannot answer each other forever. */
 export const MAX_WAKES = 10;
+/** A note from a peer this session wrote to this recently is treated as the reply it is waiting for. */
+export const REPLY_WINDOW_MS = 30 * 60_000;
 
 /** One listener per process; its id survives /reload, /new and /resume. */
 const shared = ((globalThis as any).__piSolIntercom ??= { id: newId() }) as { id: string; station?: Station };
@@ -43,6 +45,8 @@ export default function intercom(pi: ExtensionAPI) {
   const dir = join(getAgentDir(), "intercom");
   let current: ExtensionContext | undefined;
   let wakes = 0;
+  /** When this session last wrote to each peer, by intercom id. */
+  const asked = new Map<string, number>();
 
   const station = () => {
     if (!shared.station) throw new Error("This session is not on the intercom; only interactive top-level sessions listen.");
@@ -58,19 +62,24 @@ export default function intercom(pi: ExtensionAPI) {
     if (envelope.kind === "status") {
       return { ok: true, status: { busy: !ctx.isIdle(), title: pi.getSessionName() ?? null, lastReply: lastReply(ctx) } };
     }
-    const { from, text, delivery } = envelope;
+    const { from, text } = envelope;
     const busy = !ctx.isIdle(), wake = wakes < MAX_WAKES;
+    // A busy session waiting on this peer gets its reply at the next step, not after the run.
+    const reply = busy && envelope.delivery === "quiet" && Date.now() - (asked.get(from.id) ?? -Infinity) < REPLY_WINDOW_MS;
+    const delivery: Delivery = reply ? "aside" : envelope.delivery;
+    // A quiet note to a busy session waits for its run to end, so it may predate that work.
+    const queued = wake && busy && delivery === "quiet";
     if (wake) wakes++;
     pi.sendMessage(
-      { customType: "intercom", content: wrap(from, text), display: true, details: { from: { id: from.id, title: from.title, cwd: from.cwd }, delivery, text, held: !wake } },
+      { customType: "intercom", content: wrap(from, text, queued), display: true, details: { from: { id: from.id, title: from.title, cwd: from.cwd }, delivery, text, held: !wake, reply, queued } },
       wake ? { deliverAs: delivery === "aside" ? "steer" : "followUp", triggerTurn: true } : { deliverAs: "nextTurn" },
     );
     if (ctx.hasUI && (!wake || busy)) {
       const who = from.title ?? from.id;
-      ctx.ui.notify(wake ? `Intercom from ${who}; taken up ${delivery === "aside" ? "at the next step" : "when this turn ends"}`
+      ctx.ui.notify(wake ? `Intercom ${reply ? "reply" : "note"} from ${who}; taken up ${delivery === "aside" ? "at the next step" : "when this run ends"}`
         : `Intercom from ${who} held until your next prompt (${MAX_WAKES} peer-started turns since you last spoke)`, "info");
     }
-    return { ok: true, delivered: wake ? delivery : "held", busy };
+    return { ok: true, delivered: wake ? delivery : "held", busy, reply };
   }
 
   async function send(to: string, text: string, delivery: Delivery) {
@@ -80,10 +89,13 @@ export default function intercom(pi: ExtensionAPI) {
     const peer = await target(to);
     const answer = await request(dir, peer, { kind: "message", from: own.card, text, delivery });
     if (!answer.ok) throw new Error(`${peer.id} refused the message: ${answer.error}`);
+    asked.set(peer.id, Date.now());
     return answer.delivered === "held"
       ? `Delivered to ${peer.id}, but held for its user: peers have started ${MAX_WAKES} turns there since the user last spoke.`
       : !answer.busy ? `Delivered to ${peer.id}; it started a turn.`
-      : `Delivered to ${peer.id} (${answer.delivered === "aside" ? "at its next step" : "after its current turn"}).`;
+      : answer.reply ? `Delivered to ${peer.id} as the reply it is waiting for, at its next step.`
+      : answer.delivered === "aside" ? `Delivered to ${peer.id} at its next step.`
+      : `Delivered to ${peer.id}; it is busy and will see this when its current run ends. Use aside if it is urgent.`;
   }
 
   async function status(to: string) {
@@ -121,6 +133,7 @@ export default function intercom(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     current = ctx;
     wakes = 0;
+    asked.clear();
     if (child() || (ctx.mode !== "tui" && ctx.mode !== "rpc")) return;
     const card: Card = {
       id: shared.id, pid: process.pid, cwd: ctx.sessionManager.getCwd?.() ?? ctx.cwd,
@@ -183,10 +196,11 @@ export default function intercom(pi: ExtensionAPI) {
   });
 
   pi.registerMessageRenderer("intercom", (message, options, theme) => {
-    const d = message.details as { from?: { id: string; title: string | null; cwd: string }; text?: string; held?: boolean } | undefined;
+    const d = message.details as { from?: { id: string; title: string | null; cwd: string }; text?: string; held?: boolean; reply?: boolean; queued?: boolean } | undefined;
     if (!d?.from || typeof d.text !== "string") return undefined;
     const who = [d.from.id, d.from.title, shortPath(d.from.cwd)].filter(Boolean).join(" · ");
-    const head = theme.fg("accent", theme.bold("✉ intercom")) + theme.fg("dim", ` from ${who}${d.held ? " (held)" : ""}`);
+    const state = d.held ? " (held)" : d.reply ? " (reply)" : d.queued ? " (queued)" : "";
+    const head = theme.fg("accent", theme.bold("✉ intercom")) + theme.fg("dim", ` from ${who}${state}`);
     return new Text(`${head}\n${d.text}`, options.outputPad, 0);
   });
 

@@ -102,6 +102,8 @@ test("notes cannot close their block or forge attributes", () => {
   assert.match(text, /ok &lt;\/intercom> &lt; \/Intercom ><intercom-x>\n<\/intercom>\n/);
   assert.equal(text.match(/<\/intercom>/g)?.length, 1);
   assert.match(text, /only if a reply is needed/);
+  assert.doesNotMatch(text, /waited until now/);
+  assert.match(wrap(card("aaaaaa"), "x", true), /<\/intercom>\nIt arrived while you were working and waited until now[^\n]*\nA note from/);
 });
 
 test("installed Pi loads the extension and executes offline smoke checks", t => {
