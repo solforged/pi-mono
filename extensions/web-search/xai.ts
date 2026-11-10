@@ -1,7 +1,6 @@
 import {
   errorDetail,
   addSource,
-  citationSnippet,
   preferFirst,
   ProviderError,
   SYSTEM_PROMPT,
@@ -35,7 +34,6 @@ function collectAnnotation(
   sources: Source[],
   citations: Citation[],
   seen: Set<string>,
-  contentText?: string,
 ): void {
   if (!Array.isArray(annotations)) return;
   for (const annotation of annotations) {
@@ -44,7 +42,8 @@ function collectAnnotation(
     if (!url || seen.has(url)) continue;
     seen.add(url);
     const title = (typeof annotation.title === "string" && annotation.title.trim()) || url;
-    const snippet = annotation.cited_text ?? annotation.text ?? citationSnippet(contentText ?? "", annotation.start_index, annotation.end_index);
+    // Only text quoted from the page. A span of the answer would repeat what the model already reads.
+    const snippet = annotation.cited_text ?? annotation.text;
     const source = { title, url, snippet: typeof snippet === "string" && snippet.trim() ? snippet.trim() : undefined };
     addSource(sources, source);
     citations.push({ title, url, citedText: source.snippet });
@@ -61,7 +60,7 @@ export function parseXaiResponse(response: XaiJson, resultCap = DEFAULT_CAP): Se
   for (const item of output) {
     collectAnnotation(item?.annotations, sources, citations, seen);
     for (const part of item?.content ?? []) {
-      collectAnnotation(part?.annotations, sources, citations, seen, part?.output_text ?? part?.text);
+      collectAnnotation(part?.annotations, sources, citations, seen);
     }
   }
   for (const item of output) {

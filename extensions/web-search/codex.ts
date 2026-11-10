@@ -1,7 +1,6 @@
 import {
   errorDetail,
   addSource,
-  citationSnippet,
   preferFirst,
   ProviderError,
   SYSTEM_PROMPT,
@@ -142,11 +141,7 @@ export function consumeCodexEvents(events: Iterable<Record<string, unknown>>, re
             answerParts.push(part.text);
             for (const annotation of part.annotations ?? []) {
               if (annotation?.type === "url_citation" && typeof annotation.url === "string") {
-                addSource(sources, {
-                  title: annotation.title ?? annotation.url,
-                  url: annotation.url,
-                  snippet: citationSnippet(part.text, annotation.start_index, annotation.end_index),
-                });
+                addSource(sources, { title: annotation.title ?? annotation.url, url: annotation.url });
               }
             }
           }

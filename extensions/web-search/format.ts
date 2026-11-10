@@ -96,26 +96,25 @@ export function cleanSourceUrl(rawUrl: string): string {
   }
 }
 
+// One numbered list after the answer. Nothing is repeated: a citation whose
+// page is already a source adds only its quote, and a snippet the answer
+// already contains is left out.
 export function formatForLLM(response: SearchResponse): string {
-  const parts: string[] = [];
-  if (response.answer) {
-    parts.push(response.answer);
-    if (response.sources.length > 0) {
-      parts.push("\n## Sources");
-      parts.push(`${response.sources.length} source${response.sources.length === 1 ? "" : "s"}`);
-    }
+  const answer = response.answer?.trim() ?? "";
+  const items = response.sources.map((source) => ({ ...source }));
+  for (const citation of response.citations ?? []) {
+    const listed = items.find((item) => item.url === citation.url);
+    if (!listed) items.push({ title: citation.title || citation.url, url: citation.url, snippet: citation.citedText });
+    else if (!listed.snippet && citation.citedText) listed.snippet = citation.citedText;
   }
-  for (const [i, src] of response.sources.entries()) {
-    const age = src.publishedDate ? ` (${src.publishedDate})` : "";
-    parts.push(`[${i + 1}] ${src.title}${age}\n    ${src.url}`);
-    if (src.snippet) parts.push(`    ${truncateText(src.snippet, 240)}`);
-  }
-  if (response.citations && response.citations.length > 0) {
-    parts.push("\n## Citations");
-    for (const [i, citation] of response.citations.entries()) {
-      parts.push(`[${i + 1}] ${citation.title || citation.url}\n    ${citation.url}`);
-      if (citation.citedText) parts.push(`    ${truncateText(citation.citedText, 240)}`);
-    }
+  const parts: string[] = answer ? [answer] : [];
+  if (answer && items.length > 0) parts.push("\nSources:");
+  for (const [i, item] of items.entries()) {
+    const title = item.title && item.title !== item.url ? `${item.title} ` : "";
+    const date = item.publishedDate ? `(${item.publishedDate.slice(0, 10)}) ` : "";
+    parts.push(`[${i + 1}] ${title}${date}${item.url}`);
+    const snippet = item.snippet?.trim();
+    if (snippet && !answer.includes(snippet.slice(0, 80))) parts.push(`  ${truncateText(snippet, 240)}`);
   }
   return parts.join("\n");
 }
@@ -128,11 +127,4 @@ export function formatFailures(errors: Array<{ provider: ProviderId; message: st
 
 export function withRecencyHint(query: string, recency?: string): string {
   return recency ? `${query} (focus on the past ${recency})` : query;
-}
-
-export function citationSnippet(text: string, start?: number, end?: number): string | undefined {
-  if (start === undefined || end === undefined || !text) return undefined;
-  const snippet = text.slice(Math.max(0, start - 100), Math.min(text.length, end + 100)).replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
-  if (!snippet) return undefined;
-  return snippet.length > 300 ? `${snippet.slice(0, 297)}...` : snippet;
 }

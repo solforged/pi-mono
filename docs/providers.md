@@ -23,6 +23,10 @@ live in [codex.ts](../extensions/web-search/codex.ts) and
 `/web-search` prints the session-aware order; `/web-search <query>` runs it.
 `PI_CODEX_WEB_SEARCH_MODEL` and `PI_XAI_WEB_SEARCH_MODEL` pin a nested model.
 
+The model receives the answer and one numbered source list, with nothing said
+twice: a citation of a listed page adds only its quote, and a snippet that the
+answer already contains is dropped.
+
 This is not in-session search. Pi's Responses parser ignores `web_search_call`
 items, so injecting hosted search into the live payload would drop citations
 and replay. Nested calls reuse the existing logins and work for any parent

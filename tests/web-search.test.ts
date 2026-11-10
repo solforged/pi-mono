@@ -44,15 +44,30 @@ test("formatForLLM lists answer, sources, and citations", () => {
     sources: [{ title: "xAI docs", url: "https://docs.x.ai/search", snippet: "Live Search is gone; use web_search." }],
     citations: [{ title: "xAI docs", url: "https://docs.x.ai/search", citedText: "tools: [{ type: \"web_search\" }]" }],
   });
-  assert.match(text, /Grok has hosted web search/);
-  assert.match(text, /## Sources/);
-  assert.match(text, /1 source\n/);
-  assert.match(text, /https:\/\/docs.x.ai\/search/);
-  assert.match(text, /## Citations/);
+  assert.equal(text, "Grok has hosted web search.\n\nSources:\n[1] xAI docs https://docs.x.ai/search\n  Live Search is gone; use web_search.");
   assert.equal(hasRenderableSearchContent({ provider: "exa", sources: [] }), false);
   assert.equal(formatFailures([]), "Error: No web search provider configured.");
   assert.match(formatFailures([{ provider: "codex", message: "boom" }, { provider: "xai", message: "nope" }]), /All web search providers failed/);
   assert.equal(withRecencyHint("pi extensions", "week"), "pi extensions (focus on the past week)");
+});
+
+test("search text repeats nothing: cited sources merge, and snippets already in the answer are dropped", () => {
+  const summary = "Exa summaries are written for the query and can run to several sentences.";
+  const text = formatForLLM({
+    provider: "exa",
+    answer: `**First**: ${summary}`,
+    sources: [
+      { title: "First", url: "https://a.example/", snippet: summary, publishedDate: "2026-03-04T10:00:00.000Z" },
+      { title: "https://b.example/", url: "https://b.example/" },
+    ],
+    citations: [
+      { title: "First", url: "https://a.example/", citedText: "ignored: the source has its own snippet" },
+      { title: "Second", url: "https://b.example/", citedText: "Quoted from the second page." },
+      { title: "Third", url: "https://c.example/" },
+    ],
+  });
+  assert.equal(text, `**First**: ${summary}\n\nSources:\n[1] First (2026-03-04) https://a.example/\n[2] https://b.example/\n  Quoted from the second page.\n[3] Third https://c.example/`);
+  assert.equal(formatForLLM({ provider: "exa", sources: [{ title: "Only", url: "https://a.example/" }] }), "[1] Only https://a.example/");
 });
 
 test("OpenAI Responses URL, markdown fallback, and event parsing", () => {
