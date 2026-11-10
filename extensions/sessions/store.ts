@@ -4,7 +4,10 @@ import { lstat, open, opendir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { excerpt } from "./excerpt.ts";
 
-export const LIMITS = { files: 5000, directories: 512, fileBytes: 32 * 1024 * 1024, scanBytes: 128 * 1024 * 1024, recordBytes: 8 * 1024 * 1024, entries: 100000, outputBytes: 12000 };
+// fileBytes and scanBytes count message records; readBytes counts everything read.
+export const LIMITS = { files: 5000, directories: 512, fileBytes: 32 * 1024 * 1024, scanBytes: 128 * 1024 * 1024, readBytes: 2 * 1024 * 1024 * 1024, recordBytes: 8 * 1024 * 1024, entries: 100000, outputBytes: 12000 };
+const CHUNK_BYTES = 1024 * 1024;
+const SCAN_BUDGET = "128 MiB message scan budget reached", READ_BUDGET = "2 GiB read budget reached";
 export type Scope = "project" | "all";
 export interface Context { agentDir: string; sessionDir: string; cwd: string; currentId?: string; currentFile?: string; signal?: AbortSignal }
 export interface Coverage { files: number; sessions: number; excludedCurrent: number; outOfScope: number; bytes: number; complete: boolean; warnings: string[]; warningCount: number }
@@ -67,45 +70,67 @@ function projection(message: any): Pick<Entry, "role" | "text" | "tools"> {
   return { role, text: role === "toolResult" ? "" : body, tools: [role === "toolResult" ? body : "", ...tools.map(safeText)].filter(Boolean).join("\n") };
 }
 
-export function parseDocument(source: string, coverage = newCoverage()): Document {
-  const lines = source.split("\n");
-  const h = header(JSON.parse(lines.shift()!));
-  const entries: Entry[] = [], byId = new Map<string, Entry>();
-  let name = "";
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line.trim()) continue;
-    if (Buffer.byteLength(line) > LIMITS.recordBytes) throw new Error("Session record exceeds 8 MiB");
+// Builds a document one JSONL record at a time, so a file is never held whole.
+class Builder {
+  readonly entries: Entry[] = [];
+  readonly byId = new Map<string, Entry>();
+  /** Bytes of message records: the ones that are projected and searched. */
+  messageBytes = 0;
+  private name = "";
+  private record = 1;
+  private readonly head: { id: string; cwd: string; timestamp?: string };
+  constructor(head: { id: string; cwd: string; timestamp?: string }) { this.head = head; }
+
+  /** Adds the next record. False means an incomplete trailing record was ignored. */
+  add(line: string, bytes: number, unterminated: boolean, coverage: Coverage): boolean {
+    this.record++;
+    if (!line.trim()) return true;
+    if (bytes > LIMITS.recordBytes) throw new Error("Session record exceeds 8 MiB");
     let value: any;
     try { value = JSON.parse(line); }
     catch (error) {
-      if (i === lines.length - 1 && !source.endsWith("\n")) { warn(coverage, `${h.id}: ignored an incomplete trailing record`); break; }
-      throw new Error(`Malformed JSON at record ${i + 2}`);
+      if (unterminated) { warn(coverage, `${this.head.id}: ignored an incomplete trailing record`); return false; }
+      throw new Error(`Malformed JSON at record ${this.record}`);
     }
-    if (!value || typeof value.type !== "string" || !identifier(value.id) || !(value.parentId === null || identifier(value.parentId))) throw new Error(`Invalid entry at record ${i + 2}`);
-    if (byId.has(value.id)) throw new Error(`Duplicate entry ID ${value.id}`);
-    if (entries.length >= LIMITS.entries) throw new Error("Session exceeds 100000 entries");
-    if (value.type === "session_info" && typeof value.name === "string") name = headBytes(safeText(value.name), 256);
+    if (!value || typeof value.type !== "string" || !identifier(value.id) || !(value.parentId === null || identifier(value.parentId))) throw new Error(`Invalid entry at record ${this.record}`);
+    if (this.byId.has(value.id)) throw new Error(`Duplicate entry ID ${value.id}`);
+    if (this.entries.length >= LIMITS.entries) throw new Error("Session exceeds 100000 entries");
+    if (value.type === "session_info" && typeof value.name === "string") this.name = headBytes(safeText(value.name), 256);
+    if (value.type === "message" && (this.messageBytes += bytes) > LIMITS.fileBytes) throw new Error("Session exceeds 32 MiB of messages");
     const entry: Entry = { id: value.id, parentId: value.parentId, type: value.type, timestamp: timestamp(value.timestamp), text: "", tools: "", ...(value.type === "message" ? projection(value.message) : {}) };
-    entries.push(entry); byId.set(entry.id, entry);
+    this.entries.push(entry); this.byId.set(entry.id, entry);
+    return true;
   }
-  // Validate the graph once, in linear time. Never invent ancestry for damaged files.
-  const done = new Set<string>(), parents = new Set<string>();
-  for (const entry of entries) {
-    const visiting = new Set<string>();
-    let current: Entry | undefined = entry;
-    while (current && !done.has(current.id)) {
-      if (visiting.has(current.id)) throw new Error("Cycle in session ancestry");
-      visiting.add(current.id);
-      if (current.parentId === null) break;
-      parents.add(current.parentId);
-      const parent = byId.get(current.parentId);
-      if (!parent) throw new Error(`Missing parent ${current.parentId}`);
-      current = parent;
+
+  finish(revision: string): Document {
+    const { entries, byId } = this;
+    // Validate the graph once, in linear time. Never invent ancestry for damaged files.
+    const done = new Set<string>(), parents = new Set<string>();
+    for (const entry of entries) {
+      const visiting = new Set<string>();
+      let current: Entry | undefined = entry;
+      while (current && !done.has(current.id)) {
+        if (visiting.has(current.id)) throw new Error("Cycle in session ancestry");
+        visiting.add(current.id);
+        if (current.parentId === null) break;
+        parents.add(current.parentId);
+        const parent = byId.get(current.parentId);
+        if (!parent) throw new Error(`Missing parent ${current.parentId}`);
+        current = parent;
+      }
+      for (const id of visiting) done.add(id);
     }
-    for (const id of visiting) done.add(id);
+    return { id: this.head.id, cwd: this.head.cwd, name: this.name, timestamp: timestamp(this.head.timestamp), revision, entries, byId, leaves: entries.filter(e => !parents.has(e.id)) };
   }
-  return { id: h.id, cwd: h.cwd, name, timestamp: timestamp(h.timestamp), revision: createHash("sha256").update(source).digest("hex").slice(0, 24), entries, byId, leaves: entries.filter(e => !parents.has(e.id)) };
+}
+
+export function parseDocument(source: string, coverage = newCoverage()): Document {
+  const lines = source.split("\n");
+  const builder = new Builder(header(JSON.parse(lines.shift()!)));
+  for (let i = 0; i < lines.length; i++) {
+    if (!builder.add(lines[i], Buffer.byteLength(lines[i]), i === lines.length - 1 && !source.endsWith("\n"), coverage)) break;
+  }
+  return builder.finish(createHash("sha256").update(source).digest("hex").slice(0, 24));
 }
 
 // Only the default grouped store and the active manager's resolved flat directory
@@ -159,11 +184,53 @@ async function recentFiles(ctx: Context, coverage: Coverage): Promise<string[]> 
   return found.sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path)).map(file => file.path);
 }
 
+// Streams one session file. Only message records count toward the per-file and
+// scan limits; other records, such as compaction archives holding megabytes of
+// images, are parsed for their place in the graph and cost little.
+// Returns undefined when a per-invocation budget runs out.
+async function readDocument(file: Awaited<ReturnType<typeof open>>, size: number, ctx: Context, coverage: Coverage, budget: { messages: number }): Promise<Document | undefined> {
+  const digest = createHash("sha256"), decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  const chunk = Buffer.allocUnsafe(Math.max(1, Math.min(size, CHUNK_BYTES)));
+  let builder: Builder | undefined, parts: Buffer[] = [], held = 0, position = 0;
+  const record = (bytes: Buffer, unterminated: boolean) => {
+    const text = decoder.decode(bytes);
+    if (!builder) { builder = new Builder(header(JSON.parse(text))); return; }
+    const before = builder.messageBytes;
+    builder.add(text, bytes.length, unterminated, coverage);
+    budget.messages += builder.messageBytes - before;
+  };
+  while (position < size) {
+    ctx.signal?.throwIfAborted();
+    const { bytesRead } = await file.read(chunk, 0, Math.min(chunk.length, size - position), position);
+    if (!bytesRead) throw new Error("Session changed while reading; retry");
+    const data = chunk.subarray(0, bytesRead);
+    digest.update(data);
+    position += bytesRead;
+    coverage.bytes += bytesRead; // Failed and abandoned reads still consume the budget.
+    if (coverage.bytes > LIMITS.readBytes) return undefined;
+    let start = 0;
+    for (let end = data.indexOf(10); end >= 0; end = data.indexOf(10, start)) {
+      const piece = data.subarray(start, end);
+      record(parts.length ? Buffer.concat([...parts, piece]) : piece, false);
+      parts = []; held = 0; start = end + 1;
+      if (budget.messages > LIMITS.scanBytes) return undefined;
+    }
+    if (start < data.length) {
+      if ((held += data.length - start) > LIMITS.recordBytes) throw new Error("Session record exceeds 8 MiB");
+      parts.push(Buffer.from(data.subarray(start)));
+    }
+  }
+  if (held) record(Buffer.concat(parts), true);
+  if (!builder) throw new Error("Missing or oversized session header");
+  return builder.finish(digest.digest("hex").slice(0, 24));
+}
+
 async function* documents(ctx: Context, scope: Scope, coverage: Coverage, wanted?: string): AsyncGenerator<Document> {
   const cwd = await canonical(ctx.cwd), currentFile = ctx.currentFile ? await canonical(ctx.currentFile) : undefined;
   // Most sessions share a few working directories; resolve each once per scan.
   const resolved = new Map<string, string>();
   const project = async (path: string) => resolved.get(path) ?? (resolved.set(path, await canonical(path)), resolved.get(path)!);
+  const budget = { messages: 0 };
   for (const path of await recentFiles(ctx, coverage)) {
     ctx.signal?.throwIfAborted();
     if (path === currentFile) { coverage.excludedCurrent++; continue; }
@@ -172,7 +239,7 @@ async function* documents(ctx: Context, scope: Scope, coverage: Coverage, wanted
       file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       const stat = await file.stat();
       if (!stat.isFile()) throw new Error("Not a regular file");
-      if (coverage.bytes + Math.min(stat.size, 16384) > LIMITS.scanBytes) { warn(coverage, "128 MiB scan budget reached"); return; }
+      if (coverage.bytes + Math.min(stat.size, 16384) > LIMITS.readBytes) { warn(coverage, READ_BUDGET); return; }
       const prefix = Buffer.alloc(Math.min(stat.size, 16384));
       const first = await file.read(prefix, 0, prefix.length, 0);
       coverage.bytes += first.bytesRead;
@@ -182,20 +249,10 @@ async function* documents(ctx: Context, scope: Scope, coverage: Coverage, wanted
       if (h.id === ctx.currentId) { coverage.excludedCurrent++; continue; }
       if (scope === "project" && await project(h.cwd) !== cwd) { coverage.outOfScope++; continue; }
       if (wanted !== undefined && h.id !== wanted) continue;
-      if (stat.size > LIMITS.fileBytes) throw new Error("Session exceeds 32 MiB");
-      if (coverage.bytes + stat.size > LIMITS.scanBytes) { warn(coverage, "128 MiB scan budget reached"); return; }
-      const buffer = Buffer.alloc(stat.size);
-      let read = 0;
-      while (read < buffer.length) {
-        ctx.signal?.throwIfAborted();
-        const chunk = await file.read(buffer, read, Math.min(65536, buffer.length - read), read);
-        if (!chunk.bytesRead) throw new Error("Session changed while reading; retry");
-        read += chunk.bytesRead;
-        coverage.bytes += chunk.bytesRead; // Failed/truncated reads still consume the scan budget.
-      }
+      const doc = await readDocument(file, stat.size, ctx, coverage, budget);
+      if (!doc) { warn(coverage, budget.messages > LIMITS.scanBytes ? SCAN_BUDGET : READ_BUDGET); return; }
       const after = await file.stat();
       if (stat.size !== after.size || stat.mtimeMs !== after.mtimeMs || stat.ctimeMs !== after.ctimeMs) throw new Error("Session changed while reading; retry");
-      const doc = parseDocument(new TextDecoder("utf-8", { fatal: true }).decode(buffer), coverage);
       coverage.sessions++;
       yield doc;
     } catch (error: any) {

@@ -219,11 +219,40 @@ test("IDs never become paths, symlink descendants are not followed, and parentSe
 
 test("large files, records and scan budgets produce warnings instead of unbounded reads", async t => {
   const { ctx, save } = await setup(t);
-  const path = await save(); await truncate(path, LIMITS.fileBytes + 1);
+  // No newline ever arrives, so the reader gives up at the record limit.
+  const path = await save(); await truncate(path, LIMITS.recordBytes * 4);
   const result = await searchSessions(ctx, { query: "alpha" });
   assert.equal(result.hits.length, 0); assert.equal(result.coverage.complete, false);
-  assert.ok(result.coverage.bytes <= 16384);
+  assert.match(result.coverage.warnings[0], /record exceeds 8 MiB/);
+  assert.ok(result.coverage.bytes <= LIMITS.recordBytes + 2 * 1024 * 1024);
   assert.throws(() => parseDocument(source("id", "/project", [entry("a", null, "x".repeat(LIMITS.recordBytes))])), /record exceeds/);
+});
+
+test("compaction archives do not count against the message limits, so long sessions stay searchable", async t => {
+  const limits = { ...LIMITS };
+  t.after(() => { Object.assign(LIMITS, limits); });
+  const { ctx, save } = await setup(t);
+  // Five 7 MiB archives: more than the per-file message limit, and each spans several read chunks.
+  const archive = (id: string, parentId: string) => ({ type: "compaction", id, parentId, timestamp: date, summary: "alpha summary is not searched", details: { snapcompact: { frames: [{ data: "A".repeat(7 * 1024 * 1024) }] } } });
+  const entries: any[] = [entry("a", null, "The alpha decision used SQLite.")];
+  for (let i = 0; i < 5; i++) entries.push(archive(`c${i}`, i ? `m${i - 1}` : "a"), entry(`m${i}`, `c${i}`, `alpha after archive ${i}`, "assistant"));
+  const path = await save("long", entries);
+  assert.ok((await stat(path)).size > LIMITS.fileBytes);
+  const result = await searchSessions(ctx, { query: "alpha", limit: 10 });
+  assert.equal(result.coverage.complete, true);
+  assert.equal(result.matching_entries, 6);
+  const page = await readSession(ctx, { session_id: "long", leaf_id: "m4" });
+  assert.match(page.text, /alpha after archive 4/);
+  assert.equal(page.revision, parseDocument(await readFile(path, "utf8")).revision);
+
+  // Messages still have a per-file limit, and everything read has a per-invocation one.
+  LIMITS.fileBytes = 60;
+  const wordy = await searchSessions(ctx, { query: "alpha" });
+  assert.equal(wordy.hits.length, 0); assert.match(wordy.coverage.warnings[0], /exceeds 32 MiB of messages/);
+  Object.assign(LIMITS, limits);
+  LIMITS.readBytes = 3 * 1024 * 1024;
+  const starved = await searchSessions(ctx, { query: "alpha" });
+  assert.equal(starved.hits.length, 0); assert.match(starved.coverage.warnings[0], /read budget reached/);
 });
 
 test("a scan that runs out of budget has covered the most recently used sessions", async t => {
@@ -235,7 +264,7 @@ test("a scan that runs out of budget has covered the most recently used sessions
     const filler = "x".repeat(4000);
     const recent = await save(newer, [entry("a", null, `alpha ${newer} ${filler}`)]), stale = await save(older, [entry("a", null, `alpha ${older} ${filler}`)]);
     await utimes(stale, new Date("2026-01-01"), new Date("2026-01-01")); await utimes(recent, new Date("2026-06-01"), new Date("2026-06-01"));
-    LIMITS.scanBytes = 10000; // One file: its header prefix and its body are both counted.
+    LIMITS.scanBytes = 6000; // Room for one file's messages.
     const result = await searchSessions(ctx, { query: "alpha" });
     LIMITS.scanBytes = budget;
     assert.deepEqual(result.hits.map(hit => hit.session_id), [newer]);
