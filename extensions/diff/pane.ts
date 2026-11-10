@@ -10,7 +10,8 @@ import { SOURCES, type Source } from "./git.ts";
 import type { Palette } from "./render.ts";
 
 const VIEWER = join(import.meta.dirname, "viewer.ts");
-const RATIO = 40;
+/** The pane's share of the split it makes with Pi's pane. */
+const SHARE = 1 / 3;
 /** Tools whose `path` argument names the file they changed. */
 const EDITORS = new Set(["edit", "write", "multiedit", "apply_patch"]);
 /** Tools that may change files without naming them. */
@@ -136,14 +137,22 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
     const root = await gitRoot(ctx.cwd);
     if (!root) throw new Error("/diff needs a Git working tree");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    await exec(rex, [
-      "split", "-s", session, "-b", block, "--split=right", "--ratio", String(RATIO), "--focus=false",
-      "--label", "Diff", "--shell=none", "-c", root, "--",
+    const created = await exec(rex, [
+      "split", "-s", session, "-b", block, "--split=right", "--ratio", String(Math.round(SHARE * 100)), "--focus=false",
+      "--label", "Diff", "--shell=none", "-c", root, "--json", "--",
       node, VIEWER, "--root", root, "--ipc", dir, "--pi-pid", String(pid),
       "--palette", JSON.stringify(options.palette(ctx)), "--source", source,
       ...(options.highlighter ? ["--highlighter", options.highlighter] : []),
       ...(focus ? ["--focus", focus] : []),
     ], ctx.cwd);
+    // Rex splits evenly whatever --ratio says, so move the border afterwards.
+    // The pane is already open, so a failure here only leaves it wider.
+    let pane: unknown;
+    try { pane = JSON.parse(created).block_ids?.[0]; } catch {}
+    if (typeof pane !== "string") return;
+    await exec(rex, ["api", "call", "--session", session, "session.resize_pane", JSON.stringify({
+      session_id: session, direction: "horizontal", before_block_id: block, after_block_id: pane, ratio: Math.round((1 - SHARE) * 10_000) / 10_000,
+    })], ctx.cwd).catch(() => undefined);
   }
 
   // Automatic opening: armed per session, with a baseline of the tree's state

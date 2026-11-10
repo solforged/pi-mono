@@ -177,6 +177,7 @@ function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean;
     if (args[0] === "--version") return "v26.1.0\n";
     if (args[0] === "rev-parse") return "/repo\n";
     if (args[0] === "status") return state.status;
+    if (args[0] === "split") return JSON.stringify({ block_ids: ["block:pane"] });
     return "{}";
   };
   registerDiff(pi as any, {
@@ -205,11 +206,15 @@ test("opens the viewer in a Rex split beside Pi's own pane", async (t) => {
   const h = harness({ PATH: bin, REX_SESSION: "session:s", REX_BLOCK: "block:b" }, dir);
   await h.command.handler("staged", h.ctx);
   assert.deepEqual(h.notes, []);
-  const [rex, args] = h.calls.at(-1)!;
+  const [rex, args] = h.splits()[0];
   assert.equal(rex, join(bin, "rex"));
-  assert.deepEqual(args.slice(0, 15), ["split", "-s", "session:s", "-b", "block:b", "--split=right", "--ratio", "40", "--focus=false", "--label", "Diff", "--shell=none", "-c", "/repo", "--"]);
-  assert.equal(args[15], join(bin, "node"));
-  assert.match(args[16], /extensions\/diff\/viewer\.ts$/);
+  assert.deepEqual(args.slice(0, 16), ["split", "-s", "session:s", "-b", "block:b", "--split=right", "--ratio", "33", "--focus=false", "--label", "Diff", "--shell=none", "-c", "/repo", "--json", "--"]);
+  assert.equal(args[16], join(bin, "node"));
+  assert.match(args[17], /extensions\/diff\/viewer\.ts$/);
+  // Rex ignores --ratio, so the border is moved to give the pane a third.
+  const [, resize] = h.calls.at(-1)!;
+  assert.deepEqual(resize.slice(0, 5), ["api", "call", "--session", "session:s", "session.resize_pane"]);
+  assert.deepEqual(JSON.parse(resize[5]), { session_id: "session:s", direction: "horizontal", before_block_id: "block:b", after_block_id: "block:pane", ratio: 0.6667 });
   assert.deepEqual(args.slice(-8), ["--ipc", dir, "--pi-pid", "4242", "--palette", "{\"accent\":\"#ff00ff\"}", "--source", "staged"]);
 
   await h.command.handler("bogus", h.ctx);

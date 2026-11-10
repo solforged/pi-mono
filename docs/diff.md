@@ -1,7 +1,7 @@
 # Diff pane
 
 `extensions/diff` adds `/diff`, which opens a live Git diff in a Rex pane to
-the right of Pi. The pane takes 40% of the width, and Pi reflows into the rest.
+the right of Pi. The pane takes a third of the width, and Pi reflows into the rest.
 Run `/diff` again, or press `q` in the pane, to close it. The pane also closes
 when Pi exits.
 
