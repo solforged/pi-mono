@@ -178,11 +178,12 @@ export default function (pi: ExtensionAPI) {
     description: "Move this session into a new Git worktree and pi/<name> branch created from HEAD. Ends the current response; the session continues in the worktree.",
     promptSnippet: "Move this session into its own Git worktree and branch",
     promptGuidelines: [`Call ${TOOL} alone, before the first edit, for non-trivial work in a main checkout, unless the user asked to work in place.`],
-    parameters: Type.Object({ name: Type.Optional(Type.String({ description: "Short kebab-case task name, used if the session has no title" })) }),
+    parameters: Type.Object({ name: Type.Optional(Type.String({ description: "Fallback kebab-case name, used only when the session has no title; the branch follows the title" })) }),
     async execute(_id, params: { name?: string }, _signal, _onUpdate, ctx) {
       pending = await prepare(ctx, params.name);
+      // The moved session's report carries the paths and notes; this only answers the call.
       return {
-        content: [{ type: "text", text: `Created ${pending.path} on ${pending.branch}.${describe(pending, "the main checkout")} The session moves there when this response ends.` }],
+        content: [{ type: "text", text: `Worktree ready on ${pending.branch}; the session moves there next and continues the task.` }],
         details: { ...pending },
         terminate: true,
       };
@@ -196,7 +197,7 @@ export default function (pi: ExtensionAPI) {
     return undefined;
   };
 
-  pi.on("tool_call", (event, ctx) => {
+  pi.on("tool_call", async (event, ctx) => {
     const turn = latestAssistant(ctx);
     const moving = turn?.message.content?.some?.((block: any) => block.type === "toolCall" && block.name === TOOL);
     if (event.toolName !== TOOL && (pending || moving)) return { block: true, reason: "The session is moving to its worktree; continue there after the move.", terminate: true };
@@ -205,7 +206,9 @@ export default function (pi: ExtensionAPI) {
     if (warned && warned !== turn?.id) return;
     if (!editsMainCheckout(checkout, ctx.cwd, (event.input as { path?: unknown }).path)) return;
     warned = turn?.id ?? "";
-    return { block: true, reason: `This session is in the main checkout. For non-trivial work, call ${TOOL} first. For a trivial change, or if the user asked to work here, retry the edit.` };
+    const dirty = !!await run(["status", "--porcelain"], checkout!.top).catch(() => "");
+    const state = dirty ? " It has uncommitted changes, which a new worktree, created from HEAD, would not include." : "";
+    return { block: true, reason: `This session is in the main checkout.${state} For non-trivial work, call ${TOOL} first. For a trivial change, or if the user asked to work here, retry the edit.` };
   });
 
   // Tools cannot switch sessions; hand the move to the command once Pi is idle.

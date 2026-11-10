@@ -10,8 +10,9 @@ branch, returns, or resumes sessions from other worktrees.
 In a main checkout the model has an `enter_worktree` tool and a rule to call
 it before the first edit of non-trivial work, unless you asked to work in
 place. In the TUI the first edits inside the checkout are turned back once
-with that hint, including any others in the same batch. A retry goes through,
-so trivial fixes stay put.
+with that hint, including any others in the same batch; the hint says when the
+checkout has uncommitted changes a worktree would leave behind. A retry goes
+through, so trivial fixes stay put.
 
 The tool ends the current response; once Pi is idle the session moves and
 continues the task. Any call batched with the move is blocked so nothing lands
@@ -28,7 +29,7 @@ same layout as `ga`, on branch `pi/<slug>` from the current `HEAD`. The slug
 is the first three words of the session title, without filler such as "a" or
 "the" and at most 28 characters ("Assess a fullscreen diff extension" becomes
 `assess-fullscreen-diff`). Without a title it uses the name the model passed,
-else the session ID; taken names get `-2`, `-3`. Uncommitted changes in the main checkout are
+only as a fallback, else the session ID; taken names get `-2`, `-3`. Uncommitted changes in the main checkout are
 not copied; you get a warning instead. `mise trust` runs on the new directory.
 
 The branch follows the session title: setting or generating a title renames
