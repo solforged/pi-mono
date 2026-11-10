@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { appendFile, mkdir, readFile, stat, symlink, truncate, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, stat, symlink, truncate, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { LIMITS, newCoverage, parseDocument, readSession, searchSessions, storageRoots, type Context } from "../extensions/sessions/store.ts";
@@ -224,6 +224,23 @@ test("large files, records and scan budgets produce warnings instead of unbounde
   assert.equal(result.hits.length, 0); assert.equal(result.coverage.complete, false);
   assert.ok(result.coverage.bytes <= 16384);
   assert.throws(() => parseDocument(source("id", "/project", [entry("a", null, "x".repeat(LIMITS.recordBytes))])), /record exceeds/);
+});
+
+test("a scan that runs out of budget has covered the most recently used sessions", async t => {
+  const budget = LIMITS.scanBytes;
+  t.after(() => { LIMITS.scanBytes = budget; });
+  // Either file name may come first in directory order, so both are tried as the newer one.
+  for (const [newer, older] of [["aaa", "zzz"], ["zzz", "aaa"]]) {
+    const { ctx, save } = await setup(t);
+    const filler = "x".repeat(4000);
+    const recent = await save(newer, [entry("a", null, `alpha ${newer} ${filler}`)]), stale = await save(older, [entry("a", null, `alpha ${older} ${filler}`)]);
+    await utimes(stale, new Date("2026-01-01"), new Date("2026-01-01")); await utimes(recent, new Date("2026-06-01"), new Date("2026-06-01"));
+    LIMITS.scanBytes = 10000; // One file: its header prefix and its body are both counted.
+    const result = await searchSessions(ctx, { query: "alpha" });
+    LIMITS.scanBytes = budget;
+    assert.deepEqual(result.hits.map(hit => hit.session_id), [newer]);
+    assert.equal(result.coverage.complete, false);
+  }
 });
 
 test("hits and warnings remain bounded, terminal controls are escaped, search flags are validated", async t => {

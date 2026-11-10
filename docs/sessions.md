@@ -73,9 +73,10 @@ results after a file changes or disappears. Scans report incomplete coverage
 for unreadable, malformed, unsupported, or oversized files. Limits are 5,000
 files, 512 directories, 20,000 directory entries, 32 MiB per file, 8 MiB per
 record, 100,000 entries per file, and 128 MiB read per invocation. Header reads
-count toward that budget. The reader rejects ambiguous IDs and damaged entry
-graphs. Versions 2 and 3 are supported; resume legacy version-1 files in Pi to
-migrate them first. The extension never migrates archives itself.
+count toward that budget, and files are read most recently used first. The
+reader rejects ambiguous IDs and damaged entry graphs. Versions 2 and 3 are
+supported; resume legacy version-1 files in Pi to migrate them first. The
+extension never migrates archives itself.
 
 ## Evidence and privacy
 

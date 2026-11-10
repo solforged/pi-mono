@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { open, opendir, realpath } from "node:fs/promises";
+import { lstat, open, opendir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { excerpt } from "./excerpt.ts";
 
@@ -152,9 +152,19 @@ async function* files(ctx: Context, coverage: Coverage): AsyncGenerator<string> 
   }
 }
 
+// Most recently used first, so a scan that stops at a limit has covered the newest sessions.
+async function recentFiles(ctx: Context, coverage: Coverage): Promise<string[]> {
+  const found: Array<{ path: string; mtime: number }> = [];
+  for await (const path of files(ctx, coverage)) found.push({ path, mtime: await lstat(path).then(s => s.mtimeMs, () => 0) });
+  return found.sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path)).map(file => file.path);
+}
+
 async function* documents(ctx: Context, scope: Scope, coverage: Coverage, wanted?: string): AsyncGenerator<Document> {
   const cwd = await canonical(ctx.cwd), currentFile = ctx.currentFile ? await canonical(ctx.currentFile) : undefined;
-  for await (const path of files(ctx, coverage)) {
+  // Most sessions share a few working directories; resolve each once per scan.
+  const resolved = new Map<string, string>();
+  const project = async (path: string) => resolved.get(path) ?? (resolved.set(path, await canonical(path)), resolved.get(path)!);
+  for (const path of await recentFiles(ctx, coverage)) {
     ctx.signal?.throwIfAborted();
     if (path === currentFile) { coverage.excludedCurrent++; continue; }
     let file: Awaited<ReturnType<typeof open>> | undefined;
@@ -170,7 +180,7 @@ async function* documents(ctx: Context, scope: Scope, coverage: Coverage, wanted
       if (newline < 0) throw new Error("Missing or oversized session header");
       const h = header(JSON.parse(prefix.subarray(0, newline).toString("utf8")));
       if (h.id === ctx.currentId) { coverage.excludedCurrent++; continue; }
-      if (scope === "project" && await canonical(h.cwd) !== cwd) { coverage.outOfScope++; continue; }
+      if (scope === "project" && await project(h.cwd) !== cwd) { coverage.outOfScope++; continue; }
       if (wanted !== undefined && h.id !== wanted) continue;
       if (stat.size > LIMITS.fileBytes) throw new Error("Session exceeds 32 MiB");
       if (coverage.bytes + stat.size > LIMITS.scanBytes) { warn(coverage, "128 MiB scan budget reached"); return; }
@@ -221,7 +231,7 @@ export async function searchSessions(ctx: Context, options: SearchOptions) {
       sessions.set(doc.id, { matches: 0, hits: [] });
       continue;
     }
-    const session = { matches: 0, hits: [] as Hit[] };
+    const session = { matches: 0, hits: [] as Hit[] }, meta = metadata(doc);
     sessions.set(doc.id, session);
     for (const entry of doc.entries) {
       ctx.signal?.throwIfAborted();
@@ -230,7 +240,10 @@ export async function searchSessions(ctx: Context, options: SearchOptions) {
       session.matches++;
       // Adjacent terms win; recency breaks ties, not relevance.
       const score = lower.includes(terms.join(" ")) ? 2 : 1;
-      session.hits.push({ ...metadata(doc), entry_id: entry.id, parent_id: entry.parentId, role: entry.role ?? entry.type, entry_timestamp: entry.timestamp, ...excerpt(text, terms), score });
+      const hit = { ...meta, entry_id: entry.id, parent_id: entry.parentId, role: entry.role ?? entry.type, entry_timestamp: entry.timestamp };
+      // An excerpt is built only for a hit that makes this session's shortlist.
+      if (session.hits.length >= limit && compare({ ...hit, excerpt: "", excerpt_truncated: false, score }, session.hits.at(-1)!) >= 0) continue;
+      session.hits.push({ ...hit, ...excerpt(text, terms), score });
       session.hits.sort(compare);
       if (session.hits.length > limit) session.hits.pop();
     }
