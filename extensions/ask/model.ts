@@ -7,7 +7,8 @@ export const MAX_QUESTIONS = 4, MIN_OPTIONS = 2, MAX_OPTIONS = 4;
 
 export interface Option { label: string; description?: string; preview?: string }
 export interface Question { question: string; header?: string; options: Option[]; recommended?: number; multi?: boolean }
-export interface Answer { picked: number[]; custom?: string }
+/** Picked options, an optional note on them, and optional typed text (which replaces a single choice). */
+export interface Answer { picked: number[]; note?: string; custom?: string }
 export type Outcome = "answered" | "discuss" | "handback" | "interrupted" | "unavailable" | "invalid";
 export interface Item { question: string; header?: string; answer?: string }
 export interface Details { outcome: Outcome; items: Item[] }
@@ -62,7 +63,7 @@ export function invalid(questions: Question[]): string | undefined {
   }
 }
 
-export type Step = "edit" | "submit" | "discuss" | undefined;
+export type Step = "edit" | "note" | "submit" | "discuss" | undefined;
 
 /**
  * Questionnaire state, independent of rendering. Each question lists its
@@ -101,9 +102,33 @@ export class Form {
     if (this.reviewing) return this.review === 0 ? "submit" : "discuss";
     const q = this.question!, row = this.cursor[this.tab]!;
     if (row === this.ownRow) return "edit";
-    if (!q.multi) this.set({ picked: [row] });
+    if (!q.multi) this.set(this.single(row));
     else if (!this.answers[this.tab]) this.set({ picked: [row] });
     return this.advance();
+  }
+  /** Starts a note on the focused option; the own-answer row and the review tab take none. */
+  startNote(): Step {
+    if (this.reviewing || this.cursor[this.tab]! >= this.ownRow) return;
+    return "note";
+  }
+  /** The note being edited on this tab, if any. */
+  get noteText() { return this.answers[this.tab]?.note ?? ""; }
+  /**
+   * Picks the focused option with a note on the answer. Single-select moves on;
+   * multi-select stays so more options can be toggled. Blank text removes the note.
+   */
+  note(text: string): Step {
+    const q = this.question!, row = this.cursor[this.tab]!, value = text.trim();
+    const previous = this.answers[this.tab];
+    const base = q.multi ? { ...previous, picked: [...new Set([...(previous?.picked ?? []), row])].sort((a, b) => a - b) } : { picked: [row] };
+    const { note: _old, ...rest } = base as Answer;
+    this.set({ ...rest, ...(value ? { note: value } : {}) });
+    return q.multi ? undefined : this.advance();
+  }
+  /** A single choice keeps its note only when the same option is chosen again. */
+  private single(row: number): Answer {
+    const previous = this.answers[this.tab];
+    return previous?.note && !previous.custom && previous.picked[0] === row ? { picked: [row], note: previous.note } : { picked: [row] };
   }
   /** 1-based shortcut: single-select chooses, multi-select toggles. */
   number(n: number): Step {
@@ -115,8 +140,9 @@ export class Form {
   }
   /** Typed text replaces a single choice and joins multi-select picks; blank text with nothing picked leaves it to the agent. */
   custom(text: string): Step {
-    const value = text.trim(), picked = this.question!.multi ? this.answers[this.tab]?.picked ?? [] : [];
-    this.set({ picked, ...(value ? { custom: value } : {}) });
+    const multi = this.question!.multi, previous = this.answers[this.tab], value = text.trim();
+    const picked = multi ? previous?.picked ?? [] : [];
+    this.set({ picked, ...(multi && previous?.note ? { note: previous.note } : {}), ...(value ? { custom: value } : {}) });
     return this.advance();
   }
   private set(answer: Answer) { this.answers[this.tab] = answer.picked.length || answer.custom ? answer : undefined; }
@@ -133,6 +159,7 @@ const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(ma
 export function answerText(q: Question, a: Answer | undefined): string | undefined {
   if (!a) return;
   const parts = [a.picked.map(i => q.options[i]?.label).filter(Boolean).join(", ")].filter(Boolean);
+  if (a.note) parts.push(`note: "${a.note}"`);
   if (a.custom) parts.push(`own answer: "${a.custom}"`);
   return parts.join("; ") || undefined;
 }

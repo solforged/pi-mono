@@ -62,6 +62,46 @@ test("multi-select toggles, keeps typed text with picks, and advances through re
   assert.equal(text, 'User answers:\n- Many? → C; own answer: "and D"\n- One? → no answer; decide yourself and state your assumption');
 });
 
+test("a note picks the focused option with it, and reaches the agent beside the choice", () => {
+  const form = new Form(normalize([q("Q?", { recommended: 1 })]));
+  assert.equal(form.startNote(), "note");
+  assert.equal(form.noteText, "");
+  assert.equal(form.note("  only if it stays portable "), "submit");
+  assert.deepEqual(form.answers[0], { picked: [1], note: "only if it stays portable" });
+  assert.equal(resultText({ outcome: "answered", items: items(form.questions, form.answers) }), 'User answers:\n- Q? → B; note: "only if it stays portable"');
+  // Choosing the same option keeps the note; another option or an own answer drops it.
+  assert.equal(form.noteText, "only if it stays portable");
+  form.enter();
+  assert.deepEqual(form.answers[0], { picked: [1], note: "only if it stays portable" });
+  form.move(1); form.enter();
+  assert.deepEqual(form.answers[0], { picked: [2] });
+  form.move(-1); form.note("again"); form.custom("something else");
+  assert.deepEqual(form.answers[0], { picked: [], custom: "something else" });
+  // Blank text clears the note but still chooses; the own-answer row takes no note.
+  form.note("x"); form.note(" ");
+  assert.deepEqual(form.answers[0], { picked: [1] });
+  form.move(5);
+  assert.equal(form.startNote(), undefined);
+});
+
+test("multi-select notes add the focused option and stay on the question", () => {
+  const form = new Form(normalize([q("Many?", { multi: true }), q("One?")]));
+  form.number(1);
+  form.move(1);
+  assert.equal(form.note("for reads"), undefined);
+  assert.equal(form.tab, 0);
+  assert.deepEqual(form.answers[0], { picked: [0, 1], note: "for reads" });
+  form.toggle();
+  assert.deepEqual(form.answers[0], { picked: [0], note: "for reads" });
+  form.move(5); form.custom("and D");
+  assert.equal(items(form.questions, form.answers)[0].answer, 'A; note: "for reads"; own answer: "and D"');
+  // The own answer moved on to the next question; the review tab takes no note.
+  assert.equal(form.tab, 1);
+  form.go(1);
+  assert.equal(form.reviewing, true);
+  assert.equal(form.startNote(), undefined);
+});
+
 test("Enter on a multi-select question with nothing picked picks the focused option", () => {
   const form = new Form(normalize([q("Many?", { multi: true, recommended: 1 }), q("One?")]));
   assert.equal(form.enter(), undefined);

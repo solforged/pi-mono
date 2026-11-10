@@ -14,7 +14,8 @@ export function askInTerminal(ctx: ExtensionContext, questions: Question[], sign
   if (signal?.aborted) return Promise.resolve({ outcome: "interrupted" });
   return ctx.ui.custom<Ending>((tui, theme, keybindings, done) => {
     const form = new Form(questions);
-    let editing = false, cache: string[] | undefined, cacheWidth = 0, closed = false;
+    // "custom" edits the own-answer row; "note" edits a note on the focused option.
+    let editing: false | "custom" | "note" = false, cache: string[] | undefined, cacheWidth = 0, closed = false;
     const finish = (ending: Ending) => {
       if (closed) return;
       closed = true; signal?.removeEventListener("abort", abort); done(ending);
@@ -31,10 +32,15 @@ export function askInTerminal(ctx: ExtensionContext, questions: Question[], sign
     const step = (next: ReturnType<Form["enter"]>) => {
       if (next === "submit") return finish({ outcome: "answered", answers: form.answers });
       if (next === "discuss") return finish({ outcome: "discuss" });
-      if (next === "edit") { editing = true; editor.setText(form.answers[form.tab]?.custom ?? ""); }
+      if (next === "edit") { editing = "custom"; editor.setText(form.answers[form.tab]?.custom ?? ""); }
+      if (next === "note") { editing = "note"; editor.setText(form.noteText); }
       refresh();
     };
-    editor.onSubmit = value => { editing = false; editor.setText(""); step(form.custom(value)); };
+    editor.onSubmit = value => {
+      const mode = editing;
+      editing = false; editor.setText("");
+      step(mode === "note" ? form.note(value) : form.custom(value));
+    };
 
     function handleInput(data: string) {
       if (editing) {
@@ -49,6 +55,7 @@ export function askInTerminal(ctx: ExtensionContext, questions: Question[], sign
       if (keybindings.matches(data, "tui.select.down")) { form.move(1); return refresh(); }
       if (data === " " || matchesKey(data, Key.space)) { form.toggle(); return refresh(); }
       if (keybindings.matches(data, "tui.select.confirm")) return step(form.enter());
+      if (data === "n" || matchesKey(data, "n")) return step(form.startNote());
       if (/^[1-9]$/.test(data)) return step(form.number(Number(data)));
     }
 
@@ -89,10 +96,12 @@ export function askInTerminal(ctx: ExtensionContext, questions: Question[], sign
           add(`${at ? theme.fg("accent", "› ") : "  "}${theme.fg(at ? "accent" : "text", `${i + 1}. ${mark}${option.label}`)}${tag}`);
           if (option.description) add(theme.fg("muted", option.description), 6);
         });
+        if (answer?.note && editing !== "note") add(theme.fg("muted", `✎ Note: ${answer.note}`), 4);
         const own = cursor === form.ownRow;
         add(`${own ? theme.fg("accent", "› ") : "  "}${theme.fg(own ? "accent" : "dim", `${form.ownRow + 1}. ${answer?.custom ? `✎ "${answer.custom}"` : `${OWN}…`}`)}`);
         if (editing) {
           lines.push("");
+          if (editing === "note") add(theme.fg("muted", `Note on "${q.options[cursor]?.label}"`));
           for (const part of editor.render(Math.max(1, w - 2))) lines.push(` ${part}`);
         }
         const preview = q.options[cursor]?.preview;
@@ -104,8 +113,11 @@ export function askInTerminal(ctx: ExtensionContext, questions: Question[], sign
         }
       }
       lines.push("");
-      const keys = editing ? "enter save (blank: the agent decides) · shift+enter newline · esc back"
-        : [form.tabs > 1 ? "tab/←→ question" : "", "↑↓ move", q?.multi ? "space toggle · enter next" : "enter choose", process.env.PI_REX_CHILD ? "esc hand back" : "esc discuss in chat"].filter(Boolean).join(" · ");
+      const onOption = !!q && form.cursor[form.tab]! < form.ownRow;
+      const keys = editing === "note" ? `enter ${q?.multi ? "save note" : "choose with this note"} (blank: no note) · shift+enter newline · esc back`
+        : editing ? "enter save (blank: the agent decides) · shift+enter newline · esc back"
+        : [form.tabs > 1 ? "tab/←→ question" : "", "↑↓ move", q?.multi ? "space toggle · enter next" : "enter choose", onOption ? "n add a note" : "",
+          process.env.PI_REX_CHILD ? "esc hand back" : "esc discuss in chat"].filter(Boolean).join(" · ");
       add(theme.fg("dim", keys));
       lines.push(theme.fg("accent", "─".repeat(w)));
       cache = lines.map(text => truncateToWidth(text, w));

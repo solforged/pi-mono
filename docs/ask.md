@@ -30,6 +30,13 @@ toggles in multi-select. Every question has a last row for typing your own
 answer, which multi-select keeps alongside checked options. With several
 questions, Tab and the arrow keys switch between them, and a Review tab submits.
 
+To accept an option with a caveat, press `n` on it and type a note. Saving
+chooses that option with the note; multi-select checks it and stays on the
+question. The agent receives `Postgres; note: "…"`. Choosing another option or
+typing your own answer drops the note, and saving a blank note removes it.
+Notes are available in the terminal UI only; RPC hosts can type their own
+answer instead.
+
 There are three outcomes:
 
 - **Answered.** Unanswered questions, or a blank typed answer, go back as
