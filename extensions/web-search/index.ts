@@ -3,7 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { searchOrder } from "./format.ts";
-import { availableProviders, executeSearch, registryAuth, type SearchAuth, type SearchQuery } from "./search.ts";
+import { availableProviders, executeSearch, orderByHealth, registryAuth, timedOutRecently, type SearchAuth, type SearchQuery } from "./search.ts";
 
 const Recency = StringEnum(["day", "week", "month", "year"] as const);
 
@@ -36,13 +36,13 @@ export default function (pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const query = args.trim();
       const auth = authFor(ctx);
-      const order = searchOrder(ctx.model?.provider);
+      const order = orderByHealth(searchOrder(ctx.model?.provider));
       if (!query || query === "check") {
         const available = await availableProviders(auth);
         const lines = [
           `Session: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none"}`,
           `Order: ${order.join(" → ")}`,
-          ...order.map((id) => `${id}: ${available[id] ? "available" : "not configured"}`),
+          ...order.map((id) => `${id}: ${available[id] ? "available" : "not configured"}${timedOutRecently(id) ? "; timed out recently, so tried last for now" : ""}`),
           "Prefers the live Grok or Codex backend, then falls through. Set EXA_API_KEY for the last backend.",
         ];
         report(ctx, lines.join("\n"));

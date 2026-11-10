@@ -3,7 +3,7 @@ import test from "node:test";
 import { codexModels, consumeCodexEvents, extractTextSources, resolveCodexUrl, shouldRetryCodexModel } from "../extensions/web-search/codex.ts";
 import { buildExaBody, parseExaResponse, recencyStartDate, synthesizeAnswer } from "../extensions/web-search/exa.ts";
 import { errorDetail, formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, withRecencyHint } from "../extensions/web-search/format.ts";
-import { executeSearch, registryAuth, type SearchAuth } from "../extensions/web-search/search.ts";
+import { executeSearch, orderByHealth, registryAuth, type SearchAuth } from "../extensions/web-search/search.ts";
 import { sseText } from "../extensions/web-search/sse.ts";
 import { buildXaiBody, parseXaiResponse, xaiModels } from "../extensions/web-search/xai.ts";
 
@@ -251,22 +251,22 @@ test("a stalled backend times out on its own and the next one answers", async ()
   const fetchImpl = async (input: any, init?: RequestInit) => String(input).includes("api.openai.com")
     ? hang(init)
     : jsonResponse({ results: [{ title: "Exa hit", url: "https://exa.ai", summary: "Fallback worked." }] });
-  const result = await executeSearch({ query: "slow codex" }, { auth, timeoutMs: 40, fetchImpl });
+  const result = await executeSearch({ query: "slow codex" }, { auth, timeoutMs: 40, fetchImpl, cooldowns: new Map() });
   assert.equal(result.response?.provider, "exa");
 
   // Credential lookups take no signal; the limit still applies to them.
   const stuck = await executeSearch({ query: "stuck auth" }, {
-    auth: { ...auth, codex: () => new Promise(() => {}) }, timeoutMs: 40, fetchImpl,
+    auth: { ...auth, codex: () => new Promise(() => {}) }, timeoutMs: 40, fetchImpl, cooldowns: new Map(),
   });
   assert.equal(stuck.response?.provider, "exa");
 
-  const alone = await executeSearch({ query: "slow codex", provider: "codex" }, { auth, timeoutMs: 40, fetchImpl });
+  const alone = await executeSearch({ query: "slow codex", provider: "codex" }, { auth, timeoutMs: 40, fetchImpl, cooldowns: new Map() });
   assert.equal(alone.error, "Error: codex timed out after 0 s");
 
   // The caller's cancellation ends the whole search instead of trying the next backend.
   const cancel = new AbortController();
   setTimeout(() => cancel.abort(), 10);
-  await assert.rejects(executeSearch({ query: "cancelled" }, { auth, signal: cancel.signal, fetchImpl }), { name: "AbortError" });
+  await assert.rejects(executeSearch({ query: "cancelled" }, { auth, signal: cancel.signal, fetchImpl, cooldowns: new Map() }), { name: "AbortError" });
 });
 
 test("API error bodies are reduced to their message and bounded", async () => {
@@ -279,4 +279,42 @@ test("API error bodies are reduced to their message and bounded", async () => {
   });
   assert(result.error && result.error.length < 600, `error was ${result.error?.length} characters`);
   assert.match(result.error!, /Exa API error \(502\)/);
+});
+
+test("a backend that timed out is tried last until it answers or its cooldown ends", async () => {
+  const hang = (init?: RequestInit) => new Promise<Response>((_, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+  });
+  const auth: SearchAuth = { codex: async () => ({ token: jwt() }), xai: async () => undefined, exa: async () => "exa-key" };
+  const cooldowns = new Map();
+  let codexUp = false, exaUp = true;
+  const calls: string[] = [];
+  const fetchImpl = async (input: any, init?: RequestInit) => {
+    const codex = String(input).includes("api.openai.com");
+    calls.push(codex ? "codex" : "exa");
+    if (codex) return codexUp ? sseResponse([{ type: "response.web_search_call.completed" }, { type: "response.output_text.delta", delta: "Codex is back: https://pi.dev" }]) : hang(init);
+    return exaUp ? jsonResponse({ results: [{ title: "Exa hit", url: "https://exa.ai", summary: "Fallback worked." }] }) : jsonResponse({ error: "down" }, 500);
+  };
+  const search = () => executeSearch({ query: "q" }, { auth, timeoutMs: 40, fetchImpl, cooldowns });
+
+  assert.equal((await search()).response?.provider, "exa");
+  assert.deepEqual(calls.splice(0), ["codex", "exa"]);
+  // The next search does not wait for the stalled backend again.
+  assert.equal((await search()).response?.provider, "exa");
+  assert.deepEqual(calls.splice(0), ["exa"]);
+  // An ordinary failure does not start a cooldown.
+  assert.equal(cooldowns.has("exa"), false);
+
+  // It is still the last resort, and an answer restores its place.
+  exaUp = false; codexUp = true;
+  assert.equal((await search()).response?.provider, "codex");
+  assert.deepEqual(calls.splice(0), ["exa", "codex"]);
+  assert.equal(cooldowns.size, 0);
+  exaUp = true;
+  assert.equal((await search()).response?.provider, "codex");
+  assert.deepEqual(calls.splice(0), ["codex"]);
+
+  const until = new Map([["codex", 1000]]) as Map<any, number>;
+  assert.deepEqual(orderByHealth(["codex", "xai", "exa"], until, 999), ["xai", "exa", "codex"]);
+  assert.deepEqual(orderByHealth(["codex", "xai", "exa"], until, 1000), ["codex", "xai", "exa"]);
 });

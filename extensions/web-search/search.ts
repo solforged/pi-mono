@@ -81,6 +81,20 @@ function candidates(query: SearchQuery): ProviderId[] {
   return searchOrder(query.sessionProvider, query.provider);
 }
 
+const COOLDOWN_MS = 5 * 60_000;
+/** Backends that recently timed out, and when each may lead the order again. */
+const cooling = new Map<ProviderId, number>();
+
+// A backend that just timed out is tried last for a few minutes, so later
+// searches do not each wait out its time limit before falling through.
+export function timedOutRecently(provider: ProviderId, cooldowns: Map<ProviderId, number> = cooling, now = Date.now()): boolean {
+  return (cooldowns.get(provider) ?? 0) > now;
+}
+export function orderByHealth(order: ProviderId[], cooldowns: Map<ProviderId, number> = cooling, now = Date.now()): ProviderId[] {
+  const slow = (provider: ProviderId) => timedOutRecently(provider, cooldowns, now);
+  return [...order.filter((provider) => !slow(provider)), ...order.filter(slow)];
+}
+
 // Rejects when the signal aborts, for steps that take no signal (credential refresh, body parsing).
 const abandoned = (signal: AbortSignal) => new Promise<never>((_, reject) => {
   signal.addEventListener("abort", () => reject(signal.reason), { once: true });
@@ -91,8 +105,10 @@ export async function executeSearch(query: SearchQuery, options: {
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  cooldowns?: Map<ProviderId, number>;
 }): Promise<SearchResult> {
-  const order = candidates(query);
+  const cooldowns = options.cooldowns ?? cooling;
+  const order = orderByHealth(candidates(query), cooldowns);
   const errors: Array<{ provider: ProviderId; message: string }> = [];
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? SEARCH_TIMEOUT_MS;
@@ -114,9 +130,11 @@ export async function executeSearch(query: SearchQuery, options: {
       if (!hasRenderableSearchContent(response)) {
         throw new ProviderError(provider, `${provider} returned no search content`, 204);
       }
+      cooldowns.delete(provider);
       return { text: formatForLLM(response), response };
     } catch (error) {
       if (options.signal?.aborted) throw error;
+      if (timeout.aborted) cooldowns.set(provider, Date.now() + COOLDOWN_MS);
       const message = timeout.aborted ? `${provider} timed out after ${Math.round(timeoutMs / 1000)} s`
         : error instanceof Error ? error.message : String(error);
       errors.push({ provider, message });
