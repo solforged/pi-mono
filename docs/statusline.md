@@ -13,7 +13,9 @@ From left to right:
 - Model name without a leading "Claude", then the thinking level when the
   model reasons: a circle that fills with the level (a flame at max), in the
   editor border's color.
-- Working directory, shortened from the left past 40 columns.
+- Working directory, shortened from the left past 40 columns. In a linked Git
+  worktree it shows the matching directory of the main checkout, marked
+  `(wt)`; the branch names the task.
 - Git branch (or short commit when detached) with conflicted `!`, staged `+`,
   unstaged `*`, and untracked `?` counts, then commits ahead `⇡` and behind `⇣`
   of upstream. Counts refresh after tool calls and runs and every 10 seconds.

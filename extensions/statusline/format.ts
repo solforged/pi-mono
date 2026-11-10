@@ -45,6 +45,18 @@ export function displayPath(cwd: string, home: string | undefined, max = 40): st
   return `…/${tail}`;
 }
 
+/**
+ * For a linked worktree, the same directory under the main checkout, from
+ * `git rev-parse --path-format=absolute --show-toplevel --git-dir --git-common-dir`.
+ * The branch already names the task, so the footer shows where the repository lives.
+ */
+export function worktreeHome(cwd: string, revParse: string): string | undefined {
+  const [top, gitDir, common] = revParse.trim().split("\n");
+  if (!top || !gitDir || !common || gitDir === common || !common.endsWith("/.git")) return undefined;
+  if (cwd !== top && !cwd.startsWith(`${top}/`)) return undefined;
+  return common.slice(0, -"/.git".length) + cwd.slice(top.length);
+}
+
 export type Git = {
   branch?: string; // Undefined when HEAD is detached.
   oid?: string;

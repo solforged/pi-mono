@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { displayPath, fitSegments, formatCost, formatTokens, layout, parseGitStatus, readContribution, rightStatuses, sessionStats, modelLabel, thinkingColor, thinkingIcon, thinkingLabel } from "../extensions/statusline/format.ts";
+import { displayPath, fitSegments, formatCost, formatTokens, layout, parseGitStatus, readContribution, rightStatuses, sessionStats, modelLabel, thinkingColor, thinkingIcon, thinkingLabel, worktreeHome } from "../extensions/statusline/format.ts";
 
 const measure = { width: (text: string) => [...text].length, truncate: (text: string, width: number) => [...text].slice(0, width).join("") };
 const usage = (input: number, cacheRead: number, cacheWrite: number, total: number) => ({ input, output: 10, cacheRead, cacheWrite, cost: { total } });
@@ -23,6 +23,16 @@ test("shortens paths under home and keeps whole trailing directories", () => {
   assert.equal(displayPath("/Users/a", "/Users/a"), "~");
   assert.equal(displayPath("/very/long/path/to/some/project", undefined, 20), "…/to/some/project");
   assert.equal(displayPath("/x/an-extremely-long-directory-name", undefined, 10), "…/an-extremely-long-directory-name");
+});
+
+test("a linked worktree shows as the matching directory of its main checkout", () => {
+  const wt = "/h/.pi/wt/pi-mono--fullscreen-diff";
+  const linked = `${wt}\n/h/src/pi-mono/.git/worktrees/pi-mono--fullscreen-diff\n/h/src/pi-mono/.git\n`;
+  assert.equal(worktreeHome(wt, linked), "/h/src/pi-mono");
+  assert.equal(worktreeHome(`${wt}/extensions/diff`, linked), "/h/src/pi-mono/extensions/diff");
+  assert.equal(worktreeHome("/h/src/pi-mono", "/h/src/pi-mono\n/h/src/pi-mono/.git\n/h/src/pi-mono/.git\n"), undefined, "main checkout");
+  assert.equal(worktreeHome(wt, `${wt}\n/srv/repo.git/worktrees/x\n/srv/repo.git\n`), undefined, "bare repository");
+  assert.equal(worktreeHome("/elsewhere", linked), undefined);
 });
 
 test("parses porcelain v2 status with branch, tracking, and change counts", () => {

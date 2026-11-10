@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   displayPath, fitSegments, formatCost, formatTokens, icons, layout, parseGitStatus, readContribution, rightStatuses, sessionStats,
-  modelLabel, thinkingColor, thinkingIcon, thinkingLabel, SEGMENT_EVENT, type Contribution, type Git, type Segment, type Stats,
+  modelLabel, thinkingColor, thinkingIcon, thinkingLabel, worktreeHome, SEGMENT_EVENT, type Contribution, type Git, type Segment, type Stats,
 } from "./format.ts";
 
 const POLL_MS = 10_000; // Catches changes made outside Pi.
@@ -39,7 +39,10 @@ export default function (pi: ExtensionAPI) {
 function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyMap<string, Contribution>): Footer {
   const cwd = ctx.sessionManager.getCwd?.() ?? ctx.cwd;
   let git: Git | undefined;
+  let home: string | undefined; // The main checkout's directory when cwd is in a linked worktree.
   let render = () => {};
+  void pi.exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"], { cwd, timeout: 5000 })
+    .then((result) => { home = result.code === 0 ? worktreeHome(cwd, result.stdout) : undefined; if (home && !closed) render(); }, () => undefined);
   let running = false, again = false, closed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -101,9 +104,10 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
           segments.push({ priority: 6, text: theme.fg(thinkingColor(level) as any, `${thinkingIcon(level)} ${thinkingLabel(level)}`) });
         }
 
-        const path = displayPath(cwd, process.env.HOME);
+        const path = displayPath(home ?? cwd, process.env.HOME);
         const base = path.split("/").pop() || path;
-        segments.push({ priority: 3, text: theme.fg("muted", `${icons.folder} ${path}`), compact: theme.fg("muted", `${icons.folder} ${base}`) });
+        const mark = home ? theme.fg("dim", " (wt)") : "";
+        segments.push({ priority: 3, text: theme.fg("muted", `${icons.folder} ${path}`) + mark, compact: theme.fg("muted", `${icons.folder} ${base}`) + mark });
 
         const branch = footerData.getGitBranch() ?? git?.branch ?? (git?.oid ? `@${git.oid.slice(0, 7)}` : undefined);
         if (branch) {
