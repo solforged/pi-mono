@@ -14,6 +14,18 @@ archive on this branch. Frames are stored on the compaction entry and
 re-attached on every LLM request. Only the newest pages that fit one request
 (3 MB of image data) are rendered; older pages stay in the archive as text.
 
+## Compaction ratio
+
+Pi's `compaction.modelOverrides` takes exact model keys and absolute reserves.
+`compact-ratio` adds a per-provider share of the context window, set in
+`PROVIDER_RATIOS` (Anthropic: 40%), so new models need no settings entry. A model
+with its own `reserveTokens` override, or compaction disabled, is left to Pi.
+
+It checks before each prompt you send while Pi is idle, and that prompt waits
+for the compaction. It cannot act mid-run: compacting from `turn_end` or a
+steering message aborts the running turn. Within one long run, only Pi's own
+reserve applies, so give models you use heavily an exact override as well.
+
 ## Output artifacts
 
 Successful top-level `bash`, `powershell`, `grep`, `find`, `ls`, `web_search`,

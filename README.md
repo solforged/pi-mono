@@ -44,5 +44,5 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Herdr](docs/herdr.md): Desktop support and the separate TUI title bridge.
 - [Status line](docs/statusline.md): a one-line footer with Git, context, and cache use.
 - [Providers and search](docs/providers.md): Anthropic compatibility and nested web search.
-- [Context management](docs/context.md): Snapcompact, output artifacts, and `/prompt-size`.
+- [Context management](docs/context.md): Snapcompact, compaction ratios, output artifacts, and `/prompt-size`.
 - [Measuring](docs/measuring.md): the session profile and fault injection that size a feature.
