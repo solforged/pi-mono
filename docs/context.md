@@ -31,7 +31,7 @@ Use the model-callable `artifact_read` tool to retrieve omitted evidence:
 ```
 
 Queries are case-sensitive literal substrings, not regexes. `offset` selects a
-1-based starting line; `limit` defaults to 40 and cannot exceed 80. Each response
+1-based starting line; `limit` defaults to 40; a larger request returns 80 lines. Each response
 is also bounded to 6,000 bytes and supplies a continuation offset. Long lines
 supply a `column` cursor so their entire text can be recovered without splitting
 Unicode characters. Retrieval accepts only artifact UUIDs, never arbitrary host

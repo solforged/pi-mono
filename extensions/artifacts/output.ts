@@ -106,9 +106,10 @@ function fromColumn(text: string, column: number): string {
 }
 export function readExcerpt(text: string, options: ReadOptions = {}): string {
   const offset = options.offset ?? 1;
-  const limit = options.limit ?? 40;
+  // Asking for more than a page returns one page and its continuation offset; refusing cost a turn each time.
+  const limit = Math.min(options.limit ?? 40, 80);
   if (!Number.isSafeInteger(offset) || offset < 1) throw new Error("offset must be a positive line number");
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 80) throw new Error("limit must be between 1 and 80 lines");
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("limit must be between 1 and 80 lines");
   if (options.query !== undefined && (!options.query || options.query.length > 500)) throw new Error("query must be 1–500 characters");
   const column = options.column ?? 1;
   if (!Number.isSafeInteger(column) || column < 1) throw new Error("column must be a positive character number");

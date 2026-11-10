@@ -159,8 +159,13 @@ test("long lines can be retrieved completely via Unicode-safe column continuatio
   assert.equal(restored, text);
 });
 
-test("retrieval rejects invalid ranges and unbounded limits", () => {
-  for (const options of [{ offset: 0 }, { offset: 1.5 }, { limit: 0 }, { limit: 81 }, { query: "" }, { query: "x".repeat(501) }, { column: 0 }]) {
+test("retrieval rejects invalid ranges and caps the page size", () => {
+  for (const options of [{ offset: 0 }, { offset: 1.5 }, { limit: 0 }, { limit: 1.5 }, { query: "" }, { query: "x".repeat(501) }, { column: 0 }]) {
     assert.throws(() => readExcerpt("text", options));
   }
+  const text = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join("\n");
+  const page = readExcerpt(text, { limit: 135 });
+  assert.match(page, /L80: line 80\n/);
+  assert.doesNotMatch(page, /L81:/);
+  assert.match(page, /offset=81/);
 });
