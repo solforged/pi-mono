@@ -28,7 +28,9 @@ node --test tests/*.test.ts
 node --test computer/tests/*.test.mjs
 ```
 
-The suites make no model calls. `mise run sandbox:smoke` is a separate live
+The suites make no model calls. `mise run profile` and `mise run faults` are
+the offline [measuring](measuring.md) tools; the second runs the installed Pi
+against a scripted provider. `mise run sandbox:smoke` is a separate live
 check of the [sandbox](sandbox.md) that needs Apple container services. Git hooks are isolated only in throwaway test
 repositories; production hooks remain active. When Pi is installed, the
 Anthropic integration test exercises its bundled SDK and stream parser with

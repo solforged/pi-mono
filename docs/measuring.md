@@ -1,7 +1,44 @@
 # Measuring
 
-Fault injection shows what Pi does when a provider misbehaves, and what an
-extension changes. It makes no model calls.
+Two offline tools decide whether a feature is worth adding. Neither makes model
+calls.
+
+## Session profile
+
+```sh
+mise run profile
+mise run profile -- --since 2026-11-01 --json
+mise run profile -- --dir /path/to/sessions
+```
+
+`scripts/profile.ts` reads saved sessions (by default those of the active agent
+directory) and reports, for the branch each session would resume:
+
+- **Cost** by cache reads, output, cache writes and uncached input, with tool
+  calls per turn and turns per prompt.
+- **What the prompt spend carried.** Each tool result, tool-call argument,
+  reply and prompt section is charged once at the price of sending it and then
+  at the cache-read price on every later turn, until compaction drops it. The
+  last row is what this cannot attribute: images, cache misses and estimate
+  error.
+- **Cache rewrites**: requests that read less than half of a prompt over 20,000
+  tokens from cache, by cause, with what the miss cost beyond a hit. A prompt
+  or tool change normally keeps the cache, so it is shown as context for an
+  unexplained miss.
+- **Turn endings** Pi leaves to the user, the notes
+  [recovery](recover.md) wrote, and argument validation failures by field.
+- **Candidate sizing**: each candidate feature replayed against the recorded
+  sessions, in dollars. A candidate that rewrites sent history is charged for
+  re-sending what followed. "Ceiling" rows assume every case could be avoided.
+
+Dollar figures use the prices recorded on each turn. Bytes are converted to
+tokens at a rate measured per model from prompt growth, because tokenizers
+differ by a factor of two; a model with fewer than 20 usable turns falls back
+to four bytes per token. Delegated children count toward the total but are not
+broken down.
+
+To size a new candidate, add a row in `profile()` and a case to
+`tests/profile.test.ts`.
 
 ## Fault injection
 
