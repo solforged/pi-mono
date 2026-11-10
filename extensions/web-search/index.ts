@@ -2,9 +2,10 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { loadPage, pageView } from "./fetch.ts";
 import { attemptSummary, searchOrder } from "./format.ts";
 import { availableProviders, executeSearch, orderByHealth, registryAuth, timedOutRecently, type SearchAuth, type SearchQuery } from "./search.ts";
-import { searchCall, searchView } from "./view.ts";
+import { fetchCall, fetchView, searchCall, searchView } from "./view.ts";
 
 const Recency = StringEnum(["day", "week", "month", "year"] as const);
 
@@ -61,6 +62,16 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("web-fetch", {
+    description: "/web-fetch <url> [term] reads a page as the web_fetch tool does",
+    handler: async (args, ctx) => {
+      const [url, ...find] = args.trim().split(/\s+/);
+      if (!url) { report(ctx, "Usage: /web-fetch <url> [term]"); return; }
+      try { report(ctx, pageView(await loadPage(url, { signal: ctx.signal }), { find: find.join(" ") })); }
+      catch (error) { report(ctx, `Error: ${error instanceof Error ? error.message : String(error)}`); }
+    },
+  });
+
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
@@ -91,6 +102,27 @@ export default function (pi: ExtensionAPI) {
     },
     renderResult(result, { expanded, isPartial }, theme, context) {
       return row(context.lastComponent, searchView(result, theme, { expanded, isPartial, isError: context.isError, hint: context.keyHint("app.tools.expand", "to expand") }));
+    },
+  });
+
+  pi.registerTool({
+    name: "web_fetch",
+    label: "Web Fetch",
+    // Sent with every request: keep it short. Limits are in docs/providers.md.
+    description: "Read a web page as text. Long pages come in parts: pass the returned offset, or find a literal term to get only matching passages. links: true keeps link URLs.",
+    parameters: Type.Object({ url: Type.String(), offset: Type.Optional(Type.Integer()), find: Type.Optional(Type.String()), links: Type.Optional(Type.Boolean()) }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const page = await loadPage(params.url, { links: params.links, signal: signal ?? ctx.signal });
+      return {
+        content: [{ type: "text", text: pageView(page, params) }],
+        details: { url: page.url, title: page.title, chars: page.text.length },
+      };
+    },
+    renderCall(args, theme, context) {
+      return row(context.lastComponent, fetchCall(args, theme));
+    },
+    renderResult(result, { expanded, isPartial }, theme, context) {
+      return row(context.lastComponent, fetchView(result, theme, { expanded, isPartial, isError: context.isError, hint: context.keyHint("app.tools.expand", "to expand") }));
     },
   });
 }

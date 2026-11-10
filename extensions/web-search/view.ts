@@ -35,3 +35,11 @@ export function searchView(result: Result, theme: Palette, options: Options = {}
     return theme.fg("success", `${backend} · ${plural(Array.isArray(details.sources) ? details.sources.length : 0, "source")}`) + (trouble ? theme.fg("warning", ` · after ${clip(trouble, options.expanded ? 1200 : 160)}`) : "");
   });
 }
+export function fetchCall(args: { url?: unknown; find?: unknown; offset?: unknown }, theme: Palette): string {
+  const part = args.find ? ` · find ${JSON.stringify(clip(args.find, 60))}` : "";
+  return theme.fg("toolTitle", theme.bold("web_fetch ")) + theme.fg("accent", clip(args.url ?? "…", 200)) + theme.fg("dim", `${part}${args.offset ? ` · from ${clip(String(args.offset), 12)}` : ""}`);
+}
+export function fetchView(result: Result, theme: Palette, options: Options = {}): string {
+  return view(result, theme, options, "Fetching…", (details) =>
+    theme.fg("success", clip(details.title || details.url || "page", options.expanded ? 600 : 100)) + theme.fg("dim", typeof details.chars === "number" ? ` · ${details.chars.toLocaleString("en-US")} chars` : ""));
+}

@@ -2,8 +2,8 @@
 
 ## Web search
 
-Pi has no built-in web search. This extension registers a `web_search` tool
-that copies OMP's nested-backend approach rather than injecting hosted search
+Pi has no built-in web search or page reader. This extension registers a
+`web_search` tool and a [`web_fetch`](#web-fetch) tool. Search copies OMP's nested-backend approach rather than injecting hosted search
 into the live turn. The current model calls the tool; the extension prefers
 the live Grok or Codex backend, then walks the rest of the chain.
 
@@ -36,6 +36,37 @@ and replay. Nested calls reuse the existing logins and work for any parent
 model, including Nous Portal sessions. The Codex backend label is kept for
 session routing; requests use Pi's current OpenAI endpoint and do not require an
 account-id claim in the ChatGPT access token.
+
+## Web fetch
+
+`web_fetch` reads one page as text, without a model call or a third-party
+reader service. `/web-fetch <url> [term]` runs the same code for a manual check.
+
+```json
+{ "url": "https://nodejs.org/api/net.html", "find": "BlockList" }
+```
+
+- It asks for Markdown first, which many documentation sites now serve, and
+  otherwise converts HTML itself: the page's `<main>`, `role="main"` or
+  `<article>` content as headings, lists, code blocks and table rows, without
+  scripts, styles, navigation or footers. GitHub file pages are read from the
+  raw host. Other text types are returned as they are; PDFs, images and other
+  binary content are refused.
+- A call returns at most 12,000 characters. The closing line gives the
+  `offset` that continues. `find` returns only the passages around a literal,
+  case-insensitive term, each marked with the offset to read on from, so one
+  section of a long reference costs one small call.
+- Link targets are left out unless `links` is true.
+- Pages are kept in memory for five minutes, so paging does not fetch again.
+  Limits are 5 MiB per page, 30 seconds and five redirects.
+- Pages that are drawn entirely by scripts have no text to return, and say so.
+
+The tool runs on the host, also when the [sandbox](sandbox.md) is on. It
+therefore refuses loopback, private and link-local addresses, by name and after
+each redirect, so that a page cannot direct it at services only this machine
+can reach. `PI_WEB_FETCH_PRIVATE=1` lifts that, for example to read a local
+development server. The check resolves a name before the request is made; it
+does not pin the connection to that address.
 
 ## Anthropic integration
 
