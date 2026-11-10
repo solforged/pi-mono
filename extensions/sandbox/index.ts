@@ -13,9 +13,10 @@ import { Type } from "typebox";
 import { shareCargoTarget } from "./cargo.ts";
 import { ContainerCli, runProcess } from "./container.ts";
 import { buildPlan, promptNote, type Plan } from "./plan.ts";
-import { cacheRoot, probe } from "./probe.ts";
+import { cacheRoot, findRoot, probe } from "./probe.ts";
 import { imageTag, Sandbox, type Phase } from "./sandbox.ts";
-import { chooseEnabled, resolveSettings } from "./settings.ts";
+import { chooseEnabled, inheritedSwitch, resolveSettings } from "./settings.ts";
+import { savedToggle, saveToggle, togglesFile } from "./toggles.ts";
 import { bashOps, editOps, findOps, grep, lsOps, readOps, writeOps } from "./tools.ts";
 
 const STATUS = "sandbox";
@@ -57,6 +58,8 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   let ui: ExtensionContext | undefined;
   let generation = 0;
   let opening: Promise<void> | undefined;
+  let projectRoot: string | undefined;
+  let settingsDefault = true;
 
   // The status line extension shows the marker after the cost; Pi's own footer
   // shows the same marker as an extension status. Off shows nothing.
@@ -135,14 +138,23 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     else await old.release();
   }
 
-  async function setEnabled(next: boolean, ctx: ExtensionContext, why: string) {
-    if (next === enabled) return;
-    await apply(next, ctx, why);
+  // A toggle or /sandbox on|off is remembered for this project's next launch.
+  async function setEnabled(next: boolean, ctx: ExtensionContext) {
+    if (projectRoot) {
+      try { saveToggle(togglesFile(getAgentDir()), projectRoot, next, settingsDefault); }
+      catch (error) { if (ctx.hasUI) ctx.ui.notify(`Could not save the sandbox toggle: ${(error as Error).message}`, "warning"); }
+    }
+    source = "saved";
+    if (next !== enabled) await apply(next, ctx, "saved");
+  }
+  function publish(next: boolean) {
+    // Children inherit this: workflow subagents through the environment, Rex children explicitly.
+    process.env.PI_SANDBOX = next ? "on" : "off";
+    process.env.PI_SANDBOX_FROM = String(process.pid);
   }
   async function apply(next: boolean, ctx: ExtensionContext, why: string) {
     enabled = next; source = why;
-    // Children inherit this: workflow subagents through the environment, Rex children explicitly.
-    process.env.PI_SANDBOX = next ? "on" : "off";
+    publish(next);
     syncCommitTool();
     if (next) await turnOn(ctx); else { await turnOff(); render(); }
   }
@@ -164,13 +176,16 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     // started with --tools never get git_commit.
     commitAllowed ??= pi.getActiveTools().includes("git_commit");
     let choice;
+    projectRoot = await findRoot(ctx.cwd);
     try {
-      const settings = resolveSettings(globalSandboxSettings(getAgentDir()), ctx.cwd);
-      choice = chooseEnabled(pi.getFlag("sandbox"), process.env.PI_SANDBOX, settings);
+      const agentDir = getAgentDir();
+      const settings = resolveSettings(globalSandboxSettings(agentDir), projectRoot);
+      settingsDefault = settings.enabled;
+      choice = chooseEnabled(pi.getFlag("sandbox"), inheritedSwitch(process.env), savedToggle(togglesFile(agentDir), projectRoot), settings);
     } catch (error) {
       // An invalid configuration keeps the sandbox on and failing, never silently off.
       await turnOff();
-      enabled = true; failure = error as Error; process.env.PI_SANDBOX = "on";
+      enabled = true; failure = error as Error; publish(true);
       syncCommitTool(); render();
       if (ctx.hasUI) ctx.ui.notify(`Sandbox unavailable: ${failure.message}`, "error");
       return;
@@ -186,7 +201,7 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   });
 
   const toggle = async (ctx: ExtensionContext) => {
-    await setEnabled(!enabled, ctx, "toggle");
+    await setEnabled(!enabled, ctx);
     if (ctx.hasUI) ctx.ui.notify(enabled ? "Sandbox on: tools run in the Linux container." : "Sandbox off: tools run on the host.", enabled ? "info" : "warning");
   };
   pi.registerShortcut(SHORTCUT, { description: "Toggle the tool sandbox", handler: toggle });
@@ -197,7 +212,7 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const action = args.trim() || "status";
       if (action === "on" || action === "off") {
-        await setEnabled(action === "on", ctx, "command");
+        await setEnabled(action === "on", ctx);
       } else if (action === "toggle") {
         return toggle(ctx);
       } else if (action === "restart") {
@@ -220,7 +235,8 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   }
 
   function describe() {
-    if (!enabled) return `Sandbox off (${source}). Tools run on the host.`;
+    const why = ({ flag: "--sandbox", environment: "set by the parent Pi", saved: "saved for this project", settings: "settings" } as Record<string, string>)[source] ?? source;
+    if (!enabled) return `Sandbox off (${why}). Tools run on the host.`;
     if (failure || box?.error) return `Sandbox unavailable: ${(failure ?? box?.error)!.message}`;
     if (!plan) return "Sandbox starting.";
     const mounts = plan.mounts.map((m) => `  ${m.target}${m.target !== m.source ? ` <- ${m.source}` : ""} (${m.label}${m.readonly ? ", read-only" : ""})`);

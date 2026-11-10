@@ -6,10 +6,19 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import install from "../../extensions/sandbox/index.ts";
 import { containerName } from "../../extensions/sandbox/plan.ts";
+import { savedToggle, togglesFile } from "../../extensions/sandbox/toggles.ts";
 
+// Removes the throwaway repository's saved toggle, even after a failure.
+const forget = (root: string) => {
+  const file = togglesFile(getAgentDir());
+  try {
+    const toggles = JSON.parse(readFileSync(file, "utf8"));
+    if (root in toggles) { delete toggles[root]; writeFileSync(file, `${JSON.stringify(toggles, null, 2)}\n`); }
+  } catch {}
+};
 const text = (result: any) => result.content.map((part: any) => part.text ?? "").join("");
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const running = (name: string) => {
@@ -20,6 +29,7 @@ export default function (pi: ExtensionAPI) {
   const tools: Record<string, any> = {}, events: Record<string, any> = {}, commands: Record<string, any> = {};
   const segments: any[] = [];
   const marker = () => segments.at(-1);
+  let flag: string | undefined = "on";
   let active = ["read", "write", "edit", "bash", "ls", "find", "grep", "git_commit"];
   const load = () => install({
     on: (event: string, fn: any) => { events[event] = fn; },
@@ -28,7 +38,7 @@ export default function (pi: ExtensionAPI) {
     registerCommand: (name: string, options: any) => { commands[name] = options; },
     registerShortcut: () => {},
     registerFlag: () => {},
-    getFlag: () => "on",
+    getFlag: () => flag,
     getActiveTools: () => active,
     setActiveTools: (names: string[]) => { active = names; },
   } as any);
@@ -129,6 +139,21 @@ export default function (pi: ExtensionAPI) {
         assert(running(name), "the container did not survive a session switch");
         assert.match(text(await call("bash", { command: "pgrep -f 'sleep 700' >/dev/null && echo survived || echo restarted" })), /survived/);
 
+        // A toggle is remembered for the project's next launch, where no flag is given.
+        const toggles = togglesFile(getAgentDir());
+        await commands.sandbox.handler("off", fake);
+        assert.equal(savedToggle(toggles, repo), false);
+        await events.session_shutdown({ reason: "quit" }, fake);
+        for (let i = 0; i < 30 && running(name); i++) await sleep(500);
+        assert(!running(name), "the container outlived its last session");
+        flag = undefined;
+        load();
+        await events.session_start({ reason: "startup" }, fake);
+        assert.match(text(await call("bash", { command: "uname -s" })), /Darwin/);
+        await commands.sandbox.handler("on", fake);
+        assert.equal(savedToggle(toggles, repo), undefined, "toggling back to the settings default keeps an entry");
+        assert.match(text(await call("bash", { command: "uname -s" })), /Linux/);
+
         await events.session_shutdown({ reason: "quit" }, fake);
         for (let i = 0; i < 30 && running(name); i++) await sleep(500);
         assert(!running(name), "the container outlived its last session");
@@ -139,6 +164,7 @@ export default function (pi: ExtensionAPI) {
         process.exitCode = 1;
         await events.session_shutdown?.({ reason: "quit" }, fake);
       } finally {
+        forget(repo);
         rmSync(repo, { recursive: true, force: true });
       }
     },

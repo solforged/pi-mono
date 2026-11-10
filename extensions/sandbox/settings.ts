@@ -75,18 +75,26 @@ export function resolveSettings(raw: unknown, root: string, home = homedir()): S
   return settings;
 }
 
-export type Choice = { enabled: boolean; source: "flag" | "environment" | "settings" };
+export type Choice = { enabled: boolean; source: "flag" | "environment" | "saved" | "settings" };
 const parseSwitch = (value: unknown, where: string) => {
   if (value === undefined || value === "") return undefined;
   if (typeof value === "string" && /^(on|true|1)$/i.test(value)) return true;
   if (typeof value === "string" && /^(off|false|0)$/i.test(value)) return false;
   throw new Error(`${where} must be "on" or "off"`);
 };
-// --sandbox beats PI_SANDBOX, which carries a parent's choice into children.
-export function chooseEnabled(flag: unknown, env: string | undefined, settings: Pick<Settings, "enabled">): Choice {
+// --sandbox beats PI_SANDBOX, which carries a parent's choice into children;
+// then the project's saved toggle, then settings.
+export function chooseEnabled(flag: unknown, env: string | undefined, saved: boolean | undefined, settings: Pick<Settings, "enabled">): Choice {
   const fromFlag = parseSwitch(flag, "--sandbox");
   if (fromFlag !== undefined) return { enabled: fromFlag, source: "flag" };
   const fromEnv = parseSwitch(env, "PI_SANDBOX");
   if (fromEnv !== undefined) return { enabled: fromEnv, source: "environment" };
+  if (saved !== undefined) return { enabled: saved, source: "saved" };
   return { enabled: settings.enabled, source: "settings" };
+}
+
+// PI_SANDBOX set by this process is its own state for children, not an
+// instruction from a parent; PI_SANDBOX_FROM names the process that set it.
+export function inheritedSwitch(env: NodeJS.ProcessEnv, pid = process.pid) {
+  return env.PI_SANDBOX_FROM === String(pid) ? undefined : env.PI_SANDBOX;
 }

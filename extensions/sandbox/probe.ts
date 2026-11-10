@@ -21,10 +21,15 @@ export function cacheRoot(env = process.env) {
   return join(env.XDG_CACHE_HOME || join(homedir(), ".cache"), "pi-sandbox");
 }
 
+// The Git top level of the working directory, or the directory itself.
+export async function findRoot(cwd: string) {
+  const start = real(cwd) ?? cwd;
+  return real(await git(start, ["rev-parse", "--show-toplevel"])) ?? start;
+}
+
 export async function probe(cwd: string, agentDir: string, packageDir: string, env = process.env): Promise<Probe> {
   const home = real(homedir()) ?? homedir();
-  const start = real(cwd) ?? cwd;
-  const root = real(await git(start, ["rev-parse", "--show-toplevel"])) ?? start;
+  const root = await findRoot(cwd);
   const commonDir = real(await git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
   const [name, email] = await Promise.all([git(root, ["config", "user.name"]), git(root, ["config", "user.email"])]);
   const configHome = env.XDG_CONFIG_HOME || join(home, ".config");

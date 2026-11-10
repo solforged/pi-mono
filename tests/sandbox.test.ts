@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,7 +8,8 @@ import { ContainerCli, runProcess, type RunResult } from "../extensions/sandbox/
 import { commandEnv, fdArgs, GrepCollector, guestError, parseListing, rgArgs, sniffImage } from "../extensions/sandbox/guest.ts";
 import { buildPlan, containerName, promptNote, runArgs, type Probe } from "../extensions/sandbox/plan.ts";
 import { imageTag, Sandbox, withLock } from "../extensions/sandbox/sandbox.ts";
-import { chooseEnabled, DEFAULTS, resolveSettings } from "../extensions/sandbox/settings.ts";
+import { chooseEnabled, DEFAULTS, inheritedSwitch, resolveSettings } from "../extensions/sandbox/settings.ts";
+import { savedToggle, saveToggle, togglesFile } from "../extensions/sandbox/toggles.ts";
 import { temporary } from "./helpers.ts";
 
 const home = "/Users/me";
@@ -36,11 +38,32 @@ test("settings come from defaults, then globals, then the closest project entry"
   assert.throws(() => resolveSettings({ enable: true }, "/x", home), /Unknown setting sandbox.enable/);
 });
 
-test("the flag beats the inherited environment, which beats settings", () => {
-  assert.deepEqual(chooseEnabled("off", "on", { enabled: true }), { enabled: false, source: "flag" });
-  assert.deepEqual(chooseEnabled(undefined, "off", { enabled: true }), { enabled: false, source: "environment" });
-  assert.deepEqual(chooseEnabled(undefined, undefined, { enabled: false }), { enabled: false, source: "settings" });
-  assert.throws(() => chooseEnabled("maybe", undefined, { enabled: true }), /--sandbox/);
+test("the flag beats the inherited environment, then the saved toggle, then settings", () => {
+  assert.deepEqual(chooseEnabled("off", "on", true, { enabled: true }), { enabled: false, source: "flag" });
+  assert.deepEqual(chooseEnabled(undefined, "off", true, { enabled: true }), { enabled: false, source: "environment" });
+  assert.deepEqual(chooseEnabled(undefined, undefined, false, { enabled: true }), { enabled: false, source: "saved" });
+  assert.deepEqual(chooseEnabled(undefined, undefined, undefined, { enabled: false }), { enabled: false, source: "settings" });
+  assert.throws(() => chooseEnabled("maybe", undefined, undefined, { enabled: true }), /--sandbox/);
+});
+
+test("a process ignores the PI_SANDBOX it set itself, but children honor it", () => {
+  assert.equal(inheritedSwitch({ PI_SANDBOX: "off", PI_SANDBOX_FROM: "42" }, 42), undefined);
+  assert.equal(inheritedSwitch({ PI_SANDBOX: "off", PI_SANDBOX_FROM: "42" }, 43), "off");
+  assert.equal(inheritedSwitch({ PI_SANDBOX: "on" }, 43), "on");
+});
+
+test("toggles are saved per project only while they differ from settings", async (t) => {
+  const file = togglesFile(await temporary(t));
+  assert.equal(savedToggle(file, "/a"), undefined);
+  saveToggle(file, "/a", false, true);
+  saveToggle(file, "/b", true, false);
+  assert.equal(savedToggle(file, "/a"), false);
+  assert.equal(savedToggle(file, "/b"), true);
+  saveToggle(file, "/a", true, true);
+  assert.equal(savedToggle(file, "/a"), undefined);
+  assert.equal(savedToggle(file, "/b"), true);
+  writeFileSync(file, "not json");
+  assert.equal(savedToggle(file, "/b"), undefined);
 });
 
 test("a worktree mounts its Git metadata and guards config, hooks, and its .git pointer", () => {

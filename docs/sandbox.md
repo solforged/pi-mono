@@ -20,9 +20,14 @@ there is no marker.
 
 | How | Scope |
 |---|---|
-| Ctrl+Shift+S, or `/sandbox off`, `/sandbox on`, `/sandbox toggle` | This session |
+| Ctrl+Shift+S, or `/sandbox off`, `/sandbox on`, `/sandbox toggle` | This project, remembered across launches |
 | `pi --sandbox off` | This process |
 | `"enabled": false` in settings | Globally or per project |
+
+The flag wins, then a parent Pi's state for child agents, then the project's
+last toggle, then settings. Toggles are kept per project root in
+`~/.pi/agent/sandbox-toggles.json`, outside the guest's reach; toggling back to
+the settings value removes the entry.
 
 `/sandbox` shows the container, mounts, and guarded paths; `/sandbox restart`
 recreates the container or retries a failed start. When the sandbox is on and
