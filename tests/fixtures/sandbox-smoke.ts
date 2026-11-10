@@ -18,9 +18,12 @@ const running = (name: string) => {
 
 export default function (pi: ExtensionAPI) {
   const tools: Record<string, any> = {}, events: Record<string, any> = {}, commands: Record<string, any> = {};
+  const segments: any[] = [];
+  const marker = () => segments.at(-1);
   let active = ["read", "write", "edit", "bash", "ls", "find", "grep", "git_commit"];
   const load = () => install({
     on: (event: string, fn: any) => { events[event] = fn; },
+    events: { emit: (_name: string, data: any) => { segments.push(data); }, on: () => {} },
     registerTool: (definition: any) => { tools[definition.name] = definition; },
     registerCommand: (name: string, options: any) => { commands[name] = options; },
     registerShortcut: () => {},
@@ -57,6 +60,8 @@ export default function (pi: ExtensionAPI) {
         const started = Date.now();
         assert.match(text(await call("bash", { command: "uname -s && id -u" })), /Linux\n0/);
         console.log(`first command after ${Date.now() - started} ms (includes any image build and container start)`);
+        // The marker leads the status line and differs clearly between on and off.
+        assert.deepEqual(marker(), { key: "sandbox", text: "\u{F01A6}", color: "success", priority: 8, position: "start" });
 
         // File tools act on the host's files through the same paths.
         await call("write", { path: "src/hello.txt", content: "hello from the guest\n" });
@@ -98,6 +103,7 @@ export default function (pi: ExtensionAPI) {
         const prompt = await events.before_agent_start({ systemPrompt: "base" }, fake);
         assert.match(prompt.systemPrompt, /Debian Linux arm64 container/);
         await commands.sandbox.handler("off", fake);
+        assert.deepEqual([marker().text, marker().color], ["\u{F141D} off", "warning"]);
         assert.match(text(await call("bash", { command: "uname -s" })), /Darwin/);
         assert(!active.includes("git_commit"));
         await commands.sandbox.handler("on", fake);
