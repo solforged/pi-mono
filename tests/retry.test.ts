@@ -107,7 +107,7 @@ test("/retry keeps an existing draft and continues after tool results with a not
   const h = harness(branch, { editor: "draft" });
   await h.run();
   assert.deepEqual(h.calls, [["navigate", branch[2].id],
-    ["message", { customType: RETRY_TYPE, content: retryNote(false), display: true }, { triggerTurn: true }]]);
+    ["message", { customType: RETRY_TYPE, content: retryNote(false), display: false }, { triggerTurn: true }]]);
   assert.equal(h.editor(), "draft");
 });
 

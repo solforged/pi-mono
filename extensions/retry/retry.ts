@@ -78,7 +78,8 @@ export async function retry(pi: ExtensionAPI, ctx: ExtensionCommandContext) {
   }
   if (plan.kind === "prompt") pi.sendUserMessage(plan.content);
   else if (plan.kind === "message") pi.sendMessage(plan.message, { triggerTurn: true });
-  else pi.sendMessage({ customType: RETRY_TYPE, content: retryNote(plan.interrupted), display: true }, { triggerTurn: true });
+  // The note is for the model; the transcript simply resumes.
+  else pi.sendMessage({ customType: RETRY_TYPE, content: retryNote(plan.interrupted), display: false }, { triggerTurn: true });
   // Print and JSON runs exit when the command returns, so wait for the turn to start after input
   // handlers and then settle. Interactive and RPC hosts stream it themselves.
   if (!ctx.hasUI) {
