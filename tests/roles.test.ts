@@ -9,24 +9,49 @@ import { RoleStore, previewRoles } from "../extensions/workflows/role-store.ts";
 import { supportedThinking } from "../extensions/workflows/roles.ts";
 import { saveJson } from "../extensions/workflows/state.ts";
 
-test("personal roles default to OpenAI; Anthropic is opt-in; work stays unset", () => {
+test("personal roles default to the OpenAI preset; Anthropic is a preset; work stays unset", () => {
   assert.equal(profileName({}), "personal");
   assert.equal(profileName({ FNOX_PROFILE: "work" }), "personal");
-  assert.equal(profileName({ PI_WORKFLOW_PROFILE: "anthropic" }), "anthropic");
+  assert.equal(config.preset, "openai");
+  assert.deepEqual(config.presets, ["openai", "anthropic", "mixed"]);
   assert.equal(config.roles.task?.model, "gpt-6.1-sol");
   assert.equal(config.roles.commit?.model, "gpt-6-luna");
   assert.equal(config.roles.learn?.model, "gpt-6-luna");
-  const anthropic = resolveConfig(base, {}, "anthropic");
-  assert.equal(anthropic.roles.advisor?.model, "claude-opus-5-5");
+  const anthropic = resolveConfig(base, {}, "personal", [], "anthropic");
+  assert.equal(anthropic.roles.advisor?.model, "claude-fable-5-2");
   assert.equal(anthropic.roles.task?.model, "claude-sonnet-5-5");
   assert.equal(anthropic.roles.commit?.model, "claude-haiku-5-5");
+  assert.equal(anthropic.roles.learn?.model, "claude-haiku-5-5");
+  assert.equal(anthropic.roles.commit?.thinking, config.roles.commit?.thinking);
+  assert.throws(() => resolveConfig(base, {}, "anthropic"), /now a personal preset/);
   const work = resolveConfig(base, {}, "work");
+  assert.deepEqual([work.presets, work.preset, work.main], [[], undefined, null]);
   for (const name of roleNames) {
     assert.equal(config.roles[name]?.provider, "openai");
     assert.equal(anthropic.roles[name]?.provider, "anthropic");
     assert.equal(work.roles[name], null);
     assert.throws(() => resolveRole(work, name, registry() as any), /no fallback/);
   }
+});
+test("presets layer over the profile and name their own main model", () => {
+  const mixed = resolveConfig(base, {}, "personal", [], "mixed");
+  assert.deepEqual(mixed.main, { provider: "anthropic", model: "claude-fable-5-2", thinking: "high" });
+  assert.deepEqual(mixed.roles, config.roles);
+  const local = { profiles: { personal: {
+    roles: { tiny: { ...config.roles.tiny, model: "profile-wide" }, commit: { ...config.roles.commit, model: "profile-wide" } },
+    presets: { mixed: { roles: { commit: { model: "preset-only" } }, main: { thinking: "max" } }, extra: { roles: { task: null } } },
+  } } };
+  const custom = resolveConfig(base, local, "personal", [], "mixed");
+  assert.equal(custom.roles.commit?.model, "preset-only");
+  assert.equal(custom.roles.tiny?.model, "gpt-6-luna", "a preset's own roles override profile-wide ones");
+  assert.equal(custom.main?.thinking, "max");
+  assert.deepEqual(resolveConfig(base, local, "personal").presets, ["openai", "anthropic", "mixed", "extra"]);
+  const extra = resolveConfig(base, local, "personal", [], "extra");
+  assert.deepEqual([extra.roles.task, extra.roles.tiny?.model, extra.roles.advisor, extra.main], [null, "profile-wide", null, null]);
+  assert.throws(() => resolveConfig(base, {}, "personal", [], "missing"), /Unknown preset personal.missing/);
+  assert.throws(() => resolveConfig(base, { profiles: { work: { presets: { a: {} } } } }, "work"), /default preset/);
+  assert.throws(() => resolveConfig(base, { profiles: { personal: { presets: { Bad: {} } } } }, "personal"), /Invalid preset name/);
+  assert.throws(() => resolveConfig(base, { profiles: { personal: { presets: { mixed: { main: { model: "a b" } } } } } }, "personal", [], "mixed"), /main.model/);
 });
 test("arbitrary registered provider IDs and slash-containing model IDs work", () => {
   for (const provider of ["nous-portal", "grok"]) {
@@ -85,6 +110,7 @@ test("role panel drafts are isolated; save preserves other profiles and running 
   const saved = JSON.parse(await readFile(file, "utf8"));
   assert.equal(saved.note, "keep me");
   assert.equal(saved.profiles.personal.roles.task.note, "custom field");
+  assert.equal(saved.profiles.personal.presets.openai.roles.task.provider, "nous-portal", "edits belong to the active preset");
   assert.deepEqual(saved.profiles.work, local.profiles.work);
   assert.equal(store.snapshot().roles.task?.provider, "nous-portal");
   assert.equal(running.roles.task?.provider, "openai");
@@ -102,7 +128,8 @@ test("disable is explicit null; reset removes only the active profile override",
   await store.save(reset, registry() as any, new AbortController().signal);
   assert.equal(store.snapshot().roles.task?.provider, "openai");
   const saved = JSON.parse(await readFile(join(dir, "roles.local.json"), "utf8"));
-  assert.ok(!Object.hasOwn(saved.profiles.personal.roles, "task"));
+  assert.ok(!Object.hasOwn(saved.profiles.personal.presets.openai.roles, "task"));
+  assert.equal(saved.profiles.personal.roles, undefined);
   const work = await RoleStore.create(root, dir, "work");
   const workReset = await work.begin();
   workReset.edits.task = "reset";

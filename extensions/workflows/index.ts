@@ -12,6 +12,7 @@ import { addUsage, bounded, emptyUsage } from "./process.ts";
 import { resolveRole, roleNames } from "./roles.ts";
 import { RoleStore } from "./role-store.ts";
 import { showRoles } from "./roles-ui.ts";
+import { describeLineup, registerPresets } from "./presets.ts";
 import { createRunner, type Task, type ChildResult } from "./subagents.ts";
 import { cancellable } from "./ui.ts";
 import { scopeRoot } from "./state.ts";
@@ -46,13 +47,15 @@ export default async function (pi: ExtensionAPI) {
         editingRoles = true;
         try {
           if (await showRoles(ctx, roles, lifetime.signal)) {
-            report(ctx, `Saved ${config.profile} roles. New tasks use the saved choices; running tasks are unchanged.`);
+            const saved = getConfig();
+            report(ctx, `Saved ${saved.profile}${saved.preset === undefined ? "" : ` ${saved.preset} preset`} roles. New tasks use the saved choices; running tasks are unchanged.`);
           }
         } finally { editingRoles = false; }
         return;
       }
       const current = getConfig();
       const lines = [`Workflow profile: ${current.profile}`, ...current.sources.map((source) => `Config: ${source}`)];
+      if (current.preset !== undefined) lines.push(`Preset: ${current.preset} of ${current.presets.join(", ")} (/modelpreset switches)`, describeLineup(current)[0]);
       for (const name of roleNames) {
         const role = current.roles[name];
         let line = `${name}: ${role ? `${role.provider}/${role.model} (${role.thinking})` : "not configured"}`;
@@ -73,7 +76,7 @@ export default async function (pi: ExtensionAPI) {
       for (const entry of ctx.sessionManager.getEntries()) {
         if (entry.type === "custom" && entry.customType === "workflow-usage") addUsage(usage, (entry.data as any)?.usage);
       }
-      report(ctx, `State: ${await scopeRoot(agentDir, config.profile, ctx.cwd)}\nAuxiliary calls (titles/reviews/command subagents): ${usage.totalTokens} tokens; catalog cost $${usage.cost.total.toFixed(4)}. Tool subagent usage is included in pi's normal totals. Missing provider prices may report zero.\nCommands: /roles, /autoname, /commit, /advisor, /subagent, /learn, /learn-sessions, /learn-review, /curate-skills`);
+      report(ctx, `State: ${await scopeRoot(agentDir, config.profile, ctx.cwd)}\nAuxiliary calls (titles/reviews/command subagents): ${usage.totalTokens} tokens; catalog cost $${usage.cost.total.toFixed(4)}. Tool subagent usage is included in pi's normal totals. Missing provider prices may report zero.\nCommands: /roles, /modelpreset, /autoname, /commit, /advisor, /subagent, /learn, /learn-sessions, /learn-review, /curate-skills`);
     },
   });
 
@@ -121,6 +124,7 @@ export default async function (pi: ExtensionAPI) {
       },
     });
   }
+  registerPresets(pi, roles, agentDir, lifetime.signal, report);
   const titlePrompt = await loadTitlePrompt(root, agentDir);
   registerAutoname(pi, getConfig, titlePrompt, lifetime.signal);
   registerCommit(pi, getConfig, agentDir, lifetime.signal, report);

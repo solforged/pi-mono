@@ -1,8 +1,8 @@
 import { lstat } from "node:fs/promises";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-  profileName, readConfigFiles, resolveConfig, resolveRole, roleNames,
-  supportedThinking, type Config, type Role, type RoleName,
+  checkRole, profileName, readConfigFiles, resolveConfig, roleNames,
+  type Config, type Role, type RoleName,
 } from "./roles.ts";
 import { saveJson, withLock } from "./state.ts";
 
@@ -14,6 +14,7 @@ export interface RoleDraft {
 }
 
 // Drafts are disconnected from live settings. Cancel means dropping the draft.
+// With a preset active, edits belong to that preset rather than the whole profile.
 function editedDocument(draft: RoleDraft) {
   const local = structuredClone(draft.files.local);
   for (const name of roleNames) {
@@ -21,7 +22,9 @@ function editedDocument(draft: RoleDraft) {
     if (edit === undefined) continue;
     local.profiles ??= {};
     const profile = local.profiles[draft.config.profile] ??= {};
-    const roles = profile.roles ??= {};
+    const { preset } = draft.config;
+    const owner = preset === undefined ? profile : (profile.presets ??= {})[preset] ??= {};
+    const roles = owner.roles ??= {};
     if (edit === "reset") delete roles[name];
     else roles[name] = edit === null ? null : { ...roles[name], ...edit };
   }
@@ -30,7 +33,7 @@ function editedDocument(draft: RoleDraft) {
 
 export function previewRoles(draft: RoleDraft): Config {
   return resolveConfig(
-    draft.files.base, editedDocument(draft), draft.config.profile, draft.files.sources,
+    draft.files.base, editedDocument(draft), draft.config.profile, draft.files.sources, draft.config.preset,
   );
 }
 
@@ -57,9 +60,22 @@ export class RoleStore {
     const files = await readConfigFiles(this.root, this.agentDir);
     return {
       files,
-      config: resolveConfig(files.base, files.local, this.current.profile, files.sources),
+      config: resolveConfig(files.base, files.local, this.current.profile, files.sources, this.current.preset),
       edits: {},
     };
+  }
+
+  /** Resolves a preset (default: the profile's) from the files on disk without adopting it. */
+  async lineup(preset?: string): Promise<Config> {
+    const files = await readConfigFiles(this.root, this.agentDir);
+    return resolveConfig(files.base, files.local, this.current.profile, files.sources, preset);
+  }
+
+  /** Switches roles for new jobs; running jobs keep their snapshots. Limits still need /reload. */
+  adopt(next: Config): void {
+    if (next.profile !== this.current.profile) throw new Error("Presets cannot change the workflow profile");
+    const { roles, preset, presets, main, sources } = structuredClone(next);
+    this.current = { ...this.current, roles, preset, presets, main, sources };
   }
 
   async save(
@@ -68,19 +84,15 @@ export class RoleStore {
     signal: AbortSignal,
   ): Promise<void> {
     signal.throwIfAborted();
-    if (draft.config.profile !== this.current.profile) throw new Error("Profile changed; reopen /roles");
+    if (draft.config.profile !== this.current.profile || draft.config.preset !== this.current.preset) {
+      throw new Error("Profile or preset changed; reopen /roles");
+    }
     const next = previewRoles(draft);
     for (const name of roleNames) {
       // Preserve unavailable existing roles; validate newly chosen models locally.
       const edit = draft.edits[name];
       if (edit == null || edit === "reset") continue;
-      const { role, model } = resolveRole(next, name, registry);
-      if (!supportedThinking(model).includes(role.thinking)) {
-        throw new Error(`Unsupported thinking level for ${name}: ${role.thinking}`);
-      }
-      if (role.maxTokens > model.maxTokens) {
-        throw new Error(`${name} output limit exceeds the model's ${model.maxTokens} tokens`);
-      }
+      checkRole(next, name, registry);
     }
     await withLock(this.agentDir, "roles-edit", async () => {
       const latest = await readConfigFiles(this.root, this.agentDir);

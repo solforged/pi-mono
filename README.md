@@ -29,7 +29,7 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 ## Docs
 
 - [Sandbox](docs/sandbox.md): tools run in a per-worktree Linux container by default.
-- [Model roles](docs/roles.md): profiles, local overrides, and the role editor.
+- [Model roles](docs/roles.md): profiles, `/modelpreset` lineups, local overrides, and the role editor.
 - [Workflows](docs/workflows.md): commands, naming, commits, and private state.
 - [Subagents](docs/subagents.md): delegation, retained worktrees, sandboxing, and cancellation.
 - [Ask](docs/ask.md): multiple-choice questions for the user, kept through compaction.

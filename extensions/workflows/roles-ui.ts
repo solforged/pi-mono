@@ -8,8 +8,8 @@ type CatalogModel = ThinkingModel & {
   provider: string; id: string; name?: string; maxTokens: number;
 };
 
-// One small framed picker, reused for the panel, model search and submenus.
-async function pick(
+// One small framed picker, reused for the panel, model search, submenus and /modelpreset.
+export async function pick(
   ctx: ExtensionCommandContext,
   title: string,
   items: Item[],
@@ -169,7 +169,8 @@ export async function showRoles(
   const draft = await store.begin();
   while (!signal.aborted) {
     const config = previewRoles(draft);
-    const action = await pick(ctx, `Model roles · ${config.profile} · changes apply only on Save`, [
+    const scope = config.preset === undefined ? config.profile : `${config.profile} · ${config.preset} preset`;
+    const action = await pick(ctx, `Model roles · ${scope} · changes apply only on Save`, [
       ...roleNames.map((name) => ({
         value: name,
         label: `${Object.hasOwn(draft.edits, name) ? "* " : ""}${name}`,

@@ -194,7 +194,7 @@ export default async function (pi: ExtensionAPI) {
       context: str(), wait: Type.Optional(Type.Boolean()), view: Type.Optional(StringEnum(["deck", "background"] as const)) }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal]);
-      const config = await loadConfig(root, runner.agentDir);
+      const config = await loadConfig(root, runner.agentDir, ctx.sessionManager.getBranch());
       const run = await runner.open(params.agent, config, ctx, instructions, combined, r => pi.appendEntry("rex-run", { id: r.id, profile: r.profile }), params.title ?? "", params.name);
       let task: TaskRun | undefined;
       try {
@@ -330,11 +330,11 @@ export default async function (pi: ExtensionAPI) {
       const [action = "pick", prefix, ...rest] = args.trim().split(/\s+/).filter(Boolean);
       if (action === "pick") { if (ctx.mode === "tui") await picker(ctx); else report(ctx, list()); return; }
       if (action === "check" && !prefix) {
-        const config = await loadConfig(root, runner.agentDir);
+        const config = await loadConfig(root, runner.agentDir, ctx.sessionManager.getBranch());
         for (const role of ["advisor", "task"] as const) resolveRole(config, role, ctx.modelRegistry);
         if (!process.env.REX_SESSION || !process.env.REX_BLOCK) throw new Error("No inherited Rex identity");
         const identity = await runner.rex.probe(process.env.REX_SESSION, process.env.REX_BLOCK, AbortSignal.timeout(15_000));
-        report(ctx, `Local Rex ready: ${identity.hostId}\nRoles: ${config.profile} advisor/task configured; no model requests.\nUp to ${config.subagents.rexConcurrency} managed children (subagents.rexConcurrency). Deck and Agents window; asynchronous tasks, follow-ups and explicit takeover. Reload retires managed children; it never replays tasks.`); return;
+        report(ctx, `Local Rex ready: ${identity.hostId}\nRoles: ${config.profile}${config.preset === undefined ? "" : ` ${config.preset} preset`} advisor/task configured; no model requests.\nUp to ${config.subagents.rexConcurrency} managed children (subagents.rexConcurrency). Deck and Agents window; asynchronous tasks, follow-ups and explicit takeover. Reload retires managed children; it never replays tasks.`); return;
       }
       if (action === "list" && !prefix) { report(ctx, list()); return; }
       if (action === "layout" && !prefix) {
