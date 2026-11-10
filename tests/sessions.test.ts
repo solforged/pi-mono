@@ -41,6 +41,19 @@ test("project search uses header cwd, AND terms and phrases, and stable entry re
   assert.equal((await searchSessions(ctx, { query: "alpha", scope: "all" })).hits.length, 4);
 });
 
+test("terms found in a session name count for its entries; a name holding every term gives one hit", async t => {
+  const { ctx, save } = await setup(t);
+  const named = (name: string) => ({ type: "session_info", id: "info", parentId: null, timestamp: date, name });
+  await save("partial", [entry("a", null, "The budget was three megabytes."), entry("b", "a", "Unrelated reply.", "assistant"), named("Snapcompact frames")]);
+  await save("whole", [entry("a", null, "First message."), entry("b", "a", "Second message.", "assistant"), named("Snapcompact budget review")]);
+  await save("own", [entry("a", null, "Opening."), entry("b", "a", "The snapcompact budget is in the text too."), named("Snapcompact budget notes")]);
+  await save("other", [entry("a", null, "No budget talk about that here.")]);
+  const found = await searchSessions(ctx, { query: "snapcompact budget", limit: 10 });
+  assert.deepEqual(found.hits.map(hit => `${hit.session_id}/${hit.entry_id}`).sort(), ["own/b", "partial/a", "whole/a"]);
+  assert.equal(found.matching_entries, 3);
+  assert.equal(found.hits.find(hit => hit.session_id === "whole")!.excerpt, "First message.");
+});
+
 test("all scope discovers other default projects; active custom directory stays flat", async t => {
   const { ctx, save, dir } = await setup(t);
   await save();

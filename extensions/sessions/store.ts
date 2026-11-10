@@ -290,10 +290,14 @@ export async function searchSessions(ctx: Context, options: SearchOptions) {
     }
     const session = { matches: 0, hits: [] as Hit[] }, meta = metadata(doc);
     sessions.set(doc.id, session);
+    // Terms found in the session name count for each of its entries. A name
+    // holding every term would match them all, so entries then match on their
+    // own text and the session otherwise gets one hit at its first entry.
+    const name = doc.name.toLowerCase(), unnamed = terms.filter(term => !name.includes(term)), wanted = unnamed.length ? unnamed : terms;
     for (const entry of doc.entries) {
       ctx.signal?.throwIfAborted();
       const text = entryText(entry, tools), lower = text.toLowerCase();
-      if (!text || !terms.every(term => lower.includes(term))) continue;
+      if (!text || !wanted.every(term => lower.includes(term))) continue;
       session.matches++;
       // Adjacent terms win; recency breaks ties, not relevance.
       const score = lower.includes(terms.join(" ")) ? 2 : 1;
@@ -303,6 +307,11 @@ export async function searchSessions(ctx: Context, options: SearchOptions) {
       session.hits.push({ ...hit, ...excerpt(text, terms), score });
       session.hits.sort(compare);
       if (session.hits.length > limit) session.hits.pop();
+    }
+    const first = unnamed.length || session.matches ? undefined : doc.entries.find(entry => entryText(entry, tools));
+    if (first) {
+      session.matches = 1;
+      session.hits.push({ ...meta, entry_id: first.id, parent_id: first.parentId, role: first.role ?? first.type, entry_timestamp: first.timestamp, ...excerpt(entryText(first, tools)), score: name.includes(terms.join(" ")) ? 2 : 1 });
     }
   }
   const matches = [...sessions.values()].reduce((n, session) => n + session.matches, 0);

@@ -16,8 +16,14 @@ model request.
 All terms must match; double quotes group phrases. It searches original user
 and assistant text across branches, including entries before compaction. It
 returns up to five hits by default, at most ten. Adjacent terms rank ahead of
-separated terms; newer entries break ties. Session names appear in results but
-are not themselves searched. Refine the query when `has_more` is true.
+separated terms; newer entries break ties. Refine the query when `has_more` is
+true.
+
+A term found in the session name counts for every entry of that session, so
+`snapcompact budget` finds the entries mentioning a budget in a session named
+"Snapcompact frames". When the name holds every term, entries match on their
+own text as usual, and a session with no such entry is returned once, at its
+first entry.
 
 Each hit carries a session ID, entry ID, parent ID, working directory, date,
 revision, and bounded excerpt. Excerpts prefer whole-word boundaries, preserve
