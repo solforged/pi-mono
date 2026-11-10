@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -260,15 +260,54 @@ test("the viewer answers keys, hovering, clicks and scrollbar drags", async (t) 
   assert.equal(await new Promise((resolve) => viewer.on("exit", resolve)), 0);
 });
 
+test("the viewer moves to the worktree Pi's session moved to", async (t) => {
+  const base = realpathSync(await mkdtemp(join(tmpdir(), "diff-move-")));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const main = join(base, "main"), tree = join(base, "tree"), ipc = join(base, "ipc");
+  await mkdir(main);
+  await writeFile(join(main, "a.ts"), "one\n");
+  git(main, "init", "-q", "-b", "main"); git(main, "add", "."); git(main, "commit", "-qm", "init");
+  git(main, "worktree", "add", "-q", "-b", "pi/task", tree);
+  await writeFile(join(main, "in-main.ts"), "main\n");
+  await writeFile(join(tree, "in-tree.ts"), "tree\n");
+
+  const pid = process.pid;
+  const viewer = spawn(process.execPath, [join(import.meta.dirname, "../extensions/diff/viewer.ts"), "--root", main, "--ipc", ipc, "--pi-pid", String(pid)], { stdio: ["pipe", "pipe", "pipe"] });
+  t.after(() => viewer.kill());
+  let output = "";
+  viewer.stdout.setEncoding("utf8").on("data", (chunk) => { output += chunk; });
+  const until = async (check: (screen: string[]) => boolean, what: string) => {
+    for (let i = 0; i < 100; i++) {
+      if (check(replay(output))) return;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    assert.fail(`${what}:\n${replay(output).join("\n")}`);
+  };
+  const shows = (text: string) => (screen: string[]) => screen.some((line) => line.includes(text));
+  await until(shows("in-main.ts"), "the main checkout's change");
+
+  // Pi says its session moved into the worktree.
+  output = "";
+  await writeFile(join(ipc, `${pid}.tick`), JSON.stringify({ event: "root", root: tree, seq: 1 }));
+  await until((screen) => shows("in-tree.ts")(screen) && !shows("in-main.ts")(screen), "the worktree's change only");
+
+  // Edits there are followed, and the watcher is on the new tree.
+  await writeFile(join(tree, "later.ts"), "later\n");
+  await until(shows("later.ts"), "a new file in the worktree");
+
+  viewer.stdin.write("q");
+  assert.equal(await new Promise((resolve) => viewer.on("exit", resolve)), 0);
+});
+
 function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean; reopen?: boolean; columns?: number; pid?: number; sizeError?: boolean; resizeError?: string } = {}) {
   const commands = new Map<string, any>(), handlers = new Map<string, Function>();
   const calls: Array<[string, string[]]> = [], notes: string[] = [];
-  const state = { status: "", columns: options.columns ?? 200 };
+  const state = { status: "", columns: options.columns ?? 200, root: "/repo" };
   const pi = { registerCommand: (name: string, c: any) => commands.set(name, c), on: (name: string, h: Function) => handlers.set(name, h) };
   const run = async (command: string, args: string[]) => {
     calls.push([command, args]);
     if (args[0] === "--version") return "v26.1.0\n";
-    if (args[0] === "rev-parse") return "/repo\n";
+    if (args[0] === "rev-parse") return `${state.root}\n`;
     if (args[0] === "status") return state.status;
     if (args[0] === "block" && args.at(-1) === "size") {
       if (options.sizeError) throw new Error("no such block");
@@ -579,4 +618,33 @@ test("reopens the pane Pi quit with when changes remain", async (t) => {
   const bystander = harness(env, dir, { pid: 8 });
   bystander.handlers.get("session_shutdown")!({ reason: "quit" });
   assert.equal(readPanes(join(dir, "panes.json"))["/repo"].pid, 7);
+});
+
+test("an open pane follows the session into another worktree", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "diff-ipc-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const panes = join(dir, "panes.json");
+  await writeFile(panes, JSON.stringify({ "/repo": { pid: 4242, at: Date.now() }, "/other": { pid: 7, at: Date.now() } }));
+  const viewer = spawn("sleep", ["30"]);
+  t.after(() => viewer.kill());
+  await writeFile(join(dir, "4242.viewer"), String(viewer.pid));
+
+  // A switch rebinds extensions: a fresh instance sees the session in the worktree.
+  const h = harness({}, dir);
+  h.state.root = "/wt/repo--task";
+  h.handlers.get("session_start")!({ reason: "resume" }, { ...h.ctx, cwd: "/wt/repo--task" });
+  await settle();
+  const { seq: _, ...moved } = JSON.parse(await readFile(join(dir, "4242.tick"), "utf8"));
+  assert.deepEqual(moved, { event: "root", root: "/wt/repo--task" });
+  // The memory of open panes moves with it; other Pis' entries stay.
+  assert.deepEqual(Object.keys(readPanes(panes)).sort(), ["/other", "/wt/repo--task"]);
+  h.handlers.get("session_shutdown")!({ reason: "quit" });
+  assert.equal(readPanes(panes)["/wt/repo--task"].pid, 4242);
+
+  // Not at startup, when no earlier session can have opened this Pi's pane.
+  await rm(join(dir, "4242.tick"));
+  const fresh = harness({}, dir);
+  fresh.handlers.get("session_start")!({ reason: "startup" }, fresh.ctx);
+  await settle();
+  await assert.rejects(readFile(join(dir, "4242.tick")));
 });

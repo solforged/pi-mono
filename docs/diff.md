@@ -50,6 +50,11 @@ hunk that changed. Scrolling or switching files yourself pauses following, and
 the header's dot turns hollow. Press `f`, or send Pi another prompt, to turn it
 back on.
 
+The pane belongs to the Pi process, so it stays open across `/new`, `/resume`
+and session moves. When the session lands in another working tree, such as a
+move into a worktree with `/wt enter` or back with `/wt exit`, the pane switches
+to that tree, and Pi remembers it there for the next start.
+
 ## Keys
 
 A bar along the bottom shows the main keys, and you can click them. Files,

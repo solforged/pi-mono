@@ -16,7 +16,8 @@ if (!values.root || !values.ipc || !values["pi-pid"]) {
   console.error("Usage: viewer.ts --root DIR --ipc DIR --pi-pid PID [--palette JSON] [--source NAME]");
   process.exit(2);
 }
-const root = realpathSync(values.root);
+/** The working tree shown; Pi moves it when its session moves to another worktree. */
+let root = realpathSync(values.root);
 const ipc = values.ipc;
 const piPid = Number(values["pi-pid"]);
 const tickName = `${piPid}.tick`;
@@ -140,9 +141,11 @@ async function refresh(focusPath?: string) {
       queued = false;
       const target = queuedFocus;
       queuedFocus = undefined;
+      const from = root;
       let next: Snapshot | undefined, error: string | undefined;
-      try { next = await collect(root, source); }
+      try { next = await collect(from, source); }
       catch (failure) { error = (failure as Error).message; }
+      if (from !== root) { queued = true; continue; } // Moved meanwhile: collect again there.
       const nextSignature = error ?? JSON.stringify(next);
       if (nextSignature === signature && !target) continue;
       signature = nextSignature;
@@ -176,9 +179,29 @@ function relativePath(path: string): string | undefined {
   return inside && !inside.startsWith("..") && !isAbsolute(inside) ? inside.split("\\").join("/") : undefined;
 }
 
+/** Shows another working tree, as if the pane had just opened there. */
+function moveTo(next: string) {
+  let resolved: string;
+  try { resolved = realpathSync(next); } catch { return; }
+  if (resolved === root) return;
+  root = resolved;
+  tree?.close();
+  tree = watchTree();
+  positions.clear();
+  lastEdited = undefined;
+  view.snapshot = undefined;
+  view.selected = 0;
+  view.scroll = 0;
+  view.loading = true;
+  view.follow = true;
+  signature = "";
+  draw();
+}
+
 function onTick() {
-  let message: { event?: string; path?: string } = {};
+  let message: { event?: string; path?: string; root?: string } = {};
   try { message = JSON.parse(readFileSync(join(ipc, tickName), "utf8")); } catch {}
+  if (message.event === "root" && message.root) moveTo(message.root);
   if (message.event === "agent_start") { view.follow = true; draw(); }
   const path = message.path ? relativePath(message.path) : undefined;
   if (path) lastEdited = path;
@@ -371,7 +394,7 @@ out.on("resize", () => {
 });
 draw(true);
 
-const tree = watchTree();
+let tree = watchTree();
 watch(ipc, (_event, name) => { if (String(name) === tickName) onTick(); });
 setInterval(() => void refresh(), tree ? 10_000 : 3_000).unref();
 setInterval(() => {

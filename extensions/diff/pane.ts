@@ -62,8 +62,10 @@ export function readPanes(file: string): Panes {
   }
 }
 
-function writePane(file: string, root: string, pid: number | undefined) {
+/** Records `pid`'s pane at `root`, or forgets it with `undefined`; `moved` also drops `pid`'s entries for other worktrees. */
+function writePane(file: string, root: string, pid: number | undefined, moved?: number) {
   const panes = readPanes(file);
+  if (moved !== undefined) for (const [key, value] of Object.entries(panes)) if (key !== root && value.pid === moved) delete panes[key];
   if (pid === undefined) delete panes[root];
   else panes[root] = { pid, at: Date.now() };
   for (const [key, value] of Object.entries(panes)) if (!(Date.now() - value.at < KEEP_MS)) delete panes[key];
@@ -302,7 +304,24 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
     },
   });
 
-  pi.on("session_start", (event, ctx) => { void arm(ctx, event.reason); });
+  /**
+   * Points an open pane at the session's worktree after a switch to a session in
+   * another directory, such as a move into a worktree with /wt. The pane outlives
+   * the switch because it belongs to the Pi process, not the session.
+   */
+  async function follow(ctx: ExtensionContext) {
+    if (viewerPid(dir, pid) === undefined) return;
+    const root = await gitRoot(ctx.cwd);
+    if (!root) return;
+    opened = root;
+    writePane(panes, root, pid, pid);
+    tick(dir, pid, { event: "root", root });
+  }
+
+  pi.on("session_start", (event, ctx) => {
+    if (event.reason !== "startup") void follow(ctx);
+    void arm(ctx, event.reason);
+  });
 
   // On quit, remember whether this Pi's pane is still open. The viewer outlives
   // Pi by up to a second, so it is still running here.
