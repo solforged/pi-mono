@@ -163,6 +163,10 @@
     "maxInputChars": 48000,
     "maxChunks": 6,
     "maxCandidates": 5,
-    "auto": { "enabled": false, "minSessions": 3, "maxSkills": 12 }
+    "auto": {
+      "enabled": false,
+      "minSessions": 3,
+      "maxSkills": 12
+    }
   }
 }
