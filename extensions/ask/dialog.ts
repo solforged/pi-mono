@@ -14,7 +14,7 @@ export function askInTerminal(ctx: ExtensionContext, questions: Question[], sign
   if (signal?.aborted) return Promise.resolve({ outcome: "interrupted" });
   return ctx.ui.custom<Ending>((tui, theme, keybindings, done) => {
     const form = new Form(questions);
-    let editing = false, cache: string[] | undefined, closed = false;
+    let editing = false, cache: string[] | undefined, cacheWidth = 0, closed = false;
     const finish = (ending: Ending) => {
       if (closed) return;
       closed = true; signal?.removeEventListener("abort", abort); done(ending);
@@ -53,7 +53,7 @@ export function askInTerminal(ctx: ExtensionContext, questions: Question[], sign
     }
 
     function render(width: number): string[] {
-      if (cache) return cache;
+      if (cache && cacheWidth === width) return cache;
       const w = Math.max(10, width), lines: string[] = [];
       const add = (text: string, indent = 1) => {
         for (const part of wrapTextWithAnsi(text, Math.max(1, w - indent))) lines.push(" ".repeat(indent) + part);
@@ -109,6 +109,7 @@ export function askInTerminal(ctx: ExtensionContext, questions: Question[], sign
       add(theme.fg("dim", keys));
       lines.push(theme.fg("accent", "─".repeat(w)));
       cache = lines.map(text => truncateToWidth(text, w));
+      cacheWidth = width;
       return cache;
     }
 
