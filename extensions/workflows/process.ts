@@ -94,6 +94,8 @@ export async function runProcess(command: string, args: string[], options: Proce
       killTimer ??= setTimeout(() => kill("SIGKILL"), 1500);
     };
     const parser = options.onEvent ? new JsonLines(options.onEvent) : undefined;
+    // Chunks can end inside a multibyte character.
+    const decodeOut = new StringDecoder("utf8"), decodeErr = new StringDecoder("utf8");
     const fail = (error: unknown) => { failure ??= error instanceof Error ? error : new Error(String(error)); stop(); };
     options.signal.addEventListener("abort", stop, { once: true });
     // The signal can change between the preflight check and listener registration.
@@ -104,10 +106,10 @@ export async function runProcess(command: string, args: string[], options: Proce
         if (bytes > (options.maxBytes ?? 32 * 1024 * 1024)) throw new Error("Child output limit exceeded");
         if (fd !== undefined) writeSync(fd, chunk);
         if (parser) parser.push(chunk);
-        else stdout = bounded(stdout + chunk.toString("utf8"), 100000);
+        else stdout = bounded(stdout + decodeOut.write(chunk), 100000);
       } catch (error) { fail(error); }
     });
-    proc.stderr.on("data", (chunk: Buffer) => { stderr = bounded(stderr + chunk.toString("utf8"), 16000); });
+    proc.stderr.on("data", (chunk: Buffer) => { stderr = bounded(stderr + decodeErr.write(chunk), 16000); });
     proc.on("error", fail);
     proc.stdin.on("error", (error: NodeJS.ErrnoException) => { if (error.code !== "EPIPE") fail(error); });
     proc.stdin.end(options.input ?? "");

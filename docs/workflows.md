@@ -81,8 +81,8 @@ State lives under `<agent-dir>/workflow-state/<profile>/<cwd-hash>/`:
 
 Directories/files created here are private (0700/0600). State is not committed
 or automatically pruned. A crashed review, publisher, or commit can leave a
-`.lock` directory: inspect its `owner.json`, confirm that process is gone, then
-remove only that stale lock. Do not remove active worktree directories by hand;
+`.lock` directory; the next run takes it over once the process named in its
+`owner.json` has exited. Do not remove active worktree directories by hand;
 use the [worktree review procedure](subagents.md#worker-worktrees).
 
 Subagent tool usage is reported in Pi's normal totals. Titles, learning calls,

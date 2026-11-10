@@ -23,14 +23,28 @@ export async function saveJson(file: string, value: unknown): Promise<void> {
   await atomicWrite(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-// Refuse concurrent reviewers/publishers instead of risking lost updates.
-export async function withLock<T>(root: string, name: string, fn: () => Promise<T>): Promise<T> {
+const isAlive = (pid: number) => {
+  try { process.kill(pid, 0); return true; } catch (error: any) { return error?.code === "EPERM"; }
+};
+// A lock is stale when its recorded owner has exited, or when it never recorded one.
+async function isStale(lock: string, alive: (pid: number) => boolean): Promise<boolean> {
+  const pid = await readJson<{ pid?: unknown }>(join(lock, "owner.json"), {}).then((owner) => owner.pid, () => undefined);
+  if (typeof pid === "number") return !alive(pid);
+  return await lstat(lock).then((s) => Date.now() - s.mtimeMs > 10000, () => true);
+}
+
+// Refuse concurrent reviewers/publishers instead of risking lost updates. A
+// lock left by a killed process is taken over.
+export async function withLock<T>(root: string, name: string, fn: () => Promise<T>, alive = isAlive): Promise<T> {
   await privateDir(root);
   const lock = join(root, `${name}.lock`);
-  try { await mkdir(lock, { mode: 0o700 }); }
-  catch (error: any) {
-    if (error.code !== "EEXIST") throw error;
-    throw new Error(`Workflow is locked: ${lock}. Remove only after confirming no review/publish is running.`);
+  for (let attempt = 0; ; attempt++) {
+    try { await mkdir(lock, { mode: 0o700 }); break; }
+    catch (error: any) {
+      if (error.code !== "EEXIST") throw error;
+      if (attempt > 0 || !(await isStale(lock, alive))) throw new Error(`Workflow is locked: ${lock}. Another Pi process holds it; remove it only if none is running.`);
+      await rm(lock, { recursive: true, force: true });
+    }
   }
   try {
     await saveJson(join(lock, "owner.json"), { pid: process.pid, started: new Date().toISOString() });

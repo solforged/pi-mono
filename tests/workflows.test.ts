@@ -4,7 +4,7 @@ import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isTransientError, loadTitlePrompt, MAX_TRANSIENT_FAILURES, parseTitle, registerAutoname } from "../extensions/workflows/autoname.ts";
 import { applyDraft, evidenceChunks, evidenceFromBranch, inventorySkills, parseCandidates, renderDraft, stageCandidate } from "../extensions/workflows/learning.ts";
-import { atomicWrite, hash, readSkill } from "../extensions/workflows/state.ts";
+import { atomicWrite, hash, readSkill, withLock } from "../extensions/workflows/state.ts";
 import { childArgs, childExtensions, createWorktree } from "../extensions/workflows/subagents.ts";
 import { runProcess } from "../extensions/workflows/process.ts";
 import { config, registry, root, skill, temporary } from "./helpers.ts";
@@ -155,4 +155,19 @@ test("workers use separate worktrees, preserve the parent checkout, and reject d
   await assert.rejects(readFile(join(dir, "result.txt")), { code: "ENOENT" });
   await atomicWrite(join(dir, "dirty.txt"), "uncommitted");
   await assert.rejects(createWorktree(dir, join(worktrees, "third"), signal), /clean repository/);
+});
+
+test("workflow locks refuse a live holder and are taken over from a dead one", async (t) => {
+  const dir = await temporary(t);
+  const lock = join(dir, "commit.lock");
+  await withLock(dir, "commit", async () => {
+    await assert.rejects(withLock(dir, "commit", async () => "never"), /Workflow is locked/);
+  });
+  await mkdir(lock);
+  await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: 999999 }));
+  await assert.rejects(withLock(dir, "commit", async () => "never", () => true), /Workflow is locked/);
+  assert.equal(await withLock(dir, "commit", async () => "taken", (pid) => pid !== 999999), "taken");
+  // A holder that has not recorded itself yet is not presumed dead.
+  await mkdir(lock);
+  await assert.rejects(withLock(dir, "commit", async () => "never"), /Workflow is locked/);
 });
