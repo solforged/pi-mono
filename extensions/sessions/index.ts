@@ -14,7 +14,7 @@ function row(previous: unknown, text: string): Text {
 
 // Declarations are sent with every request: keep them short. The store
 // validates every argument and explains limits in its errors and results.
-// The model gets a pruned result; the full one rides in details for the TUI.
+// The model gets a pruned result (a read as plain text); the full one rides in details for the TUI.
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const scope = Type.Optional(StringEnum(["project", "all"] as const));
 const include_tools = Type.Optional(Type.Boolean());

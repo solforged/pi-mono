@@ -23,7 +23,7 @@ function renderContext(args = {}, isError = false, lastComponent?: any) {
   } };
 }
 function checkViews(tools: any[], search: any, read: any) {
-  const searchData = JSON.parse(search.content[0].text), readData = JSON.parse(read.content[0].text);
+  const searchData = JSON.parse(search.content[0].text), readData = read.details.full;
   const payload = (data: any) => ({ content: [{ type: "text", text: JSON.stringify(data) }] });
   const examples = [
     [search, payload({ ...searchData, hits: [], matching_entries: 0 }), payload({ ...searchData, has_more: true, coverage: { ...searchData.coverage, complete: false, warnings: ["Cannot read archive"], warningCount: 1 } })],
@@ -84,7 +84,7 @@ export default function (pi: ExtensionAPI) {
         const search = await tools[0].execute("search", { query: "smoke decision" }, undefined, undefined, fake);
         assert.equal(JSON.parse(search.content[0].text).hits[0].entry_id, "entry");
         const read = await tools[1].execute("read", { session_id: "smoke-past", entry_id: "entry" }, undefined, undefined, fake);
-        assert.match(JSON.parse(read.content[0].text).text, /smoke lexical decision/);
+        assert.match(read.content[0].text, /^session smoke-past, lines 1-2 of 2 \(end\)\n.*\n\[entry\] user .*\nsmoke lexical decision$/);
         checkViews(tools, search, read);
         assert.equal(tools[1].annotations.readOnlyHint, true);
         console.log("Session integration: bundled imports, registration, search, retrieval, compact/expanded rendering, narrow widths, Unicode and noninteractive execution passed");
