@@ -174,7 +174,6 @@ export function promptNote(plan: Plan): string {
   const shown = plan.mounts.filter((m) => m.target === m.source && m.label !== "context");
   const lines = shown.map((m) => `- ${m.target} (${m.label}${m.readonly ? ", read-only" : ""})`);
   return [
-    "## Sandbox",
     "Your tools (read, write, edit, bash, grep, find, ls) run in a Debian Linux arm64 container, not on the macOS host. Host paths keep their locations; only these are available:",
     ...lines,
     "Skills, Pi documentation, and Git configuration are readable. Other host paths, credentials, and the SSH agent are not. Install project toolchains with `mise install`; node_modules, target, and .venv are Linux-only per worktree.",

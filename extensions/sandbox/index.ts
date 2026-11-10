@@ -310,8 +310,13 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     }
   });
 
-  pi.on("before_agent_start", async (event) => {
-    if (enabled && plan) return { systemPrompt: `${event.systemPrompt}\n\n${promptNote(plan)}` };
+  // A section, not a returned systemPrompt: a forced prompt makes Pi fold every
+  // tool or section change into the leading system message, which rewrites the
+  // whole prefix, so Anthropic drops all earlier thinking and re-bills the cache.
+  // Sections change as mid-conversation patches instead.
+  pi.on("before_agent_start", (event) => {
+    const sections = event.systemPromptOptions.sections;
+    if (enabled && plan) sections.sandbox = promptNote(plan); else delete sections.sandbox;
   });
 
   pi.registerTool({
