@@ -284,7 +284,7 @@ function fileRow(file: FileDiff, selected: boolean, hovered: boolean, columns: n
 
 const HELP: Array<[string, string]> = [
   ["↑ ↓  j k", "scroll"], ["d u  space", "half page / page"], ["g G", "top / bottom"],
-  ["← →  ] [  tab", "previous / next file"], ["⇧↑ ⇧↓  p n", "previous / next change, across files"],
+  ["← →  ] [  tab", "previous / next file"], ["p n  shift ↑ ↓", "previous / next change, across files"],
   ["click", "select a file, press a key below"], ["wheel, drag bar", "scroll"],
   ["s", "switch source"], ["w", "toggle wrap"], ["f", "follow Pi's edits"], ["r", "refresh"], ["q", "close the pane"],
 ];
@@ -292,7 +292,7 @@ const HELP: Array<[string, string]> = [
 /** The bottom bar: clickable keys, then a label. Items that do not fit are dropped from the end. */
 const BAR: Array<{ keys: Array<[string, string]>; label: string }> = [
   { keys: [["←", "left"], ["→", "right"]], label: "file" },
-  { keys: [["⇧↑", "shift-up"], ["⇧↓", "shift-down"]], label: "change" },
+  { keys: [["p", "p"], ["n", "n"]], label: "change" },
   { keys: [["s", "s"]], label: "source" },
   { keys: [["f", "f"]], label: "follow" },
   { keys: [["?", "?"]], label: "help" },

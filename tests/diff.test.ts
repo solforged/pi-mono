@@ -173,8 +173,8 @@ test("shows hover, a key bar, a change counter and a scrollbar", () => {
   const base = view({ snapshot: { source: "uncommitted", label: "uncommitted", files: [long, files[1] ?? files[0]] }, rows: 24, columns: 60 });
   const screen = layout(base);
   const text = screen.rows.map((row) => plain(paint(row, 60)));
-  assert.match(text[23], /← +→ file +⇧↑ +⇧↓ change +s source +f follow +\? help/);
-  assert.ok(screen.keys && screen.keys.items.some((item) => item.key === "shift-down"));
+  assert.match(text[23], /← +→ file +p +n change +s source +f follow +\? help/);
+  assert.ok(screen.keys && screen.keys.items.some((item) => item.key === "n"));
   assert.ok(text.some((line) => /change 1\/2 · file 1\/2 $/.test(line)));
   assert.ok(screen.scrollbar);
   assert.equal(screen.scrollbar.column, 59);
