@@ -50,6 +50,7 @@ function draw(full = false) {
   out.write(frame);
 }
 
+const RESIZE_SETTLE_MS = 120;
 const RESTORE = "\x1b[0m\x1b]22;default\x1b\\\x1b[?1004l\x1b[?1003l\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l";
 let closing = false;
 function quit(code = 0) {
@@ -357,7 +358,17 @@ if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", input);
 out.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[2J\x1b]11;?\x1b\\");
-out.on("resize", () => { clampScroll(); draw(true); });
+// Rex passes a new pane through more than one size as it settles, so wait for
+// the last one, and leave the screen alone if that is the size already drawn.
+let resized: ReturnType<typeof setTimeout> | undefined;
+out.on("resize", () => {
+  clearTimeout(resized);
+  resized = setTimeout(() => {
+    if (out.columns === view.columns && out.rows === view.rows) return;
+    clampScroll();
+    draw(true);
+  }, RESIZE_SETTLE_MS);
+});
 draw(true);
 
 const tree = watchTree();

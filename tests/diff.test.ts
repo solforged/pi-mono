@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { changedHunks, collect, parseDiff, unquote } from "../extensions/diff/git.ts";
-import { bundledHighlighter, DEFAULT_SETTINGS, readPanes, readSettings, registerDiff, tick, which } from "../extensions/diff/pane.ts";
+import { bundledHighlighter, DEFAULT_SETTINGS, paneSize, readPanes, readSettings, registerDiff, tick, which } from "../extensions/diff/pane.ts";
 import { body, DEFAULT_PALETTE, emphasis, fileBody, hunkAt, layout, type View } from "../extensions/diff/render.ts";
 import { createHighlighter, loadHighlighter, piecesFromHtml, tokenFor } from "../extensions/diff/syntax.ts";
 import { paint, sanitize, width, wrapSpans } from "../extensions/diff/text.ts";
@@ -260,7 +260,7 @@ test("the viewer answers keys, hovering, clicks and scrollbar drags", async (t) 
   assert.equal(await new Promise((resolve) => viewer.on("exit", resolve)), 0);
 });
 
-function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean; reopen?: boolean; columns?: number; pid?: number; resizeError?: string } = {}) {
+function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean; reopen?: boolean; columns?: number; pid?: number; sizeError?: boolean; resizeError?: string } = {}) {
   const commands = new Map<string, any>(), handlers = new Map<string, Function>();
   const calls: Array<[string, string[]]> = [], notes: string[] = [];
   const state = { status: "", columns: options.columns ?? 200 };
@@ -270,7 +270,11 @@ function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean;
     if (args[0] === "--version") return "v26.1.0\n";
     if (args[0] === "rev-parse") return "/repo\n";
     if (args[0] === "status") return state.status;
-    if (args[0] === "split") return JSON.stringify({ block_ids: ["block:pane"] });
+    if (args[0] === "block" && args.at(-1) === "size") {
+      if (options.sizeError) throw new Error("no such block");
+      return JSON.stringify({ columns: 239, rows: 63, owner: "client:c" });
+    }
+    if (args[4] === "session.new_split") return JSON.stringify({ block_ids: ["block:pane"] });
     if (args[4] === "session.resize_pane" && options.resizeError) throw new Error(options.resizeError);
     return "{}";
   };
@@ -280,7 +284,9 @@ function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean;
     panes: join(dir, "panes.json"),
   });
   const ctx = { mode: "tui", cwd: "/repo/sub", ui: { notify: (m: string) => notes.push(m) } };
-  const splits = () => calls.filter(([, args]) => args[0] === "split");
+  /** Each new_split call as the rex binary and the viewer's command line. */
+  const splits = () => calls.filter(([, args]) => args[4] === "session.new_split")
+    .map(([rex, args]): [string, string[]] => [rex, JSON.parse(args[5]).layout.block.options.command]);
   return { command: commands.get("diff"), handlers, calls, notes, ctx, state, splits };
 }
 
@@ -303,17 +309,43 @@ test("opens the viewer in a Rex split beside Pi's own pane", async (t) => {
   assert.deepEqual(h.notes, []);
   const [rex, args] = h.splits()[0];
   assert.equal(rex, join(bin, "rex"));
-  assert.deepEqual(args.slice(0, 16), ["split", "-s", "session:s", "-b", "block:b", "--split=right", "--ratio", "33", "--focus=false", "--label", "Diff", "--shell=none", "-c", "/repo", "--json", "--"]);
-  assert.equal(args[16], join(bin, "node"));
-  assert.match(args[17], /extensions\/diff\/viewer\.ts$/);
-  // Rex ignores --ratio, so the border is moved to give the pane a third.
+  assert.equal(args[0], join(bin, "node"));
+  assert.match(args[1], /extensions\/diff\/viewer\.ts$/);
+  assert.deepEqual(args.slice(-8), ["--ipc", dir, "--pi-pid", "4242", "--palette", "{\"accent\":\"#ff00ff\"}", "--source", "staged"]);
+  // The pane starts at about its final size, then moves to a third.
+  const [, call] = h.calls.at(-2)!;
+  assert.deepEqual(call.slice(0, 5), ["api", "call", "--session", "session:s", "session.new_split"]);
+  const request = JSON.parse(call[5]);
+  assert.deepEqual({ ...request, layout: undefined }, {
+    session_id: "session:s", anchor_id: "block:b", direction: "horizontal", side: "after", focus: false, ratio: 0.6667, layout: undefined,
+  });
+  const { command: _, ...block } = request.layout.block.options;
+  assert.equal(request.layout.block.label, "Diff");
+  assert.deepEqual(block, { shell: "none", cwd: "/repo", size: { columns: 78, rows: 63 } });
+  // Rex ignores new_split's ratio, so the border is moved afterwards.
   const [, resize] = h.calls.at(-1)!;
   assert.deepEqual(resize.slice(0, 5), ["api", "call", "--session", "session:s", "session.resize_pane"]);
   assert.deepEqual(JSON.parse(resize[5]), { session_id: "session:s", direction: "horizontal", before_block_id: "block:b", after_block_id: "block:pane", ratio: 0.6667 });
-  assert.deepEqual(args.slice(-8), ["--ipc", dir, "--pi-pid", "4242", "--palette", "{\"accent\":\"#ff00ff\"}", "--source", "staged"]);
 
   await h.command.handler("bogus", h.ctx);
   assert.match(h.notes.at(-1)!, /Usage: \/diff/);
+});
+
+test("sizes the new pane from Pi's, or leaves it to Rex", async (t) => {
+  assert.deepEqual(paneSize({ columns: 239, rows: 63 }), { columns: 78, rows: 63 });
+  assert.deepEqual(paneSize({ columns: 40, rows: 10 }), { columns: 20, rows: 10 });
+  assert.equal(paneSize({ columns: 0, rows: 63 }), undefined);
+  assert.equal(paneSize({}), undefined);
+
+  const dir = await mkdtemp(join(tmpdir(), "diff-ipc-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const bin = await mkdtemp(join(tmpdir(), "diff-bin-"));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  for (const name of ["rex", "node"]) await writeFile(join(bin, name), "", { mode: 0o755 });
+  const h = harness({ PATH: bin, REX_SESSION: "session:s", REX_BLOCK: "block:b" }, dir, { sizeError: true });
+  await h.command.handler("", h.ctx);
+  assert.deepEqual(h.notes, []);
+  assert.equal(JSON.parse(h.calls.at(-2)![1][5]).layout.block.options.size, undefined);
 });
 
 test("warns when the pane cannot be narrowed", async (t) => {

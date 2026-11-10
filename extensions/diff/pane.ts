@@ -139,6 +139,16 @@ export async function treeState(exec: Run, root: string): Promise<string> {
   }).join("\n");
 }
 
+/**
+ * The pane's likely size from Pi's unsplit pane: the same rows, and its share
+ * of the columns less the two that the border between them takes.
+ */
+export function paneSize(pi: { columns?: unknown; rows?: unknown }): { columns: number; rows: number } | undefined {
+  const { columns, rows } = pi;
+  if (!Number.isInteger(columns) || !Number.isInteger(rows) || (columns as number) < 1 || (rows as number) < 1) return undefined;
+  return { columns: Math.max(20, Math.round((columns as number) * SHARE) - 2), rows: rows as number };
+}
+
 export interface Options {
   palette: (ctx: ExtensionContext) => Partial<Palette>;
   highlighter?: string;
@@ -176,25 +186,34 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
     const root = await gitRoot(ctx.cwd);
     if (!root) throw new Error("/diff needs a Git working tree");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const created = await exec(rex, [
-      "split", "-s", session, "-b", block, "--split=right", "--ratio", String(Math.round(SHARE * 100)), "--focus=false",
-      "--label", "Diff", "--shell=none", "-c", root, "--json", "--",
-      node, VIEWER, "--root", root, "--ipc", dir, "--pi-pid", String(pid),
-      "--palette", JSON.stringify(options.palette(ctx)), "--source", source,
-      ...(options.highlighter ? ["--highlighter", options.highlighter] : []),
-      ...(focus ? ["--focus", focus] : []),
-    ], ctx.cwd);
+    // A new terminal is 80x24 until Rex shows it, so start it at about its
+    // final size; the viewer then lays the diff out once rather than per size.
+    const size = await exec(rex, ["block", "call", "-s", session, "-b", block, "size"], ctx.cwd)
+      .then((out) => paneSize(JSON.parse(out)), () => undefined);
+    const ratio = Math.round((1 - SHARE) * 10_000) / 10_000;
+    const created = await exec(rex, ["api", "call", "--session", session, "session.new_split", JSON.stringify({
+      session_id: session, anchor_id: block, direction: "horizontal", side: "after", focus: false, ratio,
+      layout: { block: { flavor: "com.superlogical.terminal.shell", label: "Diff", options: {
+        shell: "none", cwd: root, ...(size ? { size } : {}),
+        command: [
+          node, VIEWER, "--root", root, "--ipc", dir, "--pi-pid", String(pid),
+          "--palette", JSON.stringify(options.palette(ctx)), "--source", source,
+          ...(options.highlighter ? ["--highlighter", options.highlighter] : []),
+          ...(focus ? ["--focus", focus] : []),
+        ],
+      } } },
+    })], ctx.cwd);
     opened = root;
     writePane(panes, root, pid);
-    // Rex splits evenly whatever --ratio says, so move the border afterwards.
-    // The pane is already open, so a failure here only leaves it wider; say so
-    // rather than leaving an even split unexplained.
+    // Rex splits evenly whatever ratio new_split is given, so move the border
+    // afterwards. The pane is already open, so a failure here only leaves it
+    // wider; say so rather than leaving an even split unexplained.
     let pane: unknown;
     try { pane = JSON.parse(created).block_ids?.[0]; } catch {}
     const widened = (why: string) => ctx.ui.notify(`The diff pane opened at Rex's default width: ${why}`, "warning");
-    if (typeof pane !== "string") { widened("rex split returned no block ID"); return; }
+    if (typeof pane !== "string") { widened("Rex returned no block ID"); return; }
     await exec(rex, ["api", "call", "--session", session, "session.resize_pane", JSON.stringify({
-      session_id: session, direction: "horizontal", before_block_id: block, after_block_id: pane, ratio: Math.round((1 - SHARE) * 10_000) / 10_000,
+      session_id: session, direction: "horizontal", before_block_id: block, after_block_id: pane, ratio,
     })], ctx.cwd).catch((error: Error) => widened(error.message));
   }
 
