@@ -80,8 +80,9 @@ mise run paired -- --report /path/to/results
 model. Use it only for a feature that changes what the model does, after the
 profile shows there is something to gain.
 
-Each task in `scripts/paired-tasks.ts` is a past fix in this repository. The
-run starts from the tree before the fix with the tests the fix added, in a
+Each task in `scripts/paired-tasks.ts` is a past fix or feature in this
+repository; the `api-` tasks add an extension and need Pi's API. The run
+starts from the tree before the change with the tests the change added, in a
 fresh repository with no later history, and the prompt states the intent. A
 run passes when those tests pass and were not edited. `--check` builds every
 task and confirms its tests fail before the fix and pass after, without model
@@ -90,7 +91,8 @@ calls.
 Both arms load the same few extensions from this checkout (`BASE` in the
 script) and no installed ones, so a run cannot message other sessions, start
 children, ask a question, or find the original fix in past sessions. The
-`on` arm adds the extensions named with `--with`. The two arms of a task run
+`on` arm adds the extensions named with `--with`; `--both` adds one to both
+arms, for example the `subagent` tool when the `on` arm is a rule about using it. The two arms of a task run
 at the same time, in whole rounds, until `--budget` dollars are spent;
 rerunning with the same `--out` continues where it stopped.
 

@@ -1,12 +1,13 @@
 // Paired live runs: the same tasks with and without an extension (docs/measuring.md). Each task is a
 // past fix: the tree before it plus the tests it added, scored by those tests.
 // PAID: every run is a real model session on the default model.
-//   node scripts/paired.ts --with EXTENSION [--runs 3] [--budget 10] [--jobs 2] [--out DIR] [TASK]...
+//   node scripts/paired.ts --with EXTENSION [--both EXTENSION] [--runs 3] [--budget 10] [--jobs 2] [--out DIR] [TASK]...
 //   node scripts/paired.ts --check          build each task; its tests must fail before the fix and pass after
 //   node scripts/paired.ts --report DIR     reprint the report from an earlier run
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TASKS, type Task } from "./paired-tasks.ts";
@@ -23,6 +24,7 @@ export type Arm = "off" | "on";
 export type Row = {
   task: string; run: number; arm: Arm; pass: boolean; cost: number; turns: number; calls: number; multi: number;
   batchable: number; promptTokens: number; seconds: number; note: string;
+  delegated?: number; // Dollars of the cost spent by children and auxiliary calls. Absent in older results.
 };
 
 function mulberry(seed: number) {
@@ -48,6 +50,7 @@ export function report(rows: readonly Row[]): string {
   const metrics: [string, (row: Row) => number, (n: number) => string][] = [
     ["tests pass", r => Number(r.pass), n => `${Math.round(n * 100)}%`],
     ["cost", r => r.cost, n => `$${n.toFixed(3)}`],
+    ["…of it delegated", r => r.delegated ?? 0, n => `$${n.toFixed(3)}`],
     ["turns", r => r.turns, n => n.toFixed(1)],
     ["tool calls", r => r.calls, n => n.toFixed(1)],
     ["turns with 2+ calls", r => r.multi, n => n.toFixed(1)],
@@ -90,19 +93,27 @@ function build(task: Task, dir: string): string[] {
   return tests;
 }
 
-function measure(sessions: string): Pick<Row, "cost" | "turns" | "calls" | "multi" | "batchable" | "promptTokens"> {
+// The workflows extension keeps state per working directory under the agent directory (state.ts names it
+// by this hash). A run's directory is never used again, so its state would only pile up there.
+function forgetState(cwd: string) {
+  const state = join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "workflow-state");
+  const scope = createHash("sha256").update(realpathSync(cwd)).digest("hex").slice(0, 20);
+  for (const profile of existsSync(state) ? readdirSync(state) : []) rmSync(join(state, profile, scope), { recursive: true, force: true });
+}
+
+function measure(sessions: string): Pick<Row, "cost" | "delegated" | "turns" | "calls" | "multi" | "batchable" | "promptTokens"> {
   const files = existsSync(sessions) ? sessionFiles(sessions).map(file => parse(readFileSync(file, "utf8"))) : [];
   const turns = files.flatMap(entries => timeline(mainBranch(entries)).turns), totals = profile(files);
   return {
-    cost: totals.total, turns: turns.length, calls: turns.reduce((a, t) => a + t.calls.length, 0), multi: turns.filter(t => t.calls.length > 1).length,
+    cost: totals.total, delegated: totals.auxiliary, turns: turns.length, calls: turns.reduce((a, t) => a + t.calls.length, 0), multi: turns.filter(t => t.calls.length > 1).length,
     batchable: totals.sizings.find(s => s.candidate.startsWith("Batch read-only"))?.count ?? 0, promptTokens: turns.reduce((a, t) => a + t.prompt, 0),
   };
 }
 
-function runArm(task: Task, tests: string[], template: string, out: string, n: number, arm: Arm, extensions: string[]): Promise<Row> {
+function runArm(task: Task, tests: string[], template: string, out: string, n: number, arm: Arm, shared: string[], extensions: string[]): Promise<Row> {
   const dir = join(out, "runs", `${task.id}-${n}-${arm}`), cwd = join(dir, "cwd"), sessions = join(dir, "sessions"), started = Date.now();
   cpSync(template, cwd, { recursive: true });
-  const loaded = [...BASE.map(name => join(root, "extensions", name, "index.ts")), ...(arm === "on" ? extensions : [])];
+  const loaded = [...BASE.map(name => join(root, "extensions", name, "index.ts")), ...shared, ...(arm === "on" ? extensions : [])];
   const prompt = `${task.prompt}\n\nThe tests in ${tests.join(", ")} describe the expected behavior and currently fail. Make them pass without editing the tests.`;
   // Rex variables would register each run as a pane of the session this was started from.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("REX_")));
@@ -114,6 +125,7 @@ function runArm(task: Task, tests: string[], template: string, out: string, n: n
     child.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-2000); });
     child.on("close", code => {
       clearTimeout(timer);
+      forgetState(cwd);
       const untouched = tests.every(file => existsSync(join(cwd, file)) && readFileSync(join(cwd, file), "utf8") === readFileSync(join(template, file), "utf8"));
       const note = hung ? "timed out" : code !== 0 ? `exit ${code}: ${stderr.trim().split("\n").at(-1) ?? ""}` : untouched ? "" : "edited the tests";
       done({ task: task.id, run: n, arm, pass: untouched && passes(cwd, tests), ...measure(sessions), seconds: (Date.now() - started) / 1000, note });
@@ -122,13 +134,13 @@ function runArm(task: Task, tests: string[], template: string, out: string, n: n
 }
 
 if (import.meta.main) {
-  const usage = "Usage: mise run paired -- --with <extension> [--runs 3] [--budget 10] [--jobs 2] [--out <dir>] [task]...\n       mise run paired -- --check | --report <dir>";
+  const usage = "Usage: mise run paired -- --with <extension> [--both <extension>] [--runs 3] [--budget 10] [--jobs 2] [--out <dir>] [task]...\n       mise run paired -- --check | --report <dir>";
   const fail = (message: string): never => { console.error(`${message}\n${usage}`); process.exit(2); };
-  const argv = process.argv.slice(2), extensions: string[] = [], names: string[] = [];
+  const argv = process.argv.slice(2), extensions: string[] = [], shared: string[] = [], names: string[] = [];
   let runs = 3, budget = 10, jobs = 2, out = "", check = false, reportDir = "";
   for (let i = 0; i < argv.length; i++) {
     const value = () => argv[++i] ?? fail(`${argv[i - 1]} needs a value`);
-    if (argv[i] === "--with") extensions.push(resolve(value())); else if (argv[i] === "--runs") runs = Number(value());
+    if (argv[i] === "--with") extensions.push(resolve(value())); else if (argv[i] === "--both") shared.push(resolve(value())); else if (argv[i] === "--runs") runs = Number(value());
     else if (argv[i] === "--budget") budget = Number(value()); else if (argv[i] === "--jobs") jobs = Number(value());
     else if (argv[i] === "--out") out = resolve(value()); else if (argv[i] === "--check") check = true;
     else if (argv[i] === "--report") reportDir = resolve(value()); else if (argv[i].startsWith("-")) fail(`Unknown option: ${argv[i]}`); else names.push(argv[i]);
@@ -154,7 +166,7 @@ if (import.meta.main) {
   }
 
   if (!extensions.length || !(runs > 0) || !(budget > 0) || !(jobs > 0)) fail("Name the extension under test with --with.");
-  for (const path of extensions) if (!existsSync(path)) fail(`No such extension: ${path}`);
+  for (const path of [...extensions, ...shared]) if (!existsSync(path)) fail(`No such extension: ${path}`);
   out ||= mkdtempSync(join(tmpdir(), "paired-"));
   mkdirSync(join(out, "tasks"), { recursive: true });
   const rows = rowsIn(out), templates = new Map<string, { dir: string; tests: string[] }>();
@@ -167,7 +179,7 @@ if (import.meta.main) {
   await Promise.all(Array.from({ length: jobs }, async () => {
     for (let job = queue.shift(); job && spent < budget; job = queue.shift()) {
       const { dir, tests } = templates.get(job.task.id)!;
-      const pair = await Promise.all((["off", "on"] as const).map(arm => runArm(job!.task, tests, dir, out, job!.n, arm, extensions)));
+      const pair = await Promise.all((["off", "on"] as const).map(arm => runArm(job!.task, tests, dir, out, job!.n, arm, shared, extensions)));
       for (const row of pair) {
         rows.push(row); spent += row.cost;
         appendFileSync(join(out, "results.jsonl"), JSON.stringify(row) + "\n");

@@ -1,5 +1,6 @@
-// Tasks for scripts/paired.ts: past fixes in this repository, each prompted by its intent and scored by
-// the tests its commit added. `mise run paired -- --check` confirms every entry still builds.
+// Tasks for scripts/paired.ts: past changes in this repository, each prompted by its intent and scored by
+// the tests its commit added. `mise run paired -- --check` confirms every entry still builds. Fixes are
+// small edits to existing code; features (`api-` names) add an extension or event and need Pi's API.
 export type Task = { id: string; commit: string; prompt: string };
 
 export const TASKS: Task[] = [
@@ -13,4 +14,10 @@ export const TASKS: Task[] = [
   { id: "workflows-autoname-retry", commit: "6ef26a9", prompt: "Automatic session naming gets one attempt, and a provider outage uses it up. Retry after transient failures (5xx, rate limits, timeouts) on the next user message, at most three tries per session, and keep quota and billing errors permanent." },
   { id: "statusline-long-names", commit: "762ac56", prompt: "The status line truncates a long session name beside the segments, and subscription detection is broken because it passes a provider ID where Pi's registry expects a model. Move a name that does not fit to a second line, fix the detection, and mark subscription cost as the API-billing equivalent." },
   { id: "rex-sleep", commit: "7810b1f", prompt: "Waking the machine from sleep retires Rex children and cancels their work, because the lease and task deadline expire during the suspended tick. Make children survive system sleep. Also describe the fixed method schemas once per client instead of on every operation." },
+  { id: "api-recover", commit: "0c5d0d2", prompt: "Pi leaves three turn endings for the user to notice: a reply with no text and no tool calls, a reply cut at the output limit, and a tool call repeated with the same result. Add an extension in extensions/recover that continues an empty or cut-off turn (at most twice per prompt), warns the model on the third identical call-and-result turn in a row, and refuses the fifth identical call. Add a /recover command that reports counts and switches it on or off. Check it against the scripted faults with `node tests/fixtures/fault-smoke.ts --with extensions/recover/index.ts`." },
+  { id: "api-retry", commit: "eee827f", prompt: "Add an extension in extensions/retry with a /retry command and an F5 shortcut that rerun a turn that ended in an error or an abort. Resend the starting prompt, or continue after tool results that were kept with a short note, and leave the failed attempt on an abandoned branch. Keep a model the user switched to after the failure." },
+  { id: "api-statusline-segments", commit: "a67b471", prompt: "Other extensions can only show state in the status line as right-aligned statuses. Add a statusline:segment event that adds, replaces, or removes a keyed left-hand segment beside the built-in ones, validate its payload, and document it in docs/statusline.md." },
+  { id: "api-herdr-title", commit: "ca30b30", prompt: "Add an extension in extensions/herdr-title that keeps the Herdr pane title in step with the Pi session: the behavior is specified by tests/herdr-title.test.ts." },
+  { id: "api-continue", commit: "1956afd", prompt: "Add an extension in extensions/continue whose entry point registers the continue behavior that tests/continue.test.ts describes." },
+  { id: "api-artifacts", commit: "6f91087", prompt: "Long tool output fills the context. Add an extension in extensions/artifacts that saves oversized tool output as an artifact, leaves the model a bounded excerpt, and registers an artifact_read tool to retrieve the rest by line range or search." },
 ];
