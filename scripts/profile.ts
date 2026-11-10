@@ -8,6 +8,9 @@ import { join } from "node:path";
 
 export const BYTES_PER_TOKEN = 4; // Until a model has enough turns to calibrate; the estimate /prompt-size uses.
 const DROP_MIN_PROMPT = 20_000, IDLE_MS = 5 * 60_000;
+// The share of the prompt Snapcompact left behind: the median of five compactions on 2026-11-09 was 37%.
+const COMPACT_KEEPS = 0.4;
+const PI_REFERENCE = /\/pi\/(docs|examples)\//;
 
 export type Entry = Record<string, any>;
 export type Call = { id: string; name: string; args: Record<string, any> };
@@ -207,6 +210,9 @@ export function profile(sessions: readonly Entry[][]): Report {
   const batch = size("Batch read-only turns (ceiling)", "cache reads of single-call read-only turns that directly follow another one");
   const checks = size("Post-edit check", "failed checks after edits that a compiler or linter would have reported");
   const lateChecks = size("…found 3+ turns after the edit", "the same, where the model had moved on before checking");
+  const unedited = size("Reads of files never edited (ceiling)", "carried cost of reads of paths the session never edited or wrote; the most a scout holding them could remove");
+  const reference = size("…of Pi's own docs and examples", "the same, for files under Pi's docs and examples");
+  const compactAt = [150_000, 200_000].map(limit => ({ limit, row: size(`Compact at ${limit / 1000}k tokens`, `replay: compact whenever the prompt passes ${limit / 1000}k tokens, keeping ${COMPACT_KEEPS * 100}% as Snapcompact does; net of re-sending what is kept`) }));
 
   const timelines = sessions.map(entries => timeline(mainBranch(entries)));
   report.bytesPerToken = calibrate(timelines);
@@ -246,6 +252,17 @@ export function profile(sessions: readonly Entry[][]): Report {
       if (d.detail && !row.details.includes(d.detail)) row.details.push(d.detail);
     }
     for (const p of t.parts) report.context[p.kind] = (report.context[p.kind] ?? 0) + carried(t, p);
+    for (const { limit, row } of compactAt) {
+      let shed = 0, last = 0;
+      for (const turn of t.turns) {
+        if (turn.prompt < last * 0.5) shed = 0; // The session was compacted here anyway.
+        last = turn.prompt;
+        const now = turn.prompt - shed, keep = now * COMPACT_KEEPS;
+        if (now > limit) { row.count++; row.dollars -= keep * Math.max(0, turn.first - turn.read); shed += now - keep; }
+        row.dollars += shed * turn.read;
+      }
+    }
+    const touched = new Set(t.turns.flatMap(turn => turn.calls).filter(c => c.name === "edit" || c.name === "write").map(c => String(c.args.path ?? c.args.file_path ?? "")));
     const seen = new Map<string, Result[]>(), viaRead = new Set<string>();
     let lastEdit = -1, edited = false;
     for (const r of t.results) {
@@ -259,6 +276,10 @@ export function profile(sessions: readonly Entry[][]): Report {
       if (r.tool === "read" && !r.error) {
         const path = readPath(r), earlier = seen.get(path) ?? [];
         if (earlier.length) { rereads.count++; rereads.dollars += carried(t, r); }
+        if (!touched.has(path)) {
+          unedited.count++; unedited.dollars += carried(t, r);
+          if (PI_REFERENCE.test(path)) { reference.count++; reference.dollars += carried(t, r); }
+        }
         if (wholeFile(r)) for (const old of earlier) {
           if (old.end <= r.start) continue; // Compacted away already.
           // Blanking `old` re-sends everything after it once, at the first-send price.

@@ -91,6 +91,34 @@ test("cache warming refreshes are counted apart from model calls", () => {
   assert.match(render(report), /Cache warming: 2 refreshes/);
 });
 
+test("reads of files the session never edits are sized, with Pi's own reference apart", () => {
+  const body = "z".repeat(4000);
+  const report = profile([session(
+    user(),
+    assistant({ cacheWrite: 100 }, [call("1", "read", { path: "/r/a.ts" }), call("2", "read", { path: "/r/b.ts" }), call("3", "read", { path: "/opt/pi/docs/extensions.md" })]),
+    result("1", "read", body), result("2", "read", body), result("3", "read", body),
+    assistant({ cacheRead: 3100, cacheWrite: 10 }, [call("4", "edit", { path: "/r/a.ts" })]), result("4", "edit", "Successfully replaced 1 block(s)"),
+    assistant({ cacheRead: 3110, cacheWrite: 10 }, [text("Done.")]),
+  )]);
+  const sizing = Object.fromEntries(report.sizings.map(s => [s.candidate, s]));
+  assert.equal(sizing["Reads of files never edited (ceiling)"].count, 2);
+  assert.equal(sizing["…of Pi's own docs and examples"].count, 1);
+  // 1000 tokens sent once at 10 each, then re-read once at 1 each.
+  assert.equal(sizing["…of Pi's own docs and examples"].dollars, 1000 * FIRST + 1000 * READ);
+});
+
+test("compacting earlier is replayed net of re-sending what is kept", () => {
+  // Each turn writes a little, so the first-send price is on record.
+  const turns = [160_000, 170_000, 180_000].map(prompt => assistant({ cacheRead: prompt - 1000, cacheWrite: 1000 }, [text("ok")]));
+  const report = profile([session(user(), ...turns)]);
+  const sizing = Object.fromEntries(report.sizings.map(s => [s.candidate, s]));
+  // At the first turn 160k becomes 64k: 96k fewer tokens re-read on each of three turns, less 64k re-sent at 9 more each.
+  assert.equal(sizing["Compact at 150k tokens"].count, 1);
+  assert.equal(sizing["Compact at 150k tokens"].dollars, 3 * 96_000 * READ - 64_000 * (FIRST - READ));
+  assert.equal(sizing["Compact at 200k tokens"].count, 0);
+  assert.equal(sizing["Compact at 200k tokens"].dollars, 0);
+});
+
 test("bash commands are classified by the program they run", () => {
   assert.equal(program("cd /repo && FOO=1 /usr/bin/sed -n 1,20p a.ts"), "sed");
   assert.equal(program("git status --short | head"), "git");
