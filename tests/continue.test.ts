@@ -27,7 +27,7 @@ function harness(state: { branch?: any[]; idle?: boolean; commands?: string[] } 
   return { input, sent, user };
 }
 
-const hidden = { customType: "continue", content: "Continue.", display: false };
+const hidden = { customType: "continue", content: "continue", display: false };
 const tick = () => new Promise(r => setTimeout(r, 0));
 
 test("a submitted lone dot continues with a hidden message", () => {

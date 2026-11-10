@@ -16,7 +16,7 @@ export default function (pi: ExtensionAPI) {
     }
     // The model still needs a user-role turn, but the transcript should read
     // as if the session simply kept going.
-    pi.sendMessage({ customType: CONTINUE_TYPE, content: "Continue.", display: false },
+    pi.sendMessage({ customType: CONTINUE_TYPE, content: "continue", display: false },
       { triggerTurn: true, deliverAs: event.streamingBehavior });
     return { action: "handled" };
   });

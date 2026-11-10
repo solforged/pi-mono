@@ -37,7 +37,7 @@ for shared title instructions and [Herdr](herdr.md) for terminal integration.
 ## Continue shorthand
 
 In the interactive TUI, submit `.` on its own to continue the session. The
-model receives `Continue.` as a hidden message, so the transcript shows only
+model receives `continue` as a hidden message, so the transcript shows only
 the resumed response; while a response is streaming, the dot steers or queues
 like any other input. When idle after a failed or aborted turn, the dot runs
 [`/retry`](retry.md) instead. Surrounding whitespace is ignored. Other input,
