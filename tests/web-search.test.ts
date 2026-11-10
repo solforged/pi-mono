@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { codexModels, consumeCodexEvents, extractTextSources, resolveCodexUrl, shouldRetryCodexModel } from "../extensions/web-search/codex.ts";
 import { buildExaBody, parseExaResponse, recencyStartDate, synthesizeAnswer } from "../extensions/web-search/exa.ts";
-import { errorDetail, formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, withRecencyHint } from "../extensions/web-search/format.ts";
+import { attemptSummary, errorDetail, formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, withRecencyHint } from "../extensions/web-search/format.ts";
 import { executeSearch, orderByHealth, registryAuth, type SearchAuth } from "../extensions/web-search/search.ts";
 import { sseText } from "../extensions/web-search/sse.ts";
+import { searchCall, searchView } from "../extensions/web-search/view.ts";
 import { buildXaiBody, parseXaiResponse, xaiModels } from "../extensions/web-search/xai.ts";
 
 function jwt(): string {
@@ -68,6 +69,30 @@ test("search text repeats nothing: cited sources merge, and snippets already in 
   });
   assert.equal(text, `**First**: ${summary}\n\nSources:\n[1] First (2026-03-04) https://a.example/\n[2] https://b.example/\n  Quoted from the second page.\n[3] Third https://c.example/`);
   assert.equal(formatForLLM({ provider: "exa", sources: [{ title: "Only", url: "https://a.example/" }] }), "[1] Only https://a.example/");
+});
+
+test("a search result records each backend tried, and the views show what went wrong", async () => {
+  const auth: SearchAuth = { codex: async () => ({ token: "t" }), xai: async () => undefined, exa: async () => "key" };
+  const fetchImpl = (async (input: any) => String(input).includes("exa.ai")
+    ? jsonResponse({ results: [{ url: "https://a.example/", title: "A", summary: "Summary." }] })
+    : new Response("<html>bad gateway</html>", { status: 502 })) as typeof fetch;
+  const result = await executeSearch({ query: "q" }, { auth, fetchImpl, cooldowns: new Map() });
+  assert.deepEqual(result.attempts.map((attempt) => `${attempt.provider} ${attempt.outcome}`), ["codex failed", "xai not configured", "exa answered"]);
+  assert.ok(!result.text.includes("502"), "the model is not told about backends that did not answer");
+  assert.match(attemptSummary(result.attempts), /^codex.*502/i);
+  assert.match(attemptSummary(result.attempts, true), /; xai not configured$/);
+
+  const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as any;
+  const shown = { content: [{ type: "text", text: `${result.text}\nline\nline\nline\u001b[2J` }], details: { provider: "exa", sources: result.response!.sources, attempts: result.attempts } };
+  const collapsed = searchView(shown, theme, { hint: "alt+x to expand" });
+  assert.match(collapsed, /^exa · 1 source · after codex.*502/i);
+  assert.match(collapsed, /more lines\nalt\+x to expand$/);
+  const expanded = searchView(shown, theme, { expanded: true });
+  assert.match(expanded, /xai not configured/);
+  assert.ok(expanded.includes("\\u001b[2J") && !expanded.includes("\u001b"), "control characters are shown, not sent");
+  assert.equal(searchView({ content: [] }, theme, { isPartial: true }), "Searching the web…");
+  assert.equal(searchView({ content: [{ type: "text", text: "Error: boom" }] }, theme, { isError: true }), "Error: boom");
+  assert.equal(searchCall({ query: "pi  extensions", recency: "week" }, theme), 'web_search "pi extensions" · past week');
 });
 
 test("OpenAI Responses URL, markdown fallback, and event parsing", () => {

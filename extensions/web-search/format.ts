@@ -119,6 +119,16 @@ export function formatForLLM(response: SearchResponse): string {
   return parts.join("\n");
 }
 
+export type Attempt = { provider: ProviderId; outcome: "answered" | "not configured" | "failed" | "timed out"; message?: string };
+
+/** The backends that were tried before the answer, for the user. Unconfigured ones are routine and listed only on request. */
+export function attemptSummary(attempts: Attempt[], all = false): string {
+  return attempts
+    .filter((attempt) => attempt.outcome !== "answered" && (all || attempt.outcome !== "not configured"))
+    .map(({ provider, outcome, message }) => !message ? `${provider} ${outcome}` : message.toLowerCase().startsWith(provider) ? message : `${provider}: ${message}`)
+    .join("; ");
+}
+
 export function formatFailures(errors: Array<{ provider: ProviderId; message: string }>): string {
   if (errors.length === 0) return "Error: No web search provider configured.";
   if (errors.length === 1) return `Error: ${errors[0]!.message}`;

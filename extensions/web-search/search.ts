@@ -9,6 +9,7 @@ import {
   SEARCH_TIMEOUT_MS,
   searchOrder,
   withRecencyHint,
+  type Attempt,
   type ProviderId,
   type SearchResponse,
 } from "./format.ts";
@@ -39,6 +40,8 @@ export type SearchResult = {
   text: string;
   response?: SearchResponse;
   error?: string;
+  /** Every backend tried, in order, for display. The model sees only `text`. */
+  attempts: Attempt[];
 };
 
 type Registry = {
@@ -110,6 +113,7 @@ export async function executeSearch(query: SearchQuery, options: {
   const cooldowns = options.cooldowns ?? cooling;
   const order = orderByHealth(candidates(query), cooldowns);
   const errors: Array<{ provider: ProviderId; message: string }> = [];
+  const attempts: Attempt[] = [];
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? SEARCH_TIMEOUT_MS;
   const hinted = withRecencyHint(query.query, query.recency);
@@ -124,6 +128,7 @@ export async function executeSearch(query: SearchQuery, options: {
       signal.throwIfAborted();
       const response = await Promise.race([runProvider(provider, hinted, query, options.auth, signal, fetchImpl), abandoned(signal)]);
       if (response === "skip") {
+        attempts.push({ provider, outcome: "not configured" });
         if (explicit) errors.push({ provider, message: `${provider} credentials not configured` });
         continue;
       }
@@ -131,17 +136,19 @@ export async function executeSearch(query: SearchQuery, options: {
         throw new ProviderError(provider, `${provider} returned no search content`, 204);
       }
       cooldowns.delete(provider);
-      return { text: formatForLLM(response), response };
+      attempts.push({ provider, outcome: "answered" });
+      return { text: formatForLLM(response), response, attempts };
     } catch (error) {
       if (options.signal?.aborted) throw error;
       if (timeout.aborted) cooldowns.set(provider, Date.now() + COOLDOWN_MS);
       const message = timeout.aborted ? `${provider} timed out after ${Math.round(timeoutMs / 1000)} s`
         : error instanceof Error ? error.message : String(error);
       errors.push({ provider, message });
+      attempts.push({ provider, outcome: timeout.aborted ? "timed out" : "failed", message });
     }
   }
   const text = formatFailures(errors);
-  return { text, error: text };
+  return { text, error: text, attempts };
 }
 
 async function runProvider(

@@ -2,10 +2,17 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { searchOrder } from "./format.ts";
+import { attemptSummary, searchOrder } from "./format.ts";
 import { availableProviders, executeSearch, orderByHealth, registryAuth, timedOutRecently, type SearchAuth, type SearchQuery } from "./search.ts";
+import { searchCall, searchView } from "./view.ts";
 
 const Recency = StringEnum(["day", "week", "month", "year"] as const);
+
+function row(previous: unknown, text: string): Text {
+  const component = previous instanceof Text ? previous : new Text("", 0, 0);
+  component.setText(text);
+  return component;
+}
 
 export default function (pi: ExtensionAPI) {
   pi.registerEntryRenderer("web-search-report", (entry) => new Text((entry.data as { text: string }).text, 0, 0));
@@ -49,7 +56,8 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const result = await executeSearch(sessionQuery(ctx, { query }), { auth, signal: ctx.signal });
-      report(ctx, result.text);
+      const trouble = attemptSummary(result.attempts);
+      report(ctx, result.response && trouble ? `${result.text}\n\nAnswered by ${result.response.provider} after ${trouble}.` : result.text);
     },
   });
 
@@ -73,9 +81,16 @@ export default function (pi: ExtensionAPI) {
           provider: result.response?.provider,
           model: result.response?.model,
           sources: result.response?.sources ?? [],
+          attempts: result.attempts,
         },
         isError: Boolean(result.error),
       };
+    },
+    renderCall(args, theme, context) {
+      return row(context.lastComponent, searchCall(args, theme));
+    },
+    renderResult(result, { expanded, isPartial }, theme, context) {
+      return row(context.lastComponent, searchView(result, theme, { expanded, isPartial, isError: context.isError, hint: context.keyHint("app.tools.expand", "to expand") }));
     },
   });
 }
