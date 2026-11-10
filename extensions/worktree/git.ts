@@ -8,6 +8,8 @@ export type Run = (args: string[], cwd: string, input?: string) => Promise<strin
 export const git: Run = (args, cwd, input) => new Promise((done, fail) => {
   const child = execFile("git", args, { cwd, encoding: "utf8", timeout: 60_000, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } },
     (error, stdout, stderr) => error ? fail(new Error((stderr || error.message).trim())) : done(stdout.replace(/\n+$/, "")));
+  // Git can exit before reading stdin; its exit status reports any failure.
+  child.stdin?.on("error", (error: NodeJS.ErrnoException) => { if (error.code !== "EPIPE") fail(error); });
   child.stdin?.end(input ?? "");
 });
 

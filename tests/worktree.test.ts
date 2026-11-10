@@ -10,7 +10,10 @@ import { copyIncluded, included } from "../extensions/worktree/include.ts";
 import { relocate, repositorySessionDirs, sessionBucket, sessionChoices, sessionDirFor, sessionFileFor } from "../extensions/worktree/session.ts";
 import { root, temporary } from "./helpers.ts";
 
-const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "0", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
+// Fixture repositories get no user or sandbox Git config. The extension's own Git
+// calls inherit process.env, so it is isolated too: otherwise a signing policy,
+// such as the sandbox's, refuses the commits that landing's rebase makes.
+const env = Object.assign(process.env, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "0", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
 const sh = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
 const noTrust = async () => undefined;
 
