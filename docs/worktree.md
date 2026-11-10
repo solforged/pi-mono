@@ -53,11 +53,15 @@ files in the worktree are never touched.
 
 ## The session file
 
-The session keeps its ID and file. Its header `cwd` changes and, under Pi's
-default per-directory session folders, the file moves to the worktree's
-folder. `pi -c` from the worktree continues it; `/wt resume` finds it from the
-main checkout or any other worktree. The sandbox remembers its toggle per
-directory, so a worktree starts from your settings.
+The session keeps its ID and file. Only its header `cwd` changes; the file
+stays in the main checkout's session folder. From the main checkout,
+`pi --resume`, `/resume` and `pi --session <id>` open it in the worktree,
+and `/wt resume` finds it from any checkout. `pi -c` runs the newest session
+in the current directory, so from the main checkout it would run a worktree
+session there; Pi warns, and `/resume` reopens it in its worktree. Files an
+earlier version moved into a worktree's folder are still found by
+`/wt resume`, and return when the session leaves. The sandbox remembers its
+toggle per directory, so a worktree starts from your settings.
 
 ## Commands
 

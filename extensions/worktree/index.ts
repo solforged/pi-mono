@@ -1,12 +1,13 @@
 // Moves a session into its own Git worktree and branch, as Claude Code's
 // EnterWorktree does, keeps the branch named after the session title, and
 // lands or resumes worktree sessions. See docs/worktree.md.
+import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { create, editsMainCheckout, followTitle, git as run, inspect, land, remove, slugify, worktreeRoot, worktrees, type Checkout, type Created } from "./git.ts";
 import { copyIncluded, INCLUDE_FILE } from "./include.ts";
-import { relocate, sessionChoices, sessionDirFor, type Listed } from "./session.ts";
+import { relocate, repositorySessionDirs, sessionChoices, type Listed } from "./session.ts";
 
 const TOOL = "enter_worktree";
 const EDITORS = new Set(["edit", "write"]);
@@ -46,7 +47,17 @@ export default function (pi: ExtensionAPI) {
     checkout = await inspect(ctx.cwd, run);
     offer(!!checkout && !checkout.linked && !!ctx.sessionManager.getSessionFile());
     await follow(ctx);
+    await stray(ctx);
   });
+
+  // `pi -c` runs the newest session in the current directory, which may be one that
+  // moved to a worktree: its file stays in the main checkout's session folder.
+  async function stray(ctx: ExtensionContext) {
+    const home = (ctx.sessionManager.getHeader() as { cwd?: unknown } | null)?.cwd;
+    if (!checkout || typeof home !== "string" || resolve(home) === resolve(ctx.cwd)) return;
+    const tree = (await worktrees(checkout.top, run).catch(() => [])).find((tree) => resolve(tree.path) === resolve(home));
+    if (tree) say(ctx, `This session works in ${home}${tree.branch ? ` on ${tree.branch}` : ""} but is running in ${ctx.cwd}. Reopen it with /resume or pi --resume to work there.`, "warning");
+  }
   pi.on("session_info_changed", async (event, ctx) => { await follow(ctx, event.name); });
 
   async function prepare(ctx: ExtensionContext, name?: string): Promise<Prepared> {
@@ -76,7 +87,7 @@ export default function (pi: ExtensionAPI) {
   /** Points this session at `cwd` and switches to it, then runs `after` in the moved session. */
   async function move(ctx: ExtensionCommandContext, cwd: string, after: (next: Moved) => Promise<void>) {
     await ctx.waitForIdle();
-    const { file, undo } = await relocate(ctx.sessionManager, cwd);
+    const { file, undo } = await relocate(ctx.sessionManager, cwd, checkout!.main);
     let result: { cancelled: boolean };
     try { result = await ctx.switchSession(file, { withSession: after as any }); }
     catch (error) { await undo().catch(() => undefined); throw error; }
@@ -136,15 +147,20 @@ export default function (pi: ExtensionAPI) {
     await leave(ctx, choice as "keep" | "remove", summary);
   }
 
-  /** Sessions in the repository's other worktrees, which Pi's /resume lists only under all folders. */
+  /** Sessions working in the repository's other checkouts, by the cwd in their headers. */
   async function resume(ctx: ExtensionCommandContext) {
     if (!checkout) throw new Error("Not in a Git repository with a working tree");
-    const dir = ctx.sessionManager.getSessionDir();
+    const trees = new Map((await worktrees(checkout.top, run))
+      .filter((tree) => !tree.bare && resolve(tree.path) !== resolve(checkout!.top)).map((tree) => [resolve(tree.path), tree]));
     const found: Listed[] = [];
-    for (const tree of await worktrees(checkout.top, run)) {
-      if (tree.bare || tree.path === checkout.top) continue;
-      const sessions = await SessionManager.list(tree.path, sessionDirFor(dir, ctx.cwd, tree.path)).catch(() => []);
-      for (const session of sessions) found.push({ ...session, branch: tree.branch, worktree: tree.path });
+    const seen = new Set<string>();
+    for (const dir of repositorySessionDirs(ctx.sessionManager.getSessionDir(), [checkout.main, checkout.top, ...trees.keys()])) {
+      for (const session of await SessionManager.listAll(dir).catch(() => [])) {
+        const tree = session.cwd ? trees.get(resolve(session.cwd)) : undefined;
+        if (!tree || seen.has(session.path)) continue;
+        seen.add(session.path);
+        found.push({ ...session, branch: tree.branch, worktree: tree.path });
+      }
     }
     const choices = sessionChoices(found);
     if (!choices.length) return say(ctx, "No sessions in this repository's other worktrees.");

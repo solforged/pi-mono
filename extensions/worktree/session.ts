@@ -13,8 +13,18 @@ export const sessionBucket = (cwd: string) => `--${resolve(cwd).replace(/^[/\\]/
 export const sessionDirFor = (dir: string, from: string, to: string) =>
   basename(dir) === sessionBucket(from) ? join(dirname(dir), sessionBucket(to)) : dir;
 
-/** Where the session file belongs after moving from `from` to `to`. */
+/** Where the session file belongs when its folder is mapped from `from`'s to `to`'s. */
 export const sessionFileFor = (file: string, from: string, to: string) => join(sessionDirFor(dirname(file), from, to), basename(file));
+
+/**
+ * Folders that may hold this repository's sessions. Under Pi's per-directory folders
+ * that is each checkout's own, since earlier moves left files in worktree folders;
+ * a custom folder is the only one.
+ */
+export function repositorySessionDirs(dir: string, checkouts: string[]): string[] {
+  if (!checkouts.some((path) => basename(dir) === sessionBucket(path))) return [dir];
+  return [...new Set([dir, ...checkouts.map((path) => join(dirname(dir), sessionBucket(path)))])];
+}
 
 export interface Listed { path: string; name?: string; firstMessage: string; modified: Date; messageCount: number; branch?: string; worktree: string }
 
@@ -46,12 +56,13 @@ async function put(file: string, text: string) {
 }
 
 /**
- * Points the session file's header at `cwd`, moving it to that cwd's default session
- * folder when it is in one, so that switching to it rebinds Pi there and `pi -c` finds
- * it from the new directory. A saved file keeps its entries byte for byte; an unsaved
- * one is written from memory. `undo` restores the original file.
+ * Points the session file's header at `cwd`, so that switching to it rebinds Pi there.
+ * A file in a default session folder stays in, or returns to, that of `home`, the main
+ * checkout, where `pi --resume` lists it and `pi --session` opens it in `cwd`; a custom
+ * folder is kept. A saved file keeps its entries byte for byte; an unsaved one is
+ * written from memory. `undo` restores the original file.
  */
-export async function relocate(session: SessionSource, cwd: string): Promise<{ file: string; undo: () => Promise<void> }> {
+export async function relocate(session: SessionSource, cwd: string, home: string): Promise<{ file: string; undo: () => Promise<void> }> {
   const file = session.getSessionFile();
   if (!file) throw new Error("This session has no file (--no-session), so it cannot move");
   let original: string | undefined;
@@ -60,7 +71,7 @@ export async function relocate(session: SessionSource, cwd: string): Promise<{ f
   const lines = original?.split("\n") ?? [JSON.stringify(session.getHeader()), ...session.getEntries().map((entry) => JSON.stringify(entry)), ""];
   const header = JSON.parse(lines[0]);
   if (header?.type !== "session" || typeof header.cwd !== "string") throw new Error(`Unexpected session header in ${file}`);
-  const target = sessionFileFor(file, header.cwd, cwd);
+  const target = sessionFileFor(file, header.cwd, home);
   if (target !== file && await exists(target)) throw new Error(`A session file already exists at ${target}`);
   lines[0] = JSON.stringify({ ...header, cwd });
   await put(target, lines.join("\n"));

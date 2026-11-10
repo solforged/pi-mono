@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { create, editsMainCheckout, followTitle, inside, inspect, land, owned, remove, slugify, worktreeRoot, worktrees } from "../extensions/worktree/git.ts";
 import { copyIncluded, included } from "../extensions/worktree/include.ts";
-import { relocate, sessionBucket, sessionChoices, sessionDirFor, sessionFileFor } from "../extensions/worktree/session.ts";
+import { relocate, repositorySessionDirs, sessionBucket, sessionChoices, sessionDirFor, sessionFileFor } from "../extensions/worktree/session.ts";
 import { root, temporary } from "./helpers.ts";
 
 const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
@@ -192,9 +192,12 @@ test("resume choices are newest first, skip empty sessions and stay unique", () 
   ]);
   assert.equal(sessionDirFor("/agent/sessions/--r-main--", "/r/main", "/w/x"), "/agent/sessions/--w-x--");
   assert.equal(sessionDirFor("/custom", "/r/main", "/w/x"), "/custom");
+  assert.deepEqual(repositorySessionDirs("/agent/sessions/--r-main--", ["/r/main", "/w/x"]), ["/agent/sessions/--r-main--", "/agent/sessions/--w-x--"]);
+  assert.deepEqual(repositorySessionDirs("/agent/sessions/--r-main--", ["/r/main", "/w/x", "/r/main"]).length, 2);
+  assert.deepEqual(repositorySessionDirs("/custom", ["/r/main", "/w/x"]), ["/custom"]);
 });
 
-test("relocation rewrites only the header and moves between default session folders", async (t) => {
+test("relocation rewrites only the header and keeps the file in the main checkout's folder", async (t) => {
   const dir = await temporary(t);
   assert.equal(sessionBucket("/Users/me/src/proj"), "--Users-me-src-proj--");
   const sessions = join(dir, "sessions");
@@ -207,23 +210,33 @@ test("relocation rewrites only the header and moves between default session fold
   await mkdir(join(sessions, sessionBucket("/r/main")), { recursive: true });
   await writeFile(from, `${JSON.stringify(header)}\n${body}`);
   const saved = { getSessionFile: () => from, getHeader: () => header, getEntries: () => [] };
-  const moved = await relocate(saved, "/w/x");
-  assert.equal(moved.file, join(sessions, sessionBucket("/w/x"), "s.jsonl"));
-  assert.ok(!existsSync(from));
-  assert.equal(await readFile(moved.file, "utf8"), `${JSON.stringify({ ...header, cwd: "/w/x" })}\n${body}`);
+  const moved = await relocate(saved, "/w/x", "/r/main");
+  assert.equal(moved.file, from, "pi --resume in the main checkout still lists it");
+  assert.equal(await readFile(from, "utf8"), `${JSON.stringify({ ...header, cwd: "/w/x" })}\n${body}`);
   await moved.undo();
-  assert.ok(!existsSync(moved.file));
   assert.equal(await readFile(from, "utf8"), `${JSON.stringify(header)}\n${body}`);
+
+  // A file left in a worktree's folder by an earlier move returns to the main checkout's.
+  const legacy = join(sessions, sessionBucket("/w/x"), "l.jsonl");
+  await mkdir(join(sessions, sessionBucket("/w/x")), { recursive: true });
+  await writeFile(legacy, `${JSON.stringify({ ...header, cwd: "/w/x" })}\n${body}`);
+  const returned = await relocate({ ...saved, getSessionFile: () => legacy }, "/r/main", "/r/main");
+  assert.equal(returned.file, join(sessions, sessionBucket("/r/main"), "l.jsonl"));
+  assert.ok(!existsSync(legacy));
+  assert.equal(await readFile(returned.file, "utf8"), `${JSON.stringify(header)}\n${body}`);
+  await returned.undo();
+  assert.ok(!existsSync(returned.file));
+  assert.ok(existsSync(legacy));
 
   // An unsaved session (no reply yet) is written from memory under a custom session directory.
   const flat = join(dir, "flat", "u.jsonl");
   const unsaved = { getSessionFile: () => flat, getHeader: () => header, getEntries: () => [{ type: "model_change", id: "m" }] };
-  const written = await relocate(unsaved, "/w/y");
+  const written = await relocate(unsaved, "/w/y", "/r/main");
   assert.equal(written.file, flat);
   assert.deepEqual((await readFile(flat, "utf8")).trim().split("\n").map((line) => JSON.parse(line)), [{ ...header, cwd: "/w/y" }, { type: "model_change", id: "m" }]);
   await written.undo();
   assert.ok(!existsSync(flat));
-  await assert.rejects(relocate({ ...saved, getSessionFile: () => undefined }, "/w"), /no file/);
+  await assert.rejects(relocate({ ...saved, getSessionFile: () => undefined }, "/w", "/r/main"), /no file/);
 });
 
 test("Pi moves a session into a worktree, renames its branch and returns", async (t) => {
@@ -239,6 +252,8 @@ test("Pi moves a session into a worktree, renames its branch and returns", async
     return result.stdout;
   };
   const sessionsIn = (cwd: string) => { try { return readdirSync(join(agentDir, "sessions", sessionBucket(cwd))); } catch { return []; } };
+  const header = (name: string) => JSON.parse(readFileSync(join(agentDir, "sessions", sessionBucket(main), name), "utf8").split("\n")[0]);
+  const sessionFor = (cwd: string) => sessionsIn(main).map(header).find((entry) => entry.cwd === cwd)?.id as string;
 
   await writeFile(join(main, ".gitignore"), ".env\n");
   await writeFile(join(main, ".worktreeinclude"), ".env\n");
@@ -252,19 +267,22 @@ test("Pi moves a session into a worktree, renames its branch and returns", async
   assert.equal(readFileSync(join(path, "made.txt"), "utf8"), "from the worktree\n");
   assert.ok(!existsSync(join(main, "made.txt")));
   assert.equal(sh(path, "branch", "--show-current"), "pi/fixture-task");
-  assert.deepEqual([sessionsIn(main).length, sessionsIn(path).length], [0, 1], "the session file moved with the session");
-  const file = join(agentDir, "sessions", sessionBucket(path), sessionsIn(path)[0]);
+  assert.deepEqual([sessionsIn(main).length, sessionsIn(path).length], [1, 0], "the session file stays where pi --resume in the main checkout lists it");
+  const file = join(agentDir, "sessions", sessionBucket(main), sessionsIn(main)[0]);
   const lines = readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   assert.equal(lines[0].cwd, path);
   assert.equal(lines.filter((entry) => entry.type === "session").length, 1);
   assert.match(lines.find((entry) => entry.customType === "worktree")?.content ?? "", /Copied 1 file\(s\) listed in \.worktreeinclude\./);
 
-  // Continuing from the worktree resumes it; a title renames the branch.
-  pi(path, "-c", "-p", "/fixture-name Polish the fixture flow");
+  // Opening it by ID from the main checkout runs it in the worktree; a title renames the branch.
+  const id = lines[0].id;
+  pi(main, "--session", id, "-p", "/fixture-name Polish the fixture flow");
   assert.equal(sh(path, "branch", "--show-current"), "pi/polish-fixture-flow");
+  // `pi -c` runs it in the main checkout instead, and says so.
+  assert.match(pi(main, "-c", "-p", "/wt"), /This session works in .*proj--fixture-task on pi\/polish-fixture-flow but is running in /);
 
   // Exiting with uncommitted work returns the session but keeps the worktree.
-  pi(path, "-c", "-p", "/wt exit remove");
+  pi(main, "--session", id, "-p", "/wt exit remove");
   assert.ok(existsSync(path));
   assert.deepEqual([sessionsIn(main).length, sessionsIn(path).length], [1, 0]);
   assert.equal(JSON.parse(readFileSync(join(agentDir, "sessions", sessionBucket(main), sessionsIn(main)[0]), "utf8").split("\n")[0]).cwd, main);
@@ -275,16 +293,23 @@ test("Pi moves a session into a worktree, renames its branch and returns", async
   assert.ok(!existsSync(join(main, "early.txt")));
   assert.ok(existsSync(join(batched, "made.txt")));
 
-  // The main checkout lists sessions in other worktrees; the returned one is not among them.
+  // The main checkout lists sessions in other worktrees, including files an earlier
+  // version moved into a worktree's folder; the returned one is not among them.
+  const old = join(agentDir, "sessions", sessionBucket(batched), "old.jsonl");
+  await mkdir(join(old, ".."), { recursive: true });
+  await writeFile(old, [{ type: "session", version: 3, id: "01a1c407-0000-7000-8000-000000000001", timestamp: new Date().toISOString(), cwd: batched },
+    { type: "message", id: "m1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: "Older worktree session", timestamp: Date.now() } }]
+    .map((entry) => JSON.stringify(entry)).join("\n") + "\n");
   const listed = pi(main, "-p", "/wt resume");
   assert.match(listed, /Start the batched fixture · pi\/batched · \d+m ago/);
+  assert.match(listed, /Older worktree session · pi\/batched/);
   assert.doesNotMatch(listed, /Polish/);
 
   // Landing rebases onto the moved-on main branch, fast-forwards it, and cleans up.
   sh(batched, "add", "."); sh(batched, "commit", "-qm", "feat: made");
   await writeFile(join(main, "b.txt"), "b\n");
   sh(main, "add", "b.txt"); sh(main, "commit", "-qm", "feat: b");
-  pi(batched, "-c", "-p", "/wt land remove");
+  pi(main, "--session", sessionFor(batched), "-p", "/wt land remove");
   const reports = sessionsIn(main).flatMap((name) => readFileSync(join(agentDir, "sessions", sessionBucket(main), name), "utf8").trim().split("\n"))
     .map((line) => JSON.parse(line)).filter((entry) => entry.customType === "worktree").map((entry) => entry.content);
   assert.ok(reports.some((text) => /^Landed 1 commit\(s\) from pi\/batched on main after rebasing\. Session returned to the main checkout .*\. Removed .* and pi\/batched\.$/.test(text)), reports.join("\n"));
