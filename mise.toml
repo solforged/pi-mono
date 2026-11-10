@@ -14,6 +14,10 @@ run = "node scripts/profile.ts"
 description = "Run scripted provider faults through the installed Pi, without model calls"
 run = "node tests/fixtures/fault-smoke.ts"
 
+[tasks.paired]
+description = "PAID: run past fixes with and without an extension and compare cost, turns and test results"
+run = "node scripts/paired.ts"
+
 [tasks."sandbox:smoke"]
 description = "Exercise the tool sandbox against live Apple containers, without model calls"
 run = "pi --offline --no-extensions --no-skills --no-context-files --no-prompt-templates --no-session -e ./tests/fixtures/sandbox-smoke.ts -p /sandbox-smoke"

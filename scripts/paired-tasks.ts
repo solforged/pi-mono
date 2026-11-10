@@ -1,0 +1,16 @@
+// Tasks for scripts/paired.ts: past fixes in this repository, each prompted by its intent and scored by
+// the tests its commit added. `mise run paired -- --check` confirms every entry still builds.
+export type Task = { id: string; commit: string; prompt: string };
+
+export const TASKS: Task[] = [
+  { id: "web-search-timeout-order", commit: "3886b61", prompt: "When a web search backend times out, every later search still waits the full 60 seconds for it before moving on. Try a backend that timed out last for the next five minutes, keep it as the last resort, and restore its place once it answers." },
+  { id: "sessions-streaming", commit: "1debf87", prompt: "Session search drops a session once its file passes 32 MiB, because it loads each file whole. Read session files record by record so long sessions stay searchable, and count only message records against the limits." },
+  { id: "sessions-recent-first", commit: "9cd5285", prompt: "A session search that stops at its scan limit has covered an arbitrary set of sessions, because files are scanned in directory order. Scan the most recently used sessions first." },
+  { id: "intercom-card-saves", commit: "8e57c2f", prompt: "Overlapping intercom card updates share one temporary file and can leave corrupt JSON that hides the session from the roster. Make card saves safe when they overlap, and make sure a late save cannot restore a card after close." },
+  { id: "workflows-stale-locks", commit: "afc5a44", prompt: "A commit, review, or roles edit that is killed leaves its lock behind, and later runs are blocked until someone removes it by hand. Take over a lock whose owning process is dead." },
+  { id: "web-search-time-limits", commit: "8e76d3d", prompt: "All web search backends share one 60-second limit, so one stalled backend fails the whole search. Give each backend its own time limit so a stalled one falls through to the next, and keep API error bodies short instead of passing a whole HTML error page to the model." },
+  { id: "snapcompact-frame-budget", commit: "4efc7ed", prompt: "Snapcompact renders every archived page as a frame, but older frames can never be sent because a request has a 3 MB budget. Render the newest pages first and stop at the budget, while keeping the text of unrendered pages and reporting how many there are." },
+  { id: "workflows-autoname-retry", commit: "6ef26a9", prompt: "Automatic session naming gets one attempt, and a provider outage uses it up. Retry after transient failures (5xx, rate limits, timeouts) on the next user message, at most three tries per session, and keep quota and billing errors permanent." },
+  { id: "statusline-long-names", commit: "762ac56", prompt: "The status line truncates a long session name beside the segments, and subscription detection is broken because it passes a provider ID where Pi's registry expects a model. Move a name that does not fit to a second line, fix the detection, and mark subscription cost as the API-billing equivalent." },
+  { id: "rex-sleep", commit: "7810b1f", prompt: "Waking the machine from sleep retires Rex children and cancels their work, because the lease and task deadline expire during the suspended tick. Make children survive system sleep. Also describe the fixed method schemas once per client instead of on every operation." },
+];

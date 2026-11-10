@@ -1,7 +1,8 @@
 # Measuring
 
-Two offline tools decide whether a feature is worth adding. Neither makes model
-calls.
+Two offline tools decide whether a feature is worth adding; neither makes model
+calls. A third, paid one settles what they cannot: whether a change to the
+model's behavior helps.
 
 ## Session profile
 
@@ -66,3 +67,35 @@ the run. `--with` loads an extension so the same faults show what it changes;
 A custom provider receives history before Pi's built-in converters repair it.
 The "after built-in repair" column applies the two repairs read from Pi 1.5.0's
 code (failed turns dropped, missing results added); it is not an observation.
+
+## Paired runs
+
+```sh
+mise run paired -- --check
+mise run paired -- --with path/to/extension/index.ts --runs 3 --budget 20
+mise run paired -- --report /path/to/results
+```
+
+`scripts/paired.ts` costs money: every run is a real session on the default
+model. Use it only for a feature that changes what the model does, after the
+profile shows there is something to gain.
+
+Each task in `scripts/paired-tasks.ts` is a past fix in this repository. The
+run starts from the tree before the fix with the tests the fix added, in a
+fresh repository with no later history, and the prompt states the intent. A
+run passes when those tests pass and were not edited. `--check` builds every
+task and confirms its tests fail before the fix and pass after, without model
+calls.
+
+Both arms load the same few extensions from this checkout (`BASE` in the
+script) and no installed ones, so a run cannot message other sessions, start
+children, ask a question, or find the original fix in past sessions. The
+`on` arm adds the extensions named with `--with`. The two arms of a task run
+at the same time, in whole rounds, until `--budget` dollars are spent;
+rerunning with the same `--out` continues where it stopped.
+
+The report averages each task over its runs, then gives the mean difference
+across tasks with a 95% bootstrap interval. With ten tasks and three runs only
+a large effect clears the noise: the first use, a system-prompt rule asking for
+read-only calls to be batched, cost $17.67 and measured +$0.006 a run with an
+interval of −$0.005 to +$0.016 on runs averaging $0.29, so the rule was dropped.
