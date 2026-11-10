@@ -91,6 +91,9 @@ footer (status, tokens, cost, context and model) replaces Pi's three, and delega
 tasks display as `▸ Task for birch` with selected context quoted and shortened.
 This is display-only: the model receives the exact delegated framing. Parent
 messages display as `↳ Parent`, and the terminal title follows the current task.
+Inside Rex, Pi's terminal title is just the session name (or the directory
+when unnamed), since the tab already shows a Pi icon. Pi's own title writes are
+rewritten on their way to the terminal, so the change can't lose a race with Pi.
 
 ## Deck and Agents window
 

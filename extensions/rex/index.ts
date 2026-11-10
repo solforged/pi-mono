@@ -15,11 +15,13 @@ import { scopeRoot } from "../workflows/state.ts";
 import { pick, widget } from "./picker.ts";
 import { completionRenderer, toolRenderers } from "./render.ts";
 import { switchTools, TOOLS_ENTRY } from "./tools.ts";
+import { registerRexTitle } from "./title.ts";
 
 const str = () => Type.Optional(Type.String());
 import { activityLine, fitResults, oneLine, priority, rows, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
 
 export default async function (pi: ExtensionAPI) {
+  registerRexTitle();
   if (process.env.PI_REX_CHILD) { registerChildUi(pi, process.env.PI_REX_CHILD); return; }
   const root = resolve(dirname(await realpath(fileURLToPath(import.meta.url))), "../..");
   const rex = new RexClient(), runner = new RexRunner(pi, root, getAgentDir(), rex), lifetime = new AbortController();
