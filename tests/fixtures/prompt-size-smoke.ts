@@ -2,7 +2,7 @@
 // that registers tools. No model or network calls.
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { declarationSize, measure, owner } from "../../extensions/prompt-size/measure.ts";
+import { declarationSize, measure, owner, REPEATED_RULES } from "../../extensions/prompt-size/measure.ts";
 
 // Every request carries these declarations. Raise a budget only deliberately.
 export const BUDGETS: Record<string, number> = {
@@ -30,6 +30,8 @@ export default function (pi: ExtensionAPI) {
       // Repo tools add no rule or tool-list lines; their descriptions carry the guidance.
       const listed = ctx.getSystemPrompt().match(/<(rules|tools)>[\s\S]*?<\/\1>/g)?.join("\n") ?? "";
       for (const name of Object.keys(BUDGETS).filter(n => !GUIDED.has(n))) assert.ok(!listed.includes(name), `${name} appears in the rules or tool list`);
+      // The trim matches Pi's wording exactly; a reworded rule would silently stay.
+      for (const rule of Object.values(REPEATED_RULES).flat()) assert.ok(listed.includes(`- ${rule}\n`), `Pi no longer has the rule: ${rule}`);
       console.log(`Prompt size: ${ours.length} tool budgets, the delegation switch and measurement passed (${m.total} characters)`);
     },
   });

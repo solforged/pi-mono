@@ -5,6 +5,21 @@ import { basename, dirname } from "node:path";
 export interface ToolInfo { name: string; description?: string; parameters?: unknown; sourceInfo?: { path?: string; source?: string } }
 export interface Row { name: string; chars: number }
 
+/** Pi rules that only repeat their tool's description, which every request already carries. */
+export const REPEATED_RULES: Record<string, string[]> = {
+  edit: ["Each edits[].oldText must exactly and uniquely match the original file. Keep matches short and non-overlapping; merge nearby changes without including large unchanged regions."],
+};
+
+/** Drops the repeated rules from `before_agent_start` prompt options, in place. */
+export function dropRepeatedRules(guidelines: Record<string, string[]> | undefined) {
+  for (const [tool, rules] of Object.entries(REPEATED_RULES))
+    if (guidelines?.[tool]) guidelines[tool] = guidelines[tool].filter(rule => !rules.includes(rule));
+}
+
+/** The prompt as sent: the base prompt without the repeated rules. */
+export const withoutRepeatedRules = (prompt: string) =>
+  Object.values(REPEATED_RULES).flat().reduce((text, rule) => text.replace(`- ${rule}\n`, ""), prompt);
+
 /** Characters of the JSON a provider receives for one tool. */
 export const declarationSize = (t: ToolInfo) =>
   JSON.stringify({ name: t.name, description: t.description ?? "", parameters: t.parameters ?? {} }).length;
@@ -26,13 +41,15 @@ export function sections(prompt: string): Row[] {
   return rows.sort((a, b) => b.chars - a.chars);
 }
 
-export function measure(prompt: string, tools: ToolInfo[]) {
+/** `inactive` lists registered tools left out of this session, such as ask in print mode. */
+export function measure(prompt: string, tools: ToolInfo[], inactive: ToolInfo[] = []) {
   const toolRows = tools.map(t => ({ name: t.name, owner: owner(t), chars: declarationSize(t) })).sort((a, b) => b.chars - a.chars);
   const owners = new Map<string, number>();
   for (const t of toolRows) owners.set(t.owner, (owners.get(t.owner) ?? 0) + t.chars);
   const toolChars = toolRows.reduce((s, t) => s + t.chars, 0);
   return { sections: sections(prompt), tools: toolRows, owners: [...owners].map(([name, chars]) => ({ name, chars })).sort((a, b) => b.chars - a.chars),
-    promptChars: prompt.length, toolChars, total: prompt.length + toolChars };
+    promptChars: prompt.length, toolChars, total: prompt.length + toolChars,
+    inactive: inactive.map(t => ({ name: t.name, chars: declarationSize(t) })).sort((a, b) => b.chars - a.chars) };
 }
 
 const kb = (n: number) => `${(n / 1000).toFixed(1)} KB`.padStart(8);
@@ -42,6 +59,7 @@ export function report(m: ReturnType<typeof measure>) {
   for (const s of m.sections) lines.push(`${kb(s.chars)}  ${s.name}`);
   lines.push("", "Tool declarations by extension:");
   for (const o of m.owners) lines.push(`${kb(o.chars)}  ${o.name}: ${m.tools.filter(t => t.owner === o.name).map(t => `${t.name} ${t.chars}`).join(", ")}`);
+  if (m.inactive.length) lines.push("", `Inactive here, not counted: ${m.inactive.map(t => `${t.name} ${t.chars}`).join(", ")}`);
   lines.push("", "Sizes are characters of JSON or text; tokens are estimated at 4 characters each.");
   return lines.join("\n");
 }

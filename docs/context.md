@@ -68,6 +68,12 @@ before any conversation. `/prompt-size` shows both: the prompt by section
 (tools list, rules, project instructions, skills and so on) and the
 declarations grouped by the extension that registered them. Sizes are
 characters of text or JSON, with tokens estimated at four characters each.
+Repo tools that are registered but inactive, such as ask in print mode, are
+listed separately and not counted.
+
+The extension also drops Pi rules that only repeat their tool's description
+(currently edit's `oldText` rule). It matches Pi's exact wording, and the smoke
+test fails if Pi rewords a rule, so the trim cannot silently stop working.
 
 This repository's tools keep their declarations small. Each description says
 when to use the tool; parameter limits are enforced in code, with errors that

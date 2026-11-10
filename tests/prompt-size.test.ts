@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import test from "node:test";
-import { declarationSize, measure, owner, report, sections } from "../extensions/prompt-size/measure.ts";
+import { declarationSize, dropRepeatedRules, measure, owner, REPEATED_RULES, report, sections, withoutRepeatedRules } from "../extensions/prompt-size/measure.ts";
 import { switchTools } from "../extensions/rex/tools.ts";
 import { root } from "./helpers.ts";
 
@@ -16,6 +16,17 @@ test("prompts are measured by section and tools by owning extension", () => {
   const m = measure("<rules>r</rules>", [tool, { ...tool, name: "u", sourceInfo: { source: "builtin" } }]);
   assert.deepEqual([m.promptChars, m.toolChars, m.total, m.owners.map(o => o.name)], [16, 2 * declarationSize(tool), 16 + 2 * declarationSize(tool), ["unknown", "pi"]]);
   assert.match(report(m), /^Fixed prompt: 0\.1 KB \(~\d+ tokens\)[\s\S]*Tool declarations by extension:[\s\S]* {2}unknown: t \d+/);
+  assert.doesNotMatch(report(m), /Inactive/);
+  assert.match(report(measure("", [], [{ ...tool, name: "ask_user_question" }])), /Inactive here, not counted: ask_user_question \d+/);
+});
+
+test("Pi rules that repeat a tool description are dropped and not measured", () => {
+  const [rule] = REPEATED_RULES.edit;
+  const guidelines: Record<string, string[]> = { edit: ["Use edit for targeted changes.", rule], read: [rule] };
+  dropRepeatedRules(guidelines);
+  assert.deepEqual(guidelines, { edit: ["Use edit for targeted changes."], read: [rule] });
+  dropRepeatedRules(undefined);
+  assert.equal(withoutRepeatedRules(`<rules>\n- a\n- ${rule}\n- b\n</rules>`), "<rules>\n- a\n- b\n</rules>");
 });
 
 test("one delegation tool per session, restoring only what the switch removed", () => {
