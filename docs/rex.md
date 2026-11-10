@@ -210,8 +210,9 @@ cancellation. A responsive cancellation leaves the child available for another
 task. If it does not settle within the grace period, the parent closes its owned
 terminal. Reload, shutdown, and session replacement cancel active owned work and
 retire idle managed children. A dropped connection or expired 15-second lease
-aborts unattended work. Human-owned children are excluded from parent cleanup.
-Retired idle children remain inspectable and can be taken over locally.
+aborts unattended work; time the machine spent asleep does not count.
+Human-owned children are excluded from parent cleanup. Retired idle children
+remain inspectable and can be taken over locally.
 
 There is no reconnect, automatic replay, sibling messaging, remote execution, or
 Herdr backend. Rex supplies terminal views and status; this extension supplies

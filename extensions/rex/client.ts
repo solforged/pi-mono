@@ -167,6 +167,7 @@ export class RexClient {
     return this.cli(["api", "call", "--session", sessionId, method, JSON.stringify({ ...args, session_id: sessionId })], signal);
   }
 
+  private methodsChecked = false;
   private async preflight(sessionId: string, signal?: AbortSignal, parentBlock?: string) {
     id(sessionId, "session");
     if (parentBlock !== undefined) id(parentBlock, "block");
@@ -183,10 +184,14 @@ export class RexClient {
     if (this.identity && (this.identity.hostId !== identity.hostId || this.identity.instanceId !== identity.instanceId)) {
       throw new Error("Rex local server identity changed; construct a new client and probe again");
     }
-    for (const [method, args] of Object.entries(METHODS)) {
-      const description = await this.cli(["api", "describe", method, "--json"], signal);
-      if (description.name !== method || description.invoke?.method !== method) throw new Error(`Rex describe did not match ${method}`);
-      fields(description.input_schema, args, method);
+    // A server instance's method schemas do not change, and the identity check
+    // above pins this client to one instance, so they are described once.
+    if (!this.methodsChecked) {
+      for (const [method, args] of Object.entries(METHODS)) {
+        const description = await this.cli(["api", "describe", method, "--json"], signal);
+        if (description.name !== method || description.invoke?.method !== method) throw new Error(`Rex describe did not match ${method}`);
+        fields(description.input_schema, args, method);
+      }
     }
     const view = await this.call(sessionId, "session.view", {}, signal);
     if (view.session_id !== sessionId) throw new Error("Rex session.view session ID does not match the requested session");
@@ -205,6 +210,7 @@ export class RexClient {
     const size = fields(options.size, ["columns", "rows"], "terminal size");
     if (!allows(size.columns, "integer") || !allows(size.rows, "integer")) throw new Error("Rex terminal size unsupported");
     this.identity = identity;
+    this.methodsChecked = true;
     const state = {
       ...identity, view, blocks: listed.blocks as ObjectValue[],
       keepOpen: allows(options.keep_open, "boolean") && (!options.keep_open.enum || options.keep_open.enum.includes(true)),

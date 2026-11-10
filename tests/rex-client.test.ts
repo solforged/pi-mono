@@ -396,3 +396,27 @@ test("a block the user already closed is reported as gone, distinct from remote 
   const remote = harness(); remote.blocks[1].host_id = "99999999-9999-4999-8999-999999999999";
   await assert.rejects(remote.client.close(SESSION, BLOCK), (e: unknown) => !(e instanceof BlockGone) && /missing, remote/.test(String(e)));
 });
+
+test("method schemas are described once per client; identity and placement are rechecked every time", async () => {
+  const h = harness();
+  const describes = () => h.calls.filter((call) => call.words[1] === "describe").length;
+  await h.client.probe(SESSION, PARENT);
+  const first = describes();
+  assert.equal(first, 7);
+  const before = h.calls.length;
+  await h.client.close(SESSION, BLOCK);
+  assert.equal(describes(), first);
+  // whoami, session.view, session.list_blocks, block_creator.list, then the mutation.
+  assert.deepEqual(h.calls.slice(before).map((call) => call.method ?? call.words[0]), ["whoami", "session.view", "session.list_blocks", "block_creator.list", "block.close"]);
+  h.who.instance_id = "99999999-9999-4999-8999-999999999999";
+  await assert.rejects(h.client.close(SESSION, BLOCK), /identity changed/);
+
+  // A failed first probe leaves nothing cached.
+  const bad = harness();
+  bad.descriptions["block.close"].input_schema.properties = {};
+  await assert.rejects(bad.client.probe(SESSION, PARENT));
+  bad.descriptions["block.close"].input_schema.properties = { session_id: {}, block_id: {} };
+  const count = bad.calls.filter((call) => call.words[1] === "describe").length;
+  await bad.client.probe(SESSION, PARENT);
+  assert.equal(bad.calls.filter((call) => call.words[1] === "describe").length, count + 7);
+});

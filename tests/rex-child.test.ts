@@ -156,10 +156,25 @@ test("parent disconnect aborts unattended work and requests shutdown", async t =
   await h.emit("agent_settled", { aborted: true });
   assert.equal(JSON.parse(await readFile(join(h.m.dir, "tasks", task, "result.json"), "utf8")).status, "cancelled");
 });
+// A running process sees every one-second tick; one large jump would look like a suspension.
+const elapse = (t: any, ms: number) => { for (let at = 0; at < ms; at += 1000) t.mock.timers.tick(1000); };
 test("parent heartbeat lease expires even while its socket remains open", async t => {
   t.mock.timers.enable({ apis: ["Date", "setInterval"] });
-  const h = await harness(t), task = await h.dispatch(); t.mock.timers.tick(LEASE_MS + 1001);
+  const h = await harness(t), task = await h.dispatch(); elapse(t, LEASE_MS + 2000);
   await h.until(() => h.shutdowns > 0); assert(h.aborts > 0); await h.settle(task, true);
+  assert.match(h.events.find(v => v.type === "result").text, /lease expired/);
+});
+test("a suspended process restarts the lease and deadline clocks instead of expiring", async t => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"] });
+  const h = await harness(t), task = await h.dispatch();
+  t.mock.timers.tick(2000);
+  // System sleep: wall time jumps an hour while no timer or ping runs.
+  t.mock.timers.setTime(Date.now() + 3_600_000);
+  t.mock.timers.tick(1000); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.shutdowns, 0); assert.equal(h.aborts, 0);
+  // Awake again with no ping from the parent, the lease still runs out.
+  elapse(t, LEASE_MS + 2000);
+  await h.until(() => h.shutdowns > 0); await h.settle(task, true);
   assert.match(h.events.find(v => v.type === "result").text, /lease expired/);
 });
 test("model and turn policy is enforced for each managed task", async t => {

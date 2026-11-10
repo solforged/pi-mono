@@ -23,14 +23,21 @@ export function registerChildUi(pi: ExtensionAPI, manifestPath: string) {
     // task, cwd and branch, and a deck slot is only ~20 rows tall.
     ctx.ui.setFooter((tui, theme, footerData) => {
       const off = footerData.onBranchChange(() => tui.requestRender());
+      let totals: { key: string; input: number; output: number; cost: number } | undefined;
       return {
         dispose: off, invalidate() {},
         render(width: number) {
-          let input = 0, output = 0, cost = 0;
-          for (const e of ctx.sessionManager.getBranch()) {
-            if (e.type !== "message" || e.message.role !== "assistant") continue;
-            const u = (e.message as any).usage; input += u?.input ?? 0; output += u?.output ?? 0; cost += u?.cost?.total ?? 0;
+          // Renders are frequent while streaming; the totals change only with the branch.
+          const sm = ctx.sessionManager as any;
+          const key = `${sm.getSessionId()}:${sm.getLeafId()}:${sm.getEntryCount?.() ?? sm.getEntries().length}`;
+          if (totals?.key !== key) {
+            totals = { key, input: 0, output: 0, cost: 0 };
+            for (const e of ctx.sessionManager.getBranch()) {
+              if (e.type !== "message" || e.message.role !== "assistant") continue;
+              const u = (e.message as any).usage; totals.input += u?.input ?? 0; totals.output += u?.output ?? 0; totals.cost += u?.cost?.total ?? 0;
+            }
           }
+          const { input, output, cost } = totals;
           const statuses = [...footerData.getExtensionStatuses().entries()];
           const own = statuses.find(([k]) => k === "rex-child")?.[1], others = statuses.filter(([k]) => k !== "rex-child").map(([, v]) => v);
           const { left, right } = childFooter({ status: [own, ...others].filter(Boolean).join(" · "), input, output, cost,

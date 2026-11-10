@@ -49,6 +49,9 @@ export class ChildState {
   }
 }
 
+/** A lease tick is due every second; one this late means the process did not run. */
+const SUSPENDED_MS = 5000;
+
 /** Managed tasks share a Pi session, but never share task IDs, budgets or results. */
 export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (ctx: ExtensionContext, manifest: Manifest) => void = () => {}) {
   let manifest: Manifest | undefined, ctx: ExtensionContext | undefined, socket: Socket | undefined;
@@ -265,8 +268,18 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
         try { frames.push(chunk, value => { void enqueue(() => command(value)).catch(() => {}); }); }
         catch (error) { void enqueue(() => retire(String(error), true)).catch(() => {}); }
       });
+      let lastTick = Date.now();
       timer = setInterval(() => {
+        const now = Date.now(), gap = now - lastTick;
+        lastTick = now;
         if (owner !== "managed") return;
+        // A tick this late means the process was suspended (system sleep) or
+        // blocked. No pings were missed in that span, and the parent's deadline
+        // timer did not run during it, so neither clock counts it.
+        if (gap > SUSPENDED_MS) {
+          lastPing = now;
+          if (current && waitingSince === undefined) current.deadline += gap;
+        }
         if (Date.now() - lastPing > LEASE_MS) { void enqueue(() => retire("Parent lease expired", !!current)).catch(() => {}); return; }
         if (current && waitingSince === undefined && Date.now() > current.deadline && !current.state.cancelled) {
           current.state.cancelled = "Task deadline expired"; ctx!.abort();
