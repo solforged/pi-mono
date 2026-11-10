@@ -28,7 +28,7 @@ async function extensionNames() {
 }
 
 test("install links every extension and roles.json idempotently", async (t) => {
-  const agentDir = await mkdtemp(join(tmpdir(), "pi-sol-install-"));
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-mono-install-"));
   t.after(() => rm(agentDir, { recursive: true, force: true }));
   const real = await realpath(repo);
 
@@ -46,7 +46,7 @@ test("install links every extension and roles.json idempotently", async (t) => {
 });
 
 test("install links opt-in extensions only with --with and keeps them after", async (t) => {
-  const agentDir = await mkdtemp(join(tmpdir(), "pi-sol-install-"));
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-mono-install-"));
   t.after(() => rm(agentDir, { recursive: true, force: true }));
   const target = join(agentDir, "extensions", "herdr-title");
 
@@ -61,7 +61,7 @@ test("install links opt-in extensions only with --with and keeps them after", as
 });
 
 test("install leaves foreign paths alone and removes stale links", async (t) => {
-  const agentDir = await mkdtemp(join(tmpdir(), "pi-sol-install-"));
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-mono-install-"));
   t.after(() => rm(agentDir, { recursive: true, force: true }));
   const real = await realpath(repo);
   await mkdir(join(agentDir, "extensions"));
@@ -84,7 +84,7 @@ test("install leaves foreign paths alone and removes stale links", async (t) => 
 });
 
 test("install keeps links to external extension variants without failing", async (t) => {
-  const agentDir = await mkdtemp(join(tmpdir(), "pi-sol-install-"));
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-mono-install-"));
   t.after(() => rm(agentDir, { recursive: true, force: true }));
   const variant = join(agentDir, "variant", "sandbox");
   await mkdir(variant, { recursive: true });
@@ -105,6 +105,6 @@ test("install keeps links to external extension variants without failing", async
 });
 
 test("install rejects unknown options", async () => {
-  const result = await install(join(tmpdir(), "pi-sol-unused"), "--force");
+  const result = await install(join(tmpdir(), "pi-mono-unused"), "--force");
   assert.equal(result.code, 2);
 });

@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 
-const PATCHED = Symbol.for("pi-sol.rex.title");
+const PATCHED = Symbol.for("pi-mono.rex.title");
 // Pi writes its title as one OSC 0 sequence: "π - <session> - <dir>" or "π - <dir>".
 const PI_TITLE = /^\x1b\]0;\u03c0 - ([^\x07]*)\x07$/;
 

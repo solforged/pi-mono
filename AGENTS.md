@@ -1,4 +1,4 @@
-# pi-sol
+# pi-mono
 
 Locally owned Pi coding-agent extensions. Use Pi's bundled APIs and Node
 built-ins; do not add third-party extension packages or runtime dependencies.

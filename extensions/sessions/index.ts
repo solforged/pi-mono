@@ -77,7 +77,7 @@ export default function (pi: ExtensionAPI) {
         ...storageRoots(local).map(root => `Store: ${root.path} (${root.depth ? "root and immediate project directories" : "flat"}).`),
         "Active session excluded. User/assistant text by default; tool text is opt-in.",
         "Original entries survive compaction. Thinking, images and retrieval tool I/O are never returned.",
-        "Tools: session_search, session_read. See docs/sessions.md in pi-sol.",
+        "Tools: session_search, session_read. See docs/sessions.md in pi-mono.",
       ].join("\n"));
       pi.appendEntry("sessions-report", { text });
       if (!ctx.hasUI && ctx.mode !== "json") console.log(text);

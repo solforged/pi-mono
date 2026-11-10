@@ -18,7 +18,7 @@ test("labels thinking levels, token counts, and costs compactly", () => {
 });
 
 test("shortens paths under home and keeps whole trailing directories", () => {
-  assert.equal(displayPath("/Users/a/src/pi-sol", "/Users/a"), "~/src/pi-sol");
+  assert.equal(displayPath("/Users/a/src/pi-mono", "/Users/a"), "~/src/pi-mono");
   assert.equal(displayPath("/Users/ab", "/Users/a"), "/Users/ab");
   assert.equal(displayPath("/Users/a", "/Users/a"), "~");
   assert.equal(displayPath("/very/long/path/to/some/project", undefined, 20), "…/to/some/project");

@@ -54,7 +54,7 @@ pi --no-extensions -e ./extensions/workflows/index.ts
 Choose another extension's `index.ts` to test it instead. Do not combine
 installed links with duplicate `-e` paths or a local package installation. If
 migrating from the package setup, remove its settings entry with
-`pi remove /absolute/path/to/pi-sol` before enabling the links.
+`pi remove /absolute/path/to/pi-mono` before enabling the links.
 
 To remove an extension, remove only its symlink and any corresponding mise
 mapping, then reload Pi. Remove the `roles.json` link separately if no longer

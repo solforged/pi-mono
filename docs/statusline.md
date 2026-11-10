@@ -5,7 +5,7 @@ style of OMP's status line. It needs a Nerd Font and is active only in the
 interactive TUI.
 
 ```text
- Opus 5.5 · 󰪡 med ·  ~/src/pi-sol ·  main +2 *4 ?16 ⇡1 · 󰊚 2.5%/1M 󰁨 ·  96% · 󰙺 2.74
+ Opus 5.5 · 󰪡 med ·  ~/src/pi-mono ·  main +2 *4 ?16 ⇡1 · 󰊚 2.5%/1M 󰁨 ·  96% · 󰙺 2.74
 ```
 
 From left to right:

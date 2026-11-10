@@ -194,7 +194,7 @@ there. A host-side controller remains narrow. Do not give a host-resident
 
 Pin the experimental package version and test recovery before adopting it.
 The [Durable README](https://github.com/earendil-works/pi/blob/main/packages/durable/README.md)
-documents a different extension API; `pi-sol` coding-agent extensions are not
+documents a different extension API; `pi-mono` coding-agent extensions are not
 assumed compatible. Request deduplication is not exactly-once external side
 effects. Browser writes must not be marked replay-safe just because the task
 can resume. Pi Durable's SQLite default survives process crashes but does not

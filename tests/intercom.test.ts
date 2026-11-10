@@ -80,15 +80,15 @@ test("dead and superseded cards are swept; unreachable peers fail fast", async t
 
 test("targets resolve by id, path, folder or title, and never guess", () => {
   const peers = [
-    card("aaaaaa", { cwd: `${homedir()}/src/pi-sol`, title: "Rex review", sessionId: "s-1" }),
+    card("aaaaaa", { cwd: `${homedir()}/src/pi-mono`, title: "Rex review", sessionId: "s-1" }),
     card("bbbbbb", { cwd: "/work/omp", title: "Todo redesign" }),
     card("cccccc", { cwd: "/other/omp", title: "Rex deck" }),
   ];
   assert.equal(resolve("aaaaaa", peers).id, "aaaaaa");
   assert.equal(resolve("S-1", peers).id, "aaaaaa");
-  assert.equal(resolve("~/src/pi-sol", peers).id, "aaaaaa");
+  assert.equal(resolve("~/src/pi-mono", peers).id, "aaaaaa");
   assert.equal(resolve("/work/omp", peers).id, "bbbbbb");
-  assert.equal(resolve("PI-SOL", peers).id, "aaaaaa");
+  assert.equal(resolve("PI-MONO", peers).id, "aaaaaa");
   assert.equal(resolve("todo", peers).id, "bbbbbb");
   assert.throws(() => resolve("omp", peers), /matches 2 sessions/);
   assert.throws(() => resolve("rex", peers), /matches 2 sessions/);
