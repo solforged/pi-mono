@@ -22,7 +22,10 @@ extension is linked by default.
 
 Rerun it after pulling a new release; new extensions are picked up without
 documentation changes. Correct links are kept. Dangling links into this
-checkout, such as a renamed extension, are removed. Any other existing
+checkout, such as a renamed extension, are removed. An extension link that
+points to another extension directory with an `index.ts`, such as a
+machine-specific variant kept in a separate checkout, is reported as
+`external` and kept without failing the task. Any other existing
 destination is reported as `review` and left untouched, and the task exits
 nonzero until you resolve it. Then `/reload` in Pi or start a new session. Do
 not link the whole repository into the extensions directory or load internal

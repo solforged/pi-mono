@@ -1,6 +1,8 @@
 // Links every extension directory with an index.ts, plus roles.json, into the
 // Pi agent directory. Safe to rerun: correct links are kept, foreign paths are
 // reported and left alone, and dangling links into this checkout are removed.
+// A symlink to another extension directory (one with an index.ts), such as a
+// machine-specific variant from a different checkout, is kept without failing.
 // Opt-in extensions are linked only when named with --with.
 import { lstat, mkdir, readdir, readlink, realpath, rm, stat, symlink } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -62,11 +64,13 @@ for (const { source, target, optional } of resources) {
     continue;
   }
   const resolved = await realpath(target).catch(() => undefined);
+  const isLink = (await lstat(target)).isSymbolicLink();
   if (resolved === source) {
     report("ok", target);
+  } else if (isLink && resolved && target.startsWith(extensionsDir + "/") && (await exists(join(resolved, "index.ts")))) {
+    report("external", target, `kept; points to ${await readlink(target)}`);
   } else {
     conflicts++;
-    const isLink = (await lstat(target)).isSymbolicLink();
     report("review", target, isLink ? `points to ${await readlink(target)}` : "not a symlink");
   }
 }

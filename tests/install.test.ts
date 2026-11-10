@@ -83,6 +83,27 @@ test("install leaves foreign paths alone and removes stale links", async (t) => 
   assert.ok(names.includes("unrelated"), "links outside the checkout are not touched");
 });
 
+test("install keeps links to external extension variants without failing", async (t) => {
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-sol-install-"));
+  t.after(() => rm(agentDir, { recursive: true, force: true }));
+  const variant = join(agentDir, "variant", "sandbox");
+  await mkdir(variant, { recursive: true });
+  await writeFile(join(variant, "index.ts"), "export default () => {};\n");
+  await mkdir(join(agentDir, "extensions"));
+  await symlink(variant, join(agentDir, "extensions", "sandbox"));
+
+  const result = await install(agentDir);
+  assert.equal(result.code, 0, result.stdout);
+  assert.match(result.stdout, /^external\s+\S+sandbox\s+\(kept; points to /m);
+  assert.equal(await readlink(join(agentDir, "extensions", "sandbox")), variant);
+
+  // A link to a directory without an entry point is still a conflict.
+  await rm(join(variant, "index.ts"));
+  const broken = await install(agentDir);
+  assert.equal(broken.code, 1);
+  assert.match(broken.stdout, /^review\s+\S+sandbox/m);
+});
+
 test("install rejects unknown options", async () => {
   const result = await install(join(tmpdir(), "pi-sol-unused"), "--force");
   assert.equal(result.code, 2);
