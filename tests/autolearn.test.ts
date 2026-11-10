@@ -139,7 +139,7 @@ test("autolearn stays idle until enabled, then stages one proposal for a recurri
   assert.equal(prompts.length, 1);
   assert.match(prompts[0], /Recurring steps \(in 3 sessions\)/);
   assert.match(prompts[0], /gh release create/);
-  assert.match(prompts[0], /"name":"writing-prose","managed":false,"description":"Edits prose\."/);
+  assert.match(prompts[0], /"name":"writing-prose","managed":false,"ref":"skill:writing-prose:[0-9a-f]{12}","description":"Edits prose\."/);
   assert.doesNotMatch(prompts[0], /AUTHORED BODY/);
   assert.deepEqual(notices.filter((text) => /skipped/.test(text)), []);
   const root = await scopeRoot(dir, config.profile, dir);

@@ -114,6 +114,21 @@ export async function inventorySkills(root: string, loaded: Array<{ name: string
   }
   return inventory;
 }
+/** Reference a proposal can cite for a skill, tied to the content reviewed. */
+export const skillRef = (skill: SkillSnapshot) => `skill:${skill.name}:${hash(skill.content).slice(0, 12)}`;
+/**
+ * The inventory as review input. Only managed skills can be updated or
+ * deleted, so only they are sent in full; other loaded skills are read-only
+ * and go by name and description, which Pi routes on and which is enough to
+ * avoid near-duplicates. A large authored skill then cannot exhaust the budget.
+ */
+export function inventoryInput(inventory: SkillSnapshot[], loaded: Array<{ name: string; description?: string }>): string {
+  const describe = new Map(loaded.map((skill) => [skill.name, skill.description ?? ""]));
+  return JSON.stringify(inventory.map((skill) => skill.managed
+    ? { name: skill.name, managed: true, ref: skillRef(skill), content: skill.content }
+    : { name: skill.name, managed: false, ref: skillRef(skill), description: describe.get(skill.name) ?? "" }));
+}
+export const INVENTORY_LABEL = "Skill inventory (managed skills in full; others read-only, by description)";
 export async function stageCandidate(root: string, candidate: Candidate, inventory: SkillSnapshot[], origin?: Draft["origin"]): Promise<Draft> {
   const before = await readSkill(root, candidate.name);
   if (candidate.action === "create" && (before !== null || inventory.some((s) => s.name === candidate.name))) throw new Error(`Skill already exists: ${candidate.name}; propose an update instead`);

@@ -3,7 +3,7 @@ import { SessionManager, withFileMutationQueue, type ExtensionAPI, type Extensio
 import { configSnapshot, type ConfigSource } from "./roles.ts";
 import { completeRole } from "./requests.ts";
 import { hash, privateDir, readJson, saveJson, scopeRoot, withLock } from "./state.ts";
-import { applyDraft, evidenceChunks, evidenceFromBranch, inventorySkills, LEARNING_SYSTEM, parseCandidates, readDrafts, renderDraft, stageCandidate } from "./learning.ts";
+import { applyDraft, evidenceChunks, evidenceFromBranch, INVENTORY_LABEL, inventoryInput, inventorySkills, LEARNING_SYSTEM, parseCandidates, readDrafts, renderDraft, skillRef, stageCandidate } from "./learning.ts";
 import { cancellable, pickMany } from "./ui.ts";
 
 type Ledger = { sessions: Record<string, string[]>; curated: Record<string, string> };
@@ -23,18 +23,19 @@ export function registerLearning(pi: ExtensionAPI, source: ConfigSource, agentDi
     try {
       const root = await scopeRoot(agentDir, config.profile, ctx.cwd);
       await cancellable(ctx, `Reviewing with ${config.profile}.learn; no skills will be activated`, lifetime, async (signal) => withLock(root, "review", async () => {
-        const inventory = await inventorySkills(root, ctx.getSystemPromptOptions().skills ?? []);
-        const skillRefs = inventory.map((s) => `skill:${s.name}:${hash(s.content).slice(0, 12)}`);
-        const inventoryText = JSON.stringify(inventory.map((s, i) => ({ ...s, ref: skillRefs[i] })));
+        const loaded = ctx.getSystemPromptOptions().skills ?? [];
+        const inventory = await inventorySkills(root, loaded);
+        const skillRefs = inventory.map(skillRef);
+        const inventoryText = inventoryInput(inventory, loaded);
         const budget = config.learning.maxInputChars - inventoryText.length - LEARNING_SYSTEM.length - 1500;
-        if (budget < 4000) throw new Error("Full skill inventory exceeds the learning input budget; raise learning.maxInputChars or narrow the loaded skill set");
+        if (budget < 4000) throw new Error("Managed skills exceed the learning input budget; raise learning.maxInputChars");
         const ledgerFile = join(root, "reviewed.json");
         const ledger = await readJson<Ledger>(ledgerFile, { sessions: {}, curated: {} });
         let remaining = config.learning.maxChunks, proposals = 0, reviewed = 0, pending = 0;
         const generate = async (evidence: string, refs: string[], focus: string) => {
           signal.throwIfAborted();
           const result = await completeRole(ctx, config, "learn", LEARNING_SYSTEM,
-            `Candidate limit: ${config.learning.maxCandidates}\nFocus: ${focus}\nFully read skill inventory:\n${inventoryText}\nEvidence:\n${evidence}`, signal);
+            `Candidate limit: ${config.learning.maxCandidates}\nFocus: ${focus}\n${INVENTORY_LABEL}:\n${inventoryText}\nEvidence:\n${evidence}`, signal);
           signal.throwIfAborted();
           pi.appendEntry("workflow-usage", { role: "learn", ...result, text: undefined });
           const candidates = parseCandidates(result.text, new Set([...refs, ...skillRefs]), config.learning.maxCandidates);
@@ -49,7 +50,7 @@ export function registerLearning(pi: ExtensionAPI, source: ConfigSource, agentDi
           const owned = inventory.filter((skill) => skill.managed && ledger.curated[skill.name] !== hash(skill.content));
           for (const skill of owned) {
             if (remaining <= 0) { pending++; continue; }
-            const ref = `skill:${skill.name}:${hash(skill.content).slice(0, 12)}`;
+            const ref = skillRef(skill);
             await generate(JSON.stringify({ ref, content: skill.content }), [ref], `Audit managed skill ${skill.name}; keep uncertain value and preserve unique details before proposing merges or deletions.`);
             ledger.curated[skill.name] = hash(skill.content); remaining--; reviewed++;
             await saveJson(ledgerFile, ledger);

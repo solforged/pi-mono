@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { alreadyReviewed, documented, recurrence, recurringPatterns, runs, similarCore, segments, skillUse, summarizeRun, type PatternReview, type Recurrence, type Run } from "./autolearn.ts";
-import { evidenceFromBranch, inventorySkills, LEARNING_SYSTEM, parseCandidates, readDrafts, stageCandidate, type Draft, type SkillSnapshot } from "./learning.ts";
+import { evidenceFromBranch, INVENTORY_LABEL, inventoryInput, inventorySkills, LEARNING_SYSTEM, parseCandidates, readDrafts, skillRef, stageCandidate, type Draft, type SkillSnapshot } from "./learning.ts";
 import { completeRole } from "./requests.ts";
 import { configSnapshot, resolveRole, type Config, type ConfigSource } from "./roles.ts";
 import { readJson, saveJson, scopeRoot, withLock } from "./state.ts";
@@ -186,13 +186,9 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
     });
   }
 
-  // Only managed skills can be updated or deleted, so only they are sent in
-  // full. Other loaded skills are read-only, and autolearn drops notes, so
-  // their name and description (what Pi routes on) suffice to avoid duplicates.
   async function skillInput(config: Config, root: string): Promise<{ inventory: SkillSnapshot[]; text: string; budget: number }> {
     const inventory = await inventorySkills(root, loadedSkills);
-    const describe = new Map(loadedSkills.map((skill) => [skill.name, skill.description ?? ""]));
-    const text = JSON.stringify(inventory.map(({ name, content, managed }) => managed ? { name, managed, content } : { name, managed, description: describe.get(name) ?? "" }));
+    const text = inventoryInput(inventory, loadedSkills);
     const budget = config.learning.maxInputChars - text.length - LEARNING_SYSTEM.length - FOCUS.length - 2000;
     if (budget < 4000) throw new Error("Managed skills exceed the learning input budget; raise learning.maxInputChars");
     return { inventory, text, budget };
@@ -214,10 +210,10 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
       usedSkills.length ? `The latest run consulted these skills and still hit errors: ${usedSkills.join(", ")}.` : "",
     ].filter(Boolean).join("\n");
     const result = await completeRole(ctx, config, "learn", LEARNING_SYSTEM,
-      `Candidate limit: 1\nRecurring steps (in ${found.sessions} sessions): ${found.core.join(" | ")}\nFocus: ${focus}\nSkill inventory (managed skills in full; others read-only, by description):\n${inventoryText}\nEvidence, one run per session:\n${parts.map((part) => part.text).join("\n")}`, signal);
+      `Candidate limit: 1\nRecurring steps (in ${found.sessions} sessions): ${found.core.join(" | ")}\nFocus: ${focus}\n${INVENTORY_LABEL}:\n${inventoryText}\nEvidence, one run per session:\n${parts.map((part) => part.text).join("\n")}`, signal);
     signal.throwIfAborted();
     pi.appendEntry("workflow-usage", { role: "learn", ...result, text: undefined });
-    const candidate = parseCandidates(result.text, new Set(parts.flatMap((part) => part.refs)), 1)[0];
+    const candidate = parseCandidates(result.text, new Set([...parts.flatMap((part) => part.refs), ...inventory.map(skillRef)]), 1)[0];
     if (!candidate || candidate.action === "note" || (atLimit && candidate.action === "create")) return undefined;
     return await stageCandidate(root, candidate, inventory, "autolearn");
   }

@@ -13,15 +13,16 @@ active until that happens.
 
 Session mining uses original messages and tool results on the selected branch,
 not just compaction summaries. Images and private thinking are excluded. The
-review model sees session evidence and full loaded skill contents as data.
-Session/entry references accompany proposals. Treat transcripts as sensitive:
+review model sees session evidence and the skill inventory as data: managed
+skills in full, since only they can change, and other loaded skills by name and
+description. Session/entry references accompany proposals. Treat transcripts as sensitive:
 this sends selected evidence to the configured `learn` provider.
 
 Review is bounded to six chunks per invocation. Large entries have fragment
-checkpoints; rerunning continues unreviewed material. Fully read skill inventory
-must also fit the configured input budget; the command reports an error rather
-than silently omit skills when it does not. Apart from autolearn, below, no
-model runs on exit or in the background to learn skills.
+checkpoints; rerunning continues unreviewed material. Managed skills must fit
+`learning.maxInputChars`; the command reports an error rather than silently
+omit one when they do not. Apart from autolearn, below, no model runs on exit
+or in the background to learn skills.
 
 ## Autolearn
 
@@ -40,12 +41,11 @@ half the project's sessions. The review runs only when:
 - the pattern was not already reviewed, or has since recurred in twice as many
   sessions; no proposal is pending; and no other review is running.
 
-The review sees one run per session, managed skills in full, and other loaded
-skills by name and description only, since it can change only managed skills.
-If managed skills alone exceed `learning.maxInputChars`, it warns and leaves the
-pattern unreviewed, so raising the limit lets it run. It is asked to prefer
-nothing, then `automate` (deterministic tooling such as a script or task), then a skill
-update, and only then a new skill. New skills are refused once `maxSkills`
+The review sees one run per session and the skill inventory. If managed skills
+exceed the input budget, it warns and leaves the pattern unreviewed, so raising
+the limit lets it run. It is asked to prefer nothing, then `automate`
+(deterministic tooling such as a script or task), then a skill update, and only
+then a new skill. New skills are refused once `maxSkills`
 (12) managed skills exist. A proposal raises one notification. In
 `/learn-review`, an `automate` proposal can be handed to the agent to build
 instead of being published. Selected transcripts go to the `learn` provider

@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isTransientError, loadTitlePrompt, MAX_TRANSIENT_FAILURES, parseTitle, registerAutoname } from "../extensions/workflows/autoname.ts";
-import { applyDraft, evidenceChunks, evidenceFromBranch, inventorySkills, parseCandidates, readDrafts, renderDraft, stageCandidate } from "../extensions/workflows/learning.ts";
+import { applyDraft, evidenceChunks, evidenceFromBranch, inventoryInput, inventorySkills, parseCandidates, readDrafts, renderDraft, skillRef, stageCandidate } from "../extensions/workflows/learning.ts";
 import { atomicWrite, hash, readSkill, withLock } from "../extensions/workflows/state.ts";
 import { childArgs, childExtensions, createWorktree } from "../extensions/workflows/subagents.ts";
 import { runProcess } from "../extensions/workflows/process.ts";
@@ -126,6 +126,28 @@ test("new skills take gerund names; automation ideas never touch skill files", a
   assert.deepEqual((await readDrafts(dir)).map((d) => d.id), [draft.id]);
 });
 
+
+test("review input sends managed skills in full and other loaded skills by description", async (t) => {
+  const dir = await temporary(t);
+  await mkdir(join(dir, "skills", "testing-skills"), { recursive: true });
+  await writeFile(join(dir, "skills", "testing-skills", "SKILL.md"), skill("testing-skills", "MANAGED BODY"));
+  // Larger than the whole input budget; only its description may be sent.
+  const authored = join(dir, "writing-prose", "SKILL.md");
+  await mkdir(join(dir, "writing-prose"));
+  await writeFile(authored, `---\nname: writing-prose\ndescription: Edits prose.\n---\n${"AUTHORED BODY ".repeat(5000)}\n`);
+  const loaded = [{ name: "writing-prose", filePath: authored, description: "Edits prose." }];
+  const inventory = await inventorySkills(dir, loaded);
+  const text = inventoryInput(inventory, loaded);
+  assert.match(text, /MANAGED BODY/);
+  assert.doesNotMatch(text, /AUTHORED BODY/);
+  assert.ok(text.length < 1000);
+  const [managed, other] = JSON.parse(text);
+  assert.deepEqual(Object.keys(managed), ["name", "managed", "ref", "content"]);
+  assert.deepEqual(other, { name: "writing-prose", managed: false, ref: skillRef(inventory[1]), description: "Edits prose." });
+  // A note about an authored skill can still cite it.
+  const [note] = parseCandidates(JSON.stringify([{ action: "note", name: "writing-prose", reason: "Overlaps testing-skills", content: "", sources: [other.ref] }]), new Set(inventory.map(skillRef)), 1);
+  assert.deepEqual(note.sources, [other.ref]);
+});
 
 test("learning uses original branch evidence, excludes thinking, and checkpoints large entries only when complete", () => {
   const evidence = evidenceFromBranch([
