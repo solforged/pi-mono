@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isTransientError, loadTitlePrompt, MAX_TRANSIENT_FAILURES, parseTitle, registerAutoname } from "../extensions/workflows/autoname.ts";
-import { applyDraft, evidenceChunks, evidenceFromBranch, inventorySkills, parseCandidates, renderDraft, stageCandidate } from "../extensions/workflows/learning.ts";
+import { applyDraft, evidenceChunks, evidenceFromBranch, inventorySkills, parseCandidates, readDrafts, renderDraft, stageCandidate } from "../extensions/workflows/learning.ts";
 import { atomicWrite, hash, readSkill, withLock } from "../extensions/workflows/state.ts";
 import { childArgs, childExtensions, createWorktree } from "../extensions/workflows/subagents.ts";
 import { runProcess } from "../extensions/workflows/process.ts";
@@ -93,22 +93,39 @@ test("transient naming failures retry on the next message; permanent ones use th
 
 test("skill drafts stay inactive until the exact diff is approved; stale edits and symlinks fail closed", async (t) => {
   const dir = await temporary(t);
-  const candidate = parseCandidates(JSON.stringify([{ action: "create", name: "test-skill", reason: "Demonstrated procedure", content: skill(), sources: ["s:entry"] }]), new Set(["s:entry"]), 5)[0];
+  const candidate = parseCandidates(JSON.stringify([{ action: "create", name: "testing-skills", reason: "Demonstrated procedure", content: skill("testing-skills"), sources: ["s:entry"] }]), new Set(["s:entry"]), 5)[0];
   const draft = await stageCandidate(dir, candidate, []);
-  assert.equal(await readSkill(dir, "test-skill"), null);
+  assert.equal(await readSkill(dir, "testing-skills"), null);
   const queue = async (_file: string, fn: () => Promise<any>) => fn();
   await assert.rejects(applyDraft(dir, draft, "not-approved", queue), /Approval/);
   await applyDraft(dir, draft, hash(renderDraft(draft)), queue);
-  assert.equal(await readSkill(dir, "test-skill"), skill());
+  assert.equal(await readSkill(dir, "testing-skills"), skill("testing-skills"));
   const inventory = await inventorySkills(dir, []);
-  const update = await stageCandidate(dir, { ...candidate, action: "update", content: skill("test-skill", "New steps") }, inventory);
-  await atomicWrite(join(dir, "skills/test-skill/SKILL.md"), skill("test-skill", "User changes"));
+  const update = await stageCandidate(dir, { ...candidate, action: "update", content: skill("testing-skills", "New steps") }, inventory);
+  await atomicWrite(join(dir, "skills/testing-skills/SKILL.md"), skill("testing-skills", "User changes"));
   await assert.rejects(applyDraft(dir, update, hash(renderDraft(update)), queue), /changed since/);
   await assert.rejects(stageCandidate(dir, { ...candidate, action: "update", name: "authored" }, [{ name: "authored", path: "/authored", content: skill("authored"), managed: false }]), /owned skill/);
-  await symlink(join(dir, "skills/test-skill"), join(dir, "skills/escape"));
+  await symlink(join(dir, "skills/testing-skills"), join(dir, "skills/escape"));
   await assert.rejects(readSkill(dir, "escape"), /symlink/);
   assert.throws(() => parseCandidates(JSON.stringify([{ ...candidate, name: "../escape" }]), new Set(["s:entry"]), 5), /Skill names/);
 });
+
+test("new skills take gerund names; automation ideas never touch skill files", async (t) => {
+  const dir = await temporary(t);
+  const parse = (item: object) => parseCandidates(JSON.stringify([{ reason: "Seen three times", sources: ["s:entry"], ...item }]), new Set(["s:entry"]), 1);
+  assert.throws(() => parse({ action: "create", name: "pdf-processing", content: skill("pdf-processing") }), /gerund/);
+  assert.throws(() => parse({ action: "create", name: "prompting-claude", content: skill("prompting-claude") }), /reserved/);
+  assert.equal(parse({ action: "create", name: "processing-pdfs", content: skill("processing-pdfs") })[0].name, "processing-pdfs");
+  // Existing skills keep whatever name they already have.
+  assert.equal(parse({ action: "update", name: "pdf-processing", content: skill("pdf-processing") })[0].action, "update");
+  const [idea] = parse({ action: "automate", name: "release-script", content: "Add `mise run release` wrapping the tag and upload steps.\n" });
+  const draft = await stageCandidate(dir, idea, [], "autolearn");
+  assert.equal(draft.origin, "autolearn");
+  assert.match(renderDraft(draft), /Suggestion only: make these steps deterministic tooling/);
+  await assert.rejects(applyDraft(dir, draft, hash(renderDraft(draft)), async (_file, fn) => fn()), /not a pending skill change/);
+  assert.deepEqual((await readDrafts(dir)).map((d) => d.id), [draft.id]);
+});
+
 
 test("learning uses original branch evidence, excludes thinking, and checkpoints large entries only when complete", () => {
   const evidence = evidenceFromBranch([

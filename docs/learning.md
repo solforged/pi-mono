@@ -20,8 +20,36 @@ this sends selected evidence to the configured `learn` provider.
 Review is bounded to six chunks per invocation. Large entries have fragment
 checkpoints; rerunning continues unreviewed material. Fully read skill inventory
 must also fit the configured input budget; the command reports an error rather
-than silently omit skills when it does not. No model runs on exit or in the
-background to learn skills.
+than silently omit skills when it does not. Apart from autolearn, below, no
+model runs on exit or in the background to learn skills.
+
+## Autolearn
+
+`/autolearn on` lets the `learn` role propose from repetition, for this project
+only. It is off by default (`learning.auto.enabled`), adds no tools or prompt
+text, and stages drafts like the commands above.
+
+After each finished task (the work since the previous one ended), a local
+check with no model call reduces it to its distinctive steps. Read-only commands,
+edits, delegation, and basic Git are ignored, and so are steps found in over
+half the project's sessions. The review runs only when:
+
+- the same steps, at least one in order, recur in `minSessions` sessions (3)
+  and are not all named in the loaded project instructions;
+- the task ended cleanly and was not handled without errors by a skill;
+- the pattern was not already reviewed, or has since recurred in twice as many
+  sessions; no proposal is pending; and no other review is running.
+
+The review sees one run per session and is asked to prefer nothing, then
+`automate` (deterministic tooling such as a script or task), then a skill
+update, and only then a new skill. New skills are refused once `maxSkills`
+(12) managed skills exist. A proposal raises one notification. In
+`/learn-review`, an `automate` proposal can be handed to the agent to build
+instead of being published. Selected transcripts go to the `learn` provider
+without a command, so enable it only where that is acceptable.
+
+New skills from any learning path use gerund names, such as `processing-pdfs`,
+following Anthropic's [skill authoring guidance](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices).
 
 ## Approval and ownership
 

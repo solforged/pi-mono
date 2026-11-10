@@ -1,10 +1,9 @@
-import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { SessionManager, withFileMutationQueue, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { configSnapshot, type ConfigSource } from "./roles.ts";
 import { completeRole } from "./requests.ts";
 import { hash, privateDir, readJson, saveJson, scopeRoot, withLock } from "./state.ts";
-import { applyDraft, evidenceChunks, evidenceFromBranch, inventorySkills, LEARNING_SYSTEM, parseCandidates, renderDraft, stageCandidate, type Draft } from "./learning.ts";
+import { applyDraft, evidenceChunks, evidenceFromBranch, inventorySkills, LEARNING_SYSTEM, parseCandidates, readDrafts, renderDraft, stageCandidate } from "./learning.ts";
 import { cancellable, pickMany } from "./ui.ts";
 
 type Ledger = { sessions: Record<string, string[]>; curated: Record<string, string> };
@@ -82,7 +81,7 @@ export function registerLearning(pi: ExtensionAPI, source: ConfigSource, agentDi
       const dest = join(await scopeRoot(agentDir, profile, ctx.cwd), "skills");
       await privateDir(dest);
       const request = args.trim() || "(ask which flow to capture)";
-      pi.sendUserMessage(`Author a reusable skill from this request. Write it to ${dest}/<slug>/SKILL.md so this workflow can load and later curate it.\n\nRequest: ${request}\n\nA skill is a reusable multi-step procedure with a clear trigger, steps, verification, and pitfalls. Isolated durable facts belong in their owning wiki note, not a skill. Prefer updating an existing managed skill in that directory over a near-duplicate. Do not invent steps you have not seen or been told. No executable scripts.\n\nFrontmatter must be exactly:\n---\nname: the-slug\ndescription: "a JSON-quoted single-line description"\n---\nthen the procedure, ending with a newline. After writing, tell the user to /reload so the skill is discovered.`);
+      pi.sendUserMessage(`Author a reusable skill from this request. Write it to ${dest}/<slug>/SKILL.md so this workflow can load and later curate it.\n\nRequest: ${request}\n\nA skill is a reusable multi-step procedure with a clear trigger, steps, verification, and pitfalls. If the steps are mechanical, say so and offer a script or task instead before writing a skill. Name a new skill with a gerund, such as processing-pdfs, never containing anthropic or claude; write the description in the third person, saying what it does and when to use it. Isolated durable facts belong in their owning wiki note, not a skill. Prefer updating an existing managed skill in that directory over a near-duplicate. Do not invent steps you have not seen or been told. No executable scripts.\n\nFrontmatter must be exactly:\n---\nname: the-slug\ndescription: "a JSON-quoted single-line description"\n---\nthen the procedure, ending with a newline. After writing, tell the user to /reload so the skill is discovered.`);
     },
   });
   pi.registerCommand("learn-sessions", {
@@ -132,15 +131,9 @@ export function registerLearning(pi: ExtensionAPI, source: ConfigSource, agentDi
       const root = await scopeRoot(agentDir, profile, ctx.cwd);
       const draftsDir = join(root, "drafts");
       await privateDir(draftsDir);
-      const drafts: Draft[] = [];
-      for (const file of await readdir(draftsDir)) {
-        if (!/^[a-f0-9-]+\.json$/.test(file)) continue;
-        const draft = JSON.parse(await readFile(join(draftsDir, file), "utf8")) as Draft;
-        if (`${draft.id}.json` !== file) throw new Error("Draft ID/path mismatch");
-        if (draft.status === "pending") drafts.push(draft);
-      }
+      const drafts = (await readDrafts(root)).filter((draft) => draft.status === "pending");
       if (!drafts.length) { report(ctx, "No pending skill proposals"); return; }
-      const labels = drafts.map((d, i) => `${i + 1}. ${d.action} ${d.name}`);
+      const labels = drafts.map((d, i) => `${i + 1}. ${d.action} ${d.name}${d.origin ? ` (${d.origin})` : ""}`);
       const choice = await ctx.ui.select("Pending proposals", labels);
       if (!choice) return;
       const draft = drafts[labels.indexOf(choice)];
@@ -148,13 +141,18 @@ export function registerLearning(pi: ExtensionAPI, source: ConfigSource, agentDi
       const inspected = await ctx.ui.editor("Review proposal; submit unchanged to continue, Escape to keep pending", preview);
       if (inspected === undefined) return;
       if (inspected !== preview) { report(ctx, "Preview edits are not applied. Proposal remains pending; edit the draft file and review it again."); return; }
-      const action = await ctx.ui.select("Proposal decision", draft.action === "note" ? ["Keep pending", "Dismiss"] : ["Keep pending", "Approve exact change", "Dismiss"]);
+      const decisions = draft.action === "note" ? ["Keep pending", "Dismiss"]
+        : draft.action === "automate" ? ["Keep pending", "Ask the agent to build it", "Dismiss"]
+        : ["Keep pending", "Approve exact change", "Dismiss"];
+      const action = await ctx.ui.select("Proposal decision", decisions);
       lifetime.throwIfAborted();
       if (!action || action === "Keep pending") return;
-      if (action === "Dismiss") {
-        draft.status = "dismissed";
+      if (action === "Dismiss" || action === "Ask the agent to build it") {
+        draft.status = action === "Dismiss" ? "dismissed" : "applied";
         await saveJson(join(draftsDir, `${draft.id}.json`), draft);
-        report(ctx, `Dismissed ${draft.name}`); return;
+        if (action === "Dismiss") { report(ctx, `Dismissed ${draft.name}`); return; }
+        pi.sendUserMessage(`Build this deterministic tooling so the workflow no longer needs a skill. Follow the project's conventions, keep it small, and verify it before reporting back.\n\n${draft.reason}\n\n${draft.content}`);
+        return;
       }
       const digest = hash(preview);
       if (!await ctx.ui.confirm(`Apply ${draft.action}: ${draft.name}?`, `Only this exact diff (${digest.slice(0, 12)}) will be applied. Source: ${draft.id}`)) return;

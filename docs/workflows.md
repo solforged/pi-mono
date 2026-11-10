@@ -13,6 +13,7 @@
 | `/learn-sessions` | Pick sessions to mine; the current session starts checked. |
 | `/learn-review` | Inspect, approve, or dismiss a queued proposal. |
 | `/curate-skills` | Audit changed, workflow-managed skills. |
+| `/autolearn [on\|off]` | Show or toggle automatic learning for this project. |
 | `/workflows` | Show private state location and auxiliary usage. |
 | `/web-search [query\|check]` | Inspect search routing or run a query. |
 | `/snapcompact` | Show whether this model archives compacted history as images. |
@@ -75,6 +76,7 @@ State lives under `<agent-dir>/workflow-state/<profile>/<cwd-hash>/`:
 - `skills/`: approved skills, discovered only for this exact profile and working
   directory, including after `/reload`.
 - `reviewed.json`: reviewed entry/fragment IDs and curated skill hashes.
+- `autolearn.json`: the project toggle, indexed task steps, and reviewed patterns.
 - `runs/`: child instructions, metadata, and JSONL transcripts; text returned to
   the parent is capped, full results remain here (32 MiB per run maximum).
 - `worktrees/`: retained worker checkouts.

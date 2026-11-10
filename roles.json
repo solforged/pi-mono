@@ -159,5 +159,10 @@
     "sandbox": "inherit",
     "childExtensions": []
   },
-  "learning": { "maxInputChars": 48000, "maxChunks": 6, "maxCandidates": 5 }
+  "learning": {
+    "maxInputChars": 48000,
+    "maxChunks": 6,
+    "maxCandidates": 5,
+    "auto": { "enabled": false, "minSessions": 3, "maxSkills": 12 }
+  }
 }

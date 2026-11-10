@@ -2,11 +2,12 @@ import { realpath } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { loadTitlePrompt, registerAutoname } from "./autoname.ts";
 import { registerCommit } from "./commit.ts";
+import { registerAutolearn } from "./autolearn-ui.ts";
 import { registerLearning } from "./learning-ui.ts";
 import { addUsage, bounded, emptyUsage } from "./process.ts";
 import { resolveRole, roleNames } from "./roles.ts";
@@ -76,7 +77,7 @@ export default async function (pi: ExtensionAPI) {
       for (const entry of ctx.sessionManager.getEntries()) {
         if (entry.type === "custom" && entry.customType === "workflow-usage") addUsage(usage, (entry.data as any)?.usage);
       }
-      report(ctx, `State: ${await scopeRoot(agentDir, config.profile, ctx.cwd)}\nAuxiliary calls (titles/reviews/command subagents): ${usage.totalTokens} tokens; catalog cost $${usage.cost.total.toFixed(4)}. Tool subagent usage is included in pi's normal totals. Missing provider prices may report zero.\nCommands: /roles, /modelpreset, /autoname, /commit, /advisor, /subagent, /learn, /learn-sessions, /learn-review, /curate-skills`);
+      report(ctx, `State: ${await scopeRoot(agentDir, config.profile, ctx.cwd)}\nAuxiliary calls (titles/reviews/command subagents): ${usage.totalTokens} tokens; catalog cost $${usage.cost.total.toFixed(4)}. Tool subagent usage is included in pi's normal totals. Missing provider prices may report zero.\nCommands: /roles, /modelpreset, /autoname, /commit, /advisor, /subagent, /learn, /learn-sessions, /learn-review, /curate-skills, /autolearn`);
     },
   });
 
@@ -129,4 +130,5 @@ export default async function (pi: ExtensionAPI) {
   registerAutoname(pi, getConfig, titlePrompt, lifetime.signal);
   registerCommit(pi, getConfig, agentDir, lifetime.signal, report);
   registerLearning(pi, getConfig, agentDir, lifetime.signal, report);
+  registerAutolearn(pi, getConfig, agentDir, lifetime.signal, report, { list: (cwd) => SessionManager.list(cwd), open: (path) => SessionManager.open(path) });
 }

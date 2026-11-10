@@ -38,7 +38,11 @@ export interface Config {
     sandbox: "inherit" | "required";
     childExtensions: string[];
   };
-  learning: { maxInputChars: number; maxChunks: number; maxCandidates: number };
+  learning: {
+    maxInputChars: number; maxChunks: number; maxCandidates: number;
+    /** Automatic learning: off unless enabled here or per project with /autolearn. */
+    auto: { enabled: boolean; minSessions: number; maxSkills: number };
+  };
 }
 
 type ObjectValue = Record<string, any>;
@@ -116,6 +120,8 @@ export function resolveConfig(base: unknown, local: unknown, profile: string, so
     throw new Error("childExtensions must contain explicit absolute local paths");
   }
   const learning = { ...b.learning, ...l.learning, ...bp?.learning, ...lp?.learning };
+  const auto = { ...b.learning?.auto, ...l.learning?.auto, ...bp?.learning?.auto, ...lp?.learning?.auto };
+  if (typeof auto.enabled !== "boolean") throw new Error("Invalid learning.auto.enabled");
   if (typeof p.autoname !== "boolean") throw new Error("Invalid autoname setting");
   return {
     profile, sources, roles, autoname: p.autoname, preset: chosen, presets, main,
@@ -131,6 +137,11 @@ export function resolveConfig(base: unknown, local: unknown, profile: string, so
       maxInputChars: integer(learning.maxInputChars, 8000, 200000, "maxInputChars"),
       maxChunks: integer(learning.maxChunks, 1, 20, "maxChunks"),
       maxCandidates: integer(learning.maxCandidates, 1, 10, "maxCandidates"),
+      auto: {
+        enabled: auto.enabled,
+        minSessions: integer(auto.minSessions, 2, 20, "learning.auto.minSessions"),
+        maxSkills: integer(auto.maxSkills, 0, 200, "learning.auto.maxSkills"),
+      },
     },
   };
 }
