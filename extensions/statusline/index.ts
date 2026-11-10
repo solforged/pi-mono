@@ -87,6 +87,12 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
         const dim = (text: string) => theme.fg("dim", text);
         const segments: Segment[] = [];
         const model = ctx.model;
+        const extra = [...contributed].sort(([a], [b]) => a.localeCompare(b)).map(([, { text, color, priority, position }]) => {
+          let painted: string;
+          try { painted = theme.fg(color as any, text); } catch { painted = theme.fg("muted", text); }
+          return { position, segment: { priority, text: painted } };
+        });
+        for (const { position, segment } of extra) if (position === "start") segments.push(segment);
 
         segments.push({ priority: 7, text: theme.fg("text", `${icons.model} ${modelLabel(model?.name ?? model?.id ?? "no model")}`) });
 
@@ -128,11 +134,7 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
         const subscription = model ? usingSubscription(ctx, model) : false;
         if (cost > 0 || subscription) segments.push({ priority: 1, text: theme.fg("muted", formatCost(cost, subscription)) });
 
-        for (const [, { text, color, priority }] of [...contributed].sort(([a], [b]) => a.localeCompare(b))) {
-          let painted: string;
-          try { painted = theme.fg(color as any, text); } catch { painted = theme.fg("muted", text); }
-          segments.push({ priority, text: painted });
-        }
+        for (const { position, segment } of extra) if (position === "end") segments.push(segment);
 
         const left = fitSegments(segments, dim(" · "), width, measure);
         const statuses = rightStatuses(footerData.getExtensionStatuses(), contributed);

@@ -76,9 +76,11 @@ test("right-aligns statuses and names, moving the name and then statuses below",
 });
 
 test("reads segments other extensions contribute, and removals", () => {
-  assert.deepEqual(readContribution({ key: "x", text: " a\tb\n", color: "warning", priority: 4 }), { key: "x", contribution: { text: "a b", color: "warning", priority: 4 } });
-  assert.deepEqual(readContribution({ key: "x", text: "a" }), { key: "x", contribution: { text: "a", color: "muted", priority: 1 } });
-  assert.deepEqual(readContribution({ key: "x", text: "a", priority: Number.NaN }), { key: "x", contribution: { text: "a", color: "muted", priority: 1 } });
+  assert.deepEqual(readContribution({ key: "x", text: " a\tb\n", color: "warning", priority: 4 }), { key: "x", contribution: { text: "a b", color: "warning", priority: 4, position: "end" } });
+  assert.deepEqual(readContribution({ key: "x", text: "a" }), { key: "x", contribution: { text: "a", color: "muted", priority: 1, position: "end" } });
+  assert.deepEqual(readContribution({ key: "x", text: "a", priority: Number.NaN }), { key: "x", contribution: { text: "a", color: "muted", priority: 1, position: "end" } });
+  assert.equal(readContribution({ key: "x", text: "a", position: "start" })?.contribution?.position, "start");
+  assert.equal(readContribution({ key: "x", text: "a", position: "left" })?.contribution?.position, "end");
   assert.deepEqual([readContribution({ key: "x" }), readContribution({ key: "x", text: "  " })], [{ key: "x" }, { key: "x" }]);
   assert.deepEqual([undefined, null, "x", { text: "a" }, { key: "" }].map(readContribution), [undefined, undefined, undefined, undefined, undefined]);
 });

@@ -24,7 +24,8 @@ From left to right:
 - Session cost from every billed entry, as in Pi's footer. On a subscription,
   a crossed-out dollar replaces `$`: the amount is what API billing would have
   charged.
-- Segments other extensions contribute, ordered by key.
+- Segments other extensions contribute, ordered by key. The
+  [sandbox](sandbox.md) marker leads the line instead.
 
 An extension adds or replaces a segment with
 
@@ -34,7 +35,8 @@ pi.events.emit("statusline:segment", { key: "my-ext", text: "label", color: "war
 
 and removes it by emitting the same key with no text. `color` names a theme
 color (default `muted`); `priority` ranks the segment against the built-in ones
-when the line is too narrow (default 1, the same as cost). A segment replaces the
+when the line is too narrow (default 1, the same as cost); `position: "start"`
+puts it before the model instead of after the cost. A segment replaces the
 extension status (`ctx.ui.setStatus`) with the same key. An extension can
 therefore publish both, so its state still shows in Pi's built-in footer
 without appearing twice here.

@@ -105,13 +105,14 @@ export function sessionStats(entries: readonly any[]): Stats {
 export type Segment = { text: string; priority: number; compact?: string };
 
 // Another extension's segment, from
-//   pi.events.emit("statusline:segment", { key, text, color?, priority? })
+//   pi.events.emit("statusline:segment", { key, text, color?, priority?, position? })
 // color names a theme color (default "muted"); priority ranks it with the
-// built-in segments (default 1, the cost's). An empty text removes the key.
+// built-in segments (default 1, the cost's); position "start" puts it before
+// the model instead of after the cost. An empty text removes the key.
 // A segment replaces the extension status with the same key, so an extension
 // can publish both and Pi's built-in footer still shows the status.
 export const SEGMENT_EVENT = "statusline:segment";
-export type Contribution = { text: string; color: string; priority: number };
+export type Contribution = { text: string; color: string; priority: number; position: "start" | "end" };
 
 // Extension statuses for the right-hand side, sorted by key, without those a segment replaces.
 export function rightStatuses(statuses: ReadonlyMap<string, string>, contributed: ReadonlyMap<string, unknown>): string[] {
@@ -124,7 +125,7 @@ export function rightStatuses(statuses: ReadonlyMap<string, string>, contributed
 
 export function readContribution(data: unknown): { key: string; contribution?: Contribution } | undefined {
   if (typeof data !== "object" || data === null) return undefined;
-  const { key, text, color, priority } = data as Record<string, unknown>;
+  const { key, text, color, priority, position } = data as Record<string, unknown>;
   if (typeof key !== "string" || !key) return undefined;
   const clean = typeof text === "string" ? text.replace(/[\r\n\t]+/g, " ").trim() : "";
   if (!clean) return { key };
@@ -134,6 +135,7 @@ export function readContribution(data: unknown): { key: string; contribution?: C
       text: clean,
       color: typeof color === "string" && color ? color : "muted",
       priority: typeof priority === "number" && Number.isFinite(priority) ? priority : 1,
+      position: position === "start" ? "start" : "end",
     },
   };
 }
