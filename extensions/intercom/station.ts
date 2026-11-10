@@ -109,9 +109,14 @@ export function wrap(from: Card, text: string, queued = false) {
 }
 
 async function atomicWrite(file: string, text: string) {
-  const temp = `${file}.${process.pid}.tmp`;
-  await writeFile(temp, text, { mode: 0o600 });
-  await rename(temp, file);
+  const temp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    await writeFile(temp, text, { mode: 0o600 });
+    await rename(temp, file);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
 }
 
 /** A listening session: its socket server and card. */
@@ -119,6 +124,8 @@ export class Station {
   readonly dir: string;
   readonly card: Card;
   private server: Server;
+  private saving: Promise<void> = Promise.resolve();
+  private closed = false;
   private constructor(dir: string, card: Card, server: Server) { this.dir = dir; this.card = card; this.server = server; }
 
   static async open(dir: string, card: Card, handler: Handler): Promise<Station> {
@@ -143,10 +150,18 @@ export class Station {
     return station;
   }
 
-  save() { return atomicWrite(cardPath(this.dir, this.card.id), `${JSON.stringify(this.card, null, 2)}\n`); }
+  // One write at a time, each of the card as it is by then, so the file ends at the latest state.
+  save() {
+    this.saving = this.saving.catch(() => {}).then(async () => {
+      if (!this.closed) await atomicWrite(cardPath(this.dir, this.card.id), `${JSON.stringify(this.card, null, 2)}\n`);
+    });
+    return this.saving;
+  }
   update(patch: Partial<Card>) { Object.assign(this.card, patch); return this.save(); }
 
   async close() {
+    this.closed = true;
+    await this.saving.catch(() => {});
     await new Promise<void>(done => this.server.close(() => done()));
     await rm(sockPath(this.dir, this.card.id), { force: true });
     await rm(cardPath(this.dir, this.card.id), { force: true });

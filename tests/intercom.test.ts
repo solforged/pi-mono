@@ -114,3 +114,14 @@ test("installed Pi loads the extension and executes offline smoke checks", t => 
   assert.equal(check.status, 0, check.stderr || check.stdout);
   assert.match(check.stdout, /Intercom integration:.*passed/);
 });
+
+test("overlapping card updates end at the latest state and leave no temporary files", async t => {
+  const dir = await temp(t);
+  const station = await Station.open(dir, card("ffffff"), () => ({ ok: true }));
+  t.after(() => station.close());
+  for (let round = 0; round < 50; round++) {
+    await Promise.all([station.update({ busy: true, title: `round ${round}` }), station.update({ busy: false })]);
+    assert.deepEqual((await cards(dir)).map(c => [c.busy, c.title]), [[false, `round ${round}`]]);
+  }
+  assert.deepEqual((await readdir(dir)).filter(name => name.endsWith(".tmp")), []);
+});
