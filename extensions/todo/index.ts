@@ -1,15 +1,16 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { showPanel } from "./panel.ts";
 import {
-  apply, counts, empty, format, limits, open, ordered, reminder, restore, section, statuses, tally, withParentTodos,
+  apply, counts, empty, format, limits, open, reminder, restore, section, statuses, tally, withParentTodos,
   type Item, type List, type Operation, type Status,
 } from "./store.ts";
+import { resultRows, widgetLines } from "./view.ts";
 
-// Keep the declaration small: it is sent with every request. Notes and
-// clearing finished items are left to /todos.
+// Keep the declaration small: it is sent with every request. Clearing
+// finished items is left to /todos.
 const actions = ["list", "add", "update", "remove"] as const;
 type Details = List & { action: string; summary?: string };
 
@@ -20,17 +21,10 @@ export default function (pi: ExtensionAPI) {
 
   function refresh(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
-    const items = open(list);
-    if (!items.length) { ctx.ui.setWidget("todo", undefined); return; }
-    const { done } = counts(list.items);
+    if (!open(list).length) { ctx.ui.setWidget("todo", undefined); return; }
+    const shown = list;
     ctx.ui.setWidget("todo", (_tui, theme) => ({
-      render(width: number) {
-        const mark = (item: Item) => item.status === "in_progress" ? theme.fg("accent", "▸") : theme.fg("dim", "○");
-        const lines = [theme.fg("accent", "Todo") + theme.fg("muted", ` ${items.length} open, ${done} done`)];
-        for (const item of items.slice(0, limits.widget)) lines.push(` ${mark(item)} ${theme.fg("muted", `#${item.id}`)} ${item.text}`);
-        if (items.length > limits.widget) lines.push(theme.fg("dim", ` … ${items.length - limits.widget} more · /todos`));
-        return lines.map((line) => truncateToWidth(line, width));
-      },
+      render: (width: number) => widgetLines(shown, width, theme),
       invalidate() {},
     }));
   }
@@ -84,7 +78,7 @@ export default function (pi: ExtensionAPI) {
         return { action: "add", items: params.items };
       case "update":
         if (params.id === undefined) throw new Error('Provide "id" for update');
-        return { action: "update", id: params.id, change: { text: params.text, status: params.status } };
+        return { action: "update", id: params.id, change: { text: params.text, status: params.status, note: params.note } };
       case "remove":
         if (params.id === undefined) throw new Error('Provide "id" for remove');
         return { action: "remove", id: params.id };
@@ -95,13 +89,14 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "todo",
     label: "Todo",
-    description: "Session todo list. add: items; update: id, status/text; remove: id.",
+    description: "Session todo list. add: items; update: id, status/text/note; remove: id.",
     parameters: Type.Object({
       action: StringEnum(actions),
       items: Type.Optional(Type.Array(Type.String())),
       id: Type.Optional(Type.Integer()),
       status: Type.Optional(StringEnum(statuses)),
       text: Type.Optional(Type.String()),
+      note: Type.Optional(Type.String()),
     }),
     executionMode: "sequential",
     async execute(_id, params, _signal, _onUpdate, ctx) {
@@ -127,20 +122,15 @@ export default function (pi: ExtensionAPI) {
         const text = first?.type === "text" ? first.text : "";
         return new Text(context.isError ? theme.fg("error", text) : text, 0, 0);
       }
-      const lines = [theme.fg(details.summary ? "success" : "muted", details.summary ?? tally(details))];
-      const items = ordered(details.items);
-      const shown = expanded ? items : items.filter((item) => item.status !== "done").slice(0, 5);
-      for (const item of shown) {
-        const mark = item.status === "done" ? theme.fg("success", "✓") : item.status === "in_progress" ? theme.fg("accent", "▸") : theme.fg("dim", "○");
-        lines.push(`${mark} ${theme.fg("accent", `#${item.id}`)} ${item.status === "done" ? theme.fg("dim", item.text) : theme.fg("muted", item.text)}`);
-      }
-      if (shown.length < items.length) lines.push(theme.fg("dim", `… ${items.length - shown.length} more (${context.keyHint("app.tools.expand", "to expand")})`));
+      const rows = resultRows(details, expanded, theme);
+      const lines = [theme.fg(details.summary ? "success" : "muted", details.summary ?? tally(details)), ...rows.lines];
+      if (rows.hidden) lines.push(theme.fg("dim", `… ${rows.hidden} more (${context.keyHint("app.tools.expand", "to expand")})`));
       return new Text(lines.join("\n"), 0, 0);
     },
   });
 
   const subcommands: Record<string, Status> = { start: "in_progress", done: "done", reopen: "pending" };
-  const usage = "Usage: /todos [list|add <text>|start <id>|done <id>|reopen <id>|rm <id>|clear]";
+  const usage = "Usage: /todos [list|add <text>|start <id>|block <id> [reason]|done <id>|reopen <id>|rm <id>|clear]";
   const id = (value: string) => {
     if (!/^#?\d+$/.test(value)) throw new Error(usage);
     return Number(value.replace("#", ""));
@@ -166,19 +156,25 @@ export default function (pi: ExtensionAPI) {
         selected = action.id;
         const item = list.items.find((entry) => entry.id === action.id)!;
         const update = (next: Item["status"]) => change(ctx, { action: "update", id: item.id, change: { status: next } });
+        const editNote = async () => {
+          const note = await ctx.ui.editor(`Note for #${item.id} (empty removes it)`, item.note ?? "");
+          if (note !== undefined) change(ctx, { action: "update", id: item.id, change: { note } });
+        };
         if (action.kind === "toggle") { update(item.status === "done" ? "pending" : "done"); continue; }
+        if (action.kind === "note") { await editNote(); continue; }
         const choices: Record<string, () => Promise<unknown> | unknown> = {};
         if (item.status !== "in_progress") choices["Start"] = () => update("in_progress");
         if (item.status !== "done") choices["Mark done"] = () => update("done");
+        if (item.status !== "blocked") choices["Mark blocked…"] = async () => {
+          const reason = await ctx.ui.input(`What is #${item.id} waiting on?`, "Optional reason");
+          if (reason !== undefined) change(ctx, { action: "update", id: item.id, change: { status: "blocked", ...(reason.trim() ? { note: reason } : {}) } });
+        };
         if (item.status !== "pending") choices["Mark pending"] = () => update("pending");
         choices["Edit text"] = async () => {
           const text = await ctx.ui.editor(`Edit #${item.id}`, item.text);
           if (text?.trim()) change(ctx, { action: "update", id: item.id, change: { text } });
         };
-        choices["Edit note"] = async () => {
-          const note = await ctx.ui.editor(`Note for #${item.id} (empty removes it)`, item.note ?? "");
-          if (note !== undefined) change(ctx, { action: "update", id: item.id, change: { note } });
-        };
+        choices["Edit note"] = editNote;
         choices["Remove"] = async () => {
           if (await ctx.ui.confirm(`Remove #${item.id}?`, item.text)) change(ctx, { action: "remove", id: item.id });
         };
@@ -191,7 +187,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("todos", {
     description: "Show or edit this session's todo list",
     getArgumentCompletions: (prefix) => {
-      const items = ["list", "add", "start", "done", "reopen", "rm", "clear"].filter((name) => name.startsWith(prefix)).map((name) => ({ value: name, label: name }));
+      const items = ["list", "add", "start", "block", "done", "reopen", "rm", "clear"].filter((name) => name.startsWith(prefix)).map((name) => ({ value: name, label: name }));
       return items.length ? items : null;
     },
     handler: async (args, ctx) => {
@@ -202,6 +198,10 @@ export default function (pi: ExtensionAPI) {
       let op: Operation;
       if (verb === "add" && value) op = { action: "add", items: [value] };
       else if (Object.hasOwn(subcommands, verb) && rest.length === 1) op = { action: "update", id: id(value), change: { status: subcommands[verb] } };
+      else if (verb === "block" && rest.length >= 1) {
+        const reason = rest.slice(1).join(" ");
+        op = { action: "update", id: id(rest[0]), change: { status: "blocked", ...(reason ? { note: reason } : {}) } };
+      }
       else if (verb === "rm" && rest.length === 1) op = { action: "remove", id: id(value) };
       else if (verb === "clear" && !value) op = { action: "clear_done" };
       else throw new Error(usage);

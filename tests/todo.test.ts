@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import test from "node:test";
-import { apply, empty, format, reminder, restore, section, valid, withParentTodos, type List } from "../extensions/todo/store.ts";
+import { apply, empty, format, ordered, reminder, restore, section, upNext, valid, withParentTodos, type List } from "../extensions/todo/store.ts";
 import { root } from "./helpers.ts";
 
 const result = (list: List, isError = false) => ({ type: "message", message: { role: "toolResult", toolName: "todo", isError, details: { action: "add", ...list } } });
@@ -25,9 +25,22 @@ test("operations update items, never reuse IDs, and validate input", () => {
   assert.throws(() => apply(list, { action: "add", items: [" "] }), /must not be empty/);
   assert.throws(() => apply(list, { action: "add", items: [] }), /at least one/);
   assert.throws(() => apply(list, { action: "update", id: 9, change: { status: "done" } }), /#9 not found/);
-  assert.throws(() => apply(list, { action: "update", id: 3, change: {} }), /Provide text or status/);
+  assert.throws(() => apply(list, { action: "update", id: 3, change: {} }), /Provide text, status or note/);
   assert.throws(() => apply(list, { action: "update", id: 3, change: { status: "later" as any } }), /status must be one of/);
   assert.throws(() => apply(list, { action: "add", items: Array(200).fill("x") }), /at most 200/);
+});
+
+test("blocked items sort after started ones and the glance follows the current item", () => {
+  let list = build(["a", "b", "c", "d", "e", "f"]);
+  const set = (id: number, status: any, note?: string) => { list = apply(list, { action: "update", id, change: { status, note } }).list; };
+  set(4, "in_progress"); set(2, "blocked", "waiting on the API"); set(6, "done");
+  assert.deepEqual(ordered(list.items).map((item) => item.id), [4, 2, 1, 3, 5, 6]);
+  assert.equal(format(list).split("\n")[2], "#2 [blocked] b (note: waiting on the API)");
+  // Started and blocked lead; then the pending items after #4, wrapping to earlier ones.
+  assert.deepEqual(upNext(list, 4).items.map((item) => item.id), [4, 2, 5, 1]);
+  assert.equal(upNext(list, 4).hidden, 1);
+  assert.deepEqual(upNext(build(["x", "y"]), 3).items.map((item) => item.id), [1, 2]);
+  assert.deepEqual(upNext(empty()), { items: [], hidden: 0 });
 });
 
 test("state is restored from the latest valid snapshot on the branch", () => {

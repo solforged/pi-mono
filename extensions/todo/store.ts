@@ -1,13 +1,13 @@
 // Pure list logic. State lives in the session: todo tool-result details and
 // "todo" custom entries on the active branch, so it follows /tree and forks.
 
-export const statuses = ["pending", "in_progress", "done"] as const;
+export const statuses = ["pending", "in_progress", "blocked", "done"] as const;
 export type Status = (typeof statuses)[number];
 export interface Item { id: number; text: string; status: Status; note?: string }
 export interface List { nextId: number; items: Item[] }
 export interface Change { text?: string; status?: Status; note?: string }
 
-export const limits = { items: 200, text: 500, note: 2000, reminders: 3, widget: 5, context: 16000 };
+export const limits = { items: 200, text: 500, note: 2000, reminders: 3, widget: 3, context: 16000 };
 
 export function empty(): List { return { nextId: 1, items: [] }; }
 
@@ -78,7 +78,7 @@ export function apply(current: List, op: Operation): { list: List; summary: stri
     case "update": {
       const item = find(list, op.id);
       const { text, status: next, note } = op.change;
-      if (text === undefined && next === undefined && note === undefined) throw new Error("Provide text or status to update");
+      if (text === undefined && next === undefined && note === undefined) throw new Error("Provide text, status or note to update");
       if (text !== undefined) item.text = clean(text, "text", limits.text);
       if (next !== undefined) item.status = status(next);
       if (note !== undefined) {
@@ -100,11 +100,22 @@ export function apply(current: List, op: Operation): { list: List; summary: stri
   }
 }
 
-const rank: Record<Status, number> = { in_progress: 0, pending: 1, done: 2 };
+const rank: Record<Status, number> = { in_progress: 0, blocked: 1, pending: 2, done: 3 };
 export function ordered(items: Item[]): Item[] {
   return [...items].sort((a, b) => rank[a.status] - rank[b.status] || a.id - b.id);
 }
 export const open = (list: List) => ordered(list.items).filter((item) => item.status !== "done");
+
+// A glance at the open work: started and blocked items lead, then the pending
+// items that follow the first started one, wrapping to earlier ones.
+export function upNext(list: List, cap: number = limits.widget): { items: Item[]; hidden: number } {
+  const items = open(list);
+  const active = items.filter((item) => item.status !== "pending");
+  const from = active.find((item) => item.status === "in_progress")?.id ?? 0;
+  const pending = items.filter((item) => item.status === "pending");
+  const shown = [...active, ...pending.filter((item) => item.id > from), ...pending.filter((item) => item.id <= from)].slice(0, cap);
+  return { items: shown, hidden: items.length - shown.length };
+}
 export function counts(items: Item[]) {
   const done = items.filter((item) => item.status === "done").length;
   return { open: items.length - done, done, active: items.filter((item) => item.status === "in_progress").length };

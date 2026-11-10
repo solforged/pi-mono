@@ -2,9 +2,11 @@
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import install from "../../extensions/todo/index.ts";
-import { restore } from "../../extensions/todo/store.ts";
+import { apply, empty, restore } from "../../extensions/todo/store.ts";
+import { panelLines, widgetLines } from "../../extensions/todo/view.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
-const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+const theme = { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => `\x1b[44m${text}\x1b[49m`, bold: (text: string) => text, strikethrough: (text: string) => `~${text}~` };
 const render = (component: any) => component.render(200).map((line: string) => line.trimEnd()).join("\n");
 
 export default function (pi: ExtensionAPI) {
@@ -34,7 +36,7 @@ export default function (pi: ExtensionAPI) {
         assert.ok(pi.getAllTools().some(t => t.name === "todo"));
         // Every request carries the declaration; keep it small.
         const size = JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }).length;
-        assert.ok(size <= 420, `todo declaration grew to ${size} characters`);
+        assert.ok(size <= 450, `todo declaration grew to ${size} characters`);
         assert.equal(tool.promptSnippet ?? tool.promptGuidelines, undefined);
 
         // A new session starts empty; results report the change, not the whole list.
@@ -43,7 +45,7 @@ export default function (pi: ExtensionAPI) {
         assert.equal(result.content[0].text, "Added #1, #2. 2 open, 0 done.");
         result = await run({ action: "update", id: 1, status: "in_progress" });
         assert.equal(result.content[0].text, "Updated #1 (in progress). 2 open, 0 done.");
-        assert.match(render(tool.renderResult(result, { expanded: false }, theme, { keyHint: () => "", isError: false })), /Updated #1 \(in progress\)\n▸ #1 write tests\n○ #2 ship/);
+        assert.match(render(tool.renderResult(result, { expanded: false }, theme, { keyHint: () => "", isError: false })), /Updated #1 \(in progress\)\n▸ write tests #1\n○ ship #2/);
         assert.equal(render(tool.renderCall({ action: "update", id: 1, status: "done" }, theme)), "todo update #1 → done");
         await assert.rejects(tool.execute("x", { action: "remove" }, undefined, undefined, fake), /Provide "id"/);
         const branchPoint = entries.length;
@@ -103,12 +105,43 @@ export default function (pi: ExtensionAPI) {
         assert.equal(entries.at(-1).customType, "todo");
         assert.deepEqual(restore(entries).items.map((item: any) => item.id), [1, 2, 3]);
 
+        // The panel frames a status-grouped list, highlights the selection with its
+        // note, always shows a blocked item's reason, and strikes finished items.
+        let sample = apply(empty(), { action: "add", items: ["wire panel", "write tests", "update docs", "ship", "extract store"] }).list;
+        sample = apply(sample, { action: "update", id: 1, change: { status: "in_progress", note: "keep render pure" } }).list;
+        sample = apply(sample, { action: "update", id: 3, change: { status: "blocked", note: "needs the resize fix" } }).list;
+        sample = apply(sample, { action: "update", id: 5, change: { status: "done" } }).list;
+        const panel = panelLines(sample, 0, 64, 30, theme);
+        assert.match(panel[0], /^╭─ Session todos ─+ 1 of 5 done ─╮$/);
+        assert.match(panel[1], /^│ ━+ │$/);
+        const bottom = panel.findIndex((line) => line.startsWith("╰"));
+        assert.ok(panel.slice(0, bottom + 1).every((line) => visibleWidth(line) === 64), panel.join("\n"));
+        const text = panel.join("\n");
+        assert.match(text, /IN PROGRESS[^]*\x1b\[44m▌▸ wire panel +#1 \x1b\[49m[^]*\x1b\[44m▌  ↳ keep render pure +\x1b\[49m/);
+        assert.match(text, /BLOCKED[^]*⊘ update docs +#3[^]*  ↳ needs the resize fix/);
+        assert.match(text, /PENDING[^]*○ write tests +#2[^]*○ ship +#4[^]*DONE · 1[^]*✓ ~extract store~ +#5/);
+        // Key hints wrap by whole hints when the panel is narrow.
+        assert.deepEqual(panel.slice(bottom + 1), [" ↑↓ move · space done · ⏎ actions · a add · n note", " c clear done · esc close"]);
+        assert.equal(panelLines(sample, 0, 100, 30, theme).at(-1), " ↑↓ move · space done · ⏎ actions · a add · n note · c clear done · esc close");
+        // Scrolled panels report the position; narrow ones drop the frame.
+        assert.ok(panelLines(sample, 4, 64, 6, theme).some((line) => /^╰─ 5 of 5 ─+╯$/.test(line)));
+        assert.ok(!panelLines(sample, 0, 40, 30, theme).some((line) => line.includes("╭")));
+        assert.match(panelLines(empty(), 0, 64, 30, theme).join("\n"), /The list is empty/);
+
+        // The widget puts progress beside the work in view, falling back to stacked lines.
+        const wide = widgetLines(sample, 100, theme);
+        assert.equal(wide.length, 3);
+        assert.match(wide[0], /^Todo ━{10} 1\/5   ▸ wire panel #1$/);
+        assert.match(wide[1], /^ +⊘ update docs · needs the resize fix #3$/);
+        assert.match(wide[2], /^ +○ write tests #2   \+1 more · \/todos$/);
+        assert.match(widgetLines(sample, 40, theme).join("\n"), /^Todo ━+ 1\/5\n ▸ wire panel #1\n ⊘ update docs/);
+
         // Navigating to an earlier point restores that branch's list.
         const later = entries.splice(branchPoint);
         await events.session_tree({}, fake);
         assert.equal((await run({ action: "list" })).content[0].text, "2 open, 0 done\n#1 [in_progress] write tests\n#2 [pending] ship");
         entries.push(...later);
-        console.log("Todo integration: bundled imports, registration, branch restore, rendering, prompt section, reminders, child context and commands passed");
+        console.log("Todo integration: bundled imports, registration, branch restore, panel and widget rendering, prompt section, reminders, child context and commands passed");
       } finally { console.log = log; }
     },
   });
