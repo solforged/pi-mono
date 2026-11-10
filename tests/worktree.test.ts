@@ -145,6 +145,15 @@ test("landing fast-forwards or rebases, and refuses unsafe cases without changin
   sh(made.path, "update-ref", "refs/remotes/origin/pi/land", "HEAD");
   await assert.rejects(land(await at()), /has an upstream/);
   sh(made.path, "branch", "--unset-upstream");
+
+  // A rebase that fails without conflicts reports Git's error, not conflicts.
+  sh(main, "config", "commit.gpgsign", "true"); sh(main, "config", "gpg.program", "false");
+  const [pending, mainPending] = [sh(made.path, "rev-parse", "HEAD"), sh(main, "rev-parse", "HEAD")];
+  await assert.rejects(land(await at()), (error: Error) => /onto main failed: .*gpg/s.test(error.message) && !/conflicts/.test(error.message));
+  assert.deepEqual([sh(made.path, "rev-parse", "HEAD"), sh(main, "rev-parse", "HEAD")], [pending, mainPending]);
+  assert.equal(sh(made.path, "status", "--porcelain"), "");
+  sh(main, "config", "--unset", "commit.gpgsign"); sh(main, "config", "--unset", "gpg.program");
+
   assert.deepEqual(await land(await at()), { target: "main", commits: 1, rebased: true });
   assert.equal(sh(main, "log", "--merges", "--format=%H"), "");
   assert.deepEqual((await worktrees(main)).map((tree) => [tree.path, tree.branch]), [[main, "main"], [made.path, "pi/land"]]);

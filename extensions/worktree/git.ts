@@ -126,7 +126,8 @@ export interface Landed { target: string; commits: number; rebased: boolean }
 /**
  * Lands a clean worktree's branch on the main checkout's branch without a merge
  * commit: rebases it when the target has moved on, then fast-forwards the target.
- * A conflicting rebase is aborted, leaving both branches as they were.
+ * A failed rebase is aborted, leaving both branches as they were; only real
+ * conflicts are reported as such, other failures pass Git's error through.
  */
 export async function land(checkout: Checkout, run = git): Promise<Landed> {
   const { top, main, branch } = checkout;
@@ -140,9 +141,11 @@ export async function land(checkout: Checkout, run = git): Promise<Landed> {
   if (behind) {
     if (await hasUpstream(branch, top, run)) throw new Error(`${branch} has an upstream and ${target} has moved on; rebase it yourself, then land`);
     try { await run(["rebase", target], top); }
-    catch {
+    catch (error) {
+      const conflicted = await run(["diff", "--name-only", "--diff-filter=U"], top).catch(() => "");
       await run(["rebase", "--abort"], top).catch(() => undefined);
-      throw new Error(`Rebasing ${branch} onto ${target} conflicts. Run git rebase ${target} in ${top}, resolve it, then land again`);
+      if (conflicted) throw new Error(`Rebasing ${branch} onto ${target} conflicts. Run git rebase ${target} in ${top}, resolve it, then land again`);
+      throw new Error(`Rebasing ${branch} onto ${target} failed: ${(error as Error).message}`);
     }
   }
   await run(["merge", "--ff-only", branch], main);
