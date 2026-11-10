@@ -75,8 +75,11 @@ when they all fit. A file you come back to keeps its scroll position.
 
 ## How it works
 
-`/diff` runs `rex split` next to `$REX_BLOCK` and starts `viewer.ts` with the
-`node` found on `PATH` (22.18 or later). The viewer is a standalone terminal
+`/diff` splits `$REX_BLOCK` with Rex's `session.new_split` and starts
+`viewer.ts` with the `node` found on `PATH` (22.18 or later). The new terminal
+starts at the size it will end up with, and the border is then moved to give it
+a third, because Rex ignores the split's ratio. The viewer redraws only once
+resizes settle. The viewer is a standalone terminal
 program with no Pi imports. It takes its colors from the Pi theme and asks the
 terminal for its background, so the added and removed tints blend in.
 
