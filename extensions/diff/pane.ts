@@ -323,12 +323,15 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
     void arm(ctx, event.reason);
   });
 
-  // On quit, remember whether this Pi's pane is still open. The viewer outlives
-  // Pi by up to a second, so it is still running here.
+  // On quit, remember whether this Pi's pane is still open, then tell the
+  // viewer to close now rather than wait for its poll to notice Pi has gone.
   pi.on("session_shutdown", (event) => {
-    if (event.reason !== "quit" || !opened) return;
-    if (viewerPid(dir, pid) !== undefined) writePane(panes, opened, pid);
-    else if (readPanes(panes)[opened]?.pid === pid) writePane(panes, opened, undefined);
+    if (event.reason !== "quit") return;
+    if (opened) {
+      if (viewerPid(dir, pid) !== undefined) writePane(panes, opened, pid);
+      else if (readPanes(panes)[opened]?.pid === pid) writePane(panes, opened, undefined);
+    }
+    tick(dir, pid, { event: "quit" });
   });
 
   pi.on("tool_execution_start", (event, ctx) => {

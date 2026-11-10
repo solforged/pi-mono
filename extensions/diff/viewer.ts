@@ -201,6 +201,7 @@ function moveTo(next: string) {
 function onTick() {
   let message: { event?: string; path?: string; root?: string } = {};
   try { message = JSON.parse(readFileSync(join(ipc, tickName), "utf8")); } catch {}
+  if (message.event === "quit") { quit(); return; }
   if (message.event === "root" && message.root) moveTo(message.root);
   if (message.event === "agent_start") { view.follow = true; draw(); }
   const path = message.path ? relativePath(message.path) : undefined;
@@ -397,9 +398,10 @@ draw(true);
 let tree = watchTree();
 watch(ipc, (_event, name) => { if (String(name) === tickName) onTick(); });
 setInterval(() => void refresh(), tree ? 10_000 : 3_000).unref();
+// Pi says when it quits; this catches a Pi that crashed or was killed.
 setInterval(() => {
   try { process.kill(piPid, 0); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") quit(); }
-}, 1_000);
+}, 250);
 lastEdited = values.focus ? relativePath(values.focus) : undefined;
 void refresh(lastEdited);

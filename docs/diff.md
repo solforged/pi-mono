@@ -97,6 +97,8 @@ languages it does not include, lines are uncolored.
 
 The viewer watches the repository and refreshes every 10 seconds as a fallback.
 The extension sends edit hints through a private directory,
-`$TMPDIR/pi-diff-<uid>/`, keyed by Pi's process ID.
+`$TMPDIR/pi-diff-<uid>/`, keyed by Pi's process ID. When Pi quits it tells the
+viewer to close straight away; the viewer also checks every 250 ms that Pi is
+still running, to close after a crash or a kill.
 
 Outside Rex, `/diff` reports that it needs a Rex pane and does nothing else.

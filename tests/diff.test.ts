@@ -586,6 +586,8 @@ test("reopens the pane Pi quit with when changes remain", async (t) => {
       t.after(() => viewer.kill());
       await writeFile(join(dir, `${pid}.viewer`), String(viewer.pid));
       h.handlers.get("session_shutdown")!({ reason: "quit" });
+      // The viewer is told to close at once instead of polling for Pi's exit.
+      assert.equal(JSON.parse(await readFile(join(dir, `${pid}.tick`), "utf8")).event, "quit");
       viewer.kill();
       await new Promise((resolve) => viewer.on("exit", resolve));
     } else h.handlers.get("session_shutdown")!({ reason: "quit" });
