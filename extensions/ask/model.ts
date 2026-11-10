@@ -7,10 +7,16 @@ export const MAX_QUESTIONS = 4, MIN_OPTIONS = 2, MAX_OPTIONS = 4;
 
 export interface Option { label: string; description?: string; preview?: string }
 export interface Question { question: string; header?: string; options: Option[]; recommended?: number; multi?: boolean }
-/** Picked options, an optional note on them, and optional typed text (which replaces a single choice). */
-export interface Answer { picked: number[]; note?: string; custom?: string }
+/** Picked options, notes keyed by option index, and optional typed text (which replaces a single choice). */
+export interface Answer { picked: number[]; notes?: Record<number, string>; custom?: string }
 export type Outcome = "answered" | "discuss" | "handback" | "interrupted" | "unavailable" | "invalid";
-export interface Item { question: string; header?: string; answer?: string }
+/** A note as displayed: the option it is on and whether that option was chosen. */
+export interface Note { option: string; text: string; chosen: boolean }
+/**
+ * `answer` is what was submitted; `draft` is what was entered before the user
+ * left the dialog without submitting. The other fields only drive rendering.
+ */
+export interface Item { question: string; header?: string; answer?: string; draft?: string; chosen?: string[]; custom?: string; notes?: Note[] }
 export interface Details { outcome: Outcome; items: Item[] }
 
 const RECOMMENDED = /\s*\(recommended\)\s*$/i;
@@ -74,13 +80,26 @@ export class Form {
   tab = 0;
   review = 0;
   readonly cursor: number[];
+  /** Picks and typed text per question. Notes live apart, on their options, so changing a pick never loses one. */
   readonly answers: (Answer | undefined)[];
+  readonly notes: Record<number, string>[];
+  /** Own-answer text left with Esc, restored when the row is reopened. */
+  readonly drafts: string[];
   readonly questions: Question[];
   constructor(questions: Question[]) {
     this.questions = questions;
     this.cursor = questions.map(q => q.recommended ?? 0);
     this.answers = questions.map(() => undefined);
+    this.notes = questions.map(() => ({}));
+    this.drafts = questions.map(() => "");
   }
+  /** Picks, typed text and notes for question `i`, as sent to the agent. */
+  answer(i: number): Answer | undefined {
+    const base = this.answers[i], notes = this.notes[i]!;
+    if (!base && !Object.keys(notes).length) return;
+    return { picked: base?.picked ?? [], ...(Object.keys(notes).length ? { notes: { ...notes } } : {}), ...(base?.custom ? { custom: base.custom } : {}) };
+  }
+  get result() { return this.questions.map((_, i) => this.answer(i)); }
   get tabs() { return this.questions.length > 1 ? this.questions.length + 1 : 1; }
   get reviewing() { return this.tab === this.questions.length; }
   get question(): Question | undefined { return this.questions[this.tab]; }
@@ -102,7 +121,7 @@ export class Form {
     if (this.reviewing) return this.review === 0 ? "submit" : "discuss";
     const q = this.question!, row = this.cursor[this.tab]!;
     if (row === this.ownRow) return "edit";
-    if (!q.multi) this.set(this.single(row));
+    if (!q.multi) this.set({ picked: [row] });
     else if (!this.answers[this.tab]) this.set({ picked: [row] });
     return this.advance();
   }
@@ -111,24 +130,21 @@ export class Form {
     if (this.reviewing || this.cursor[this.tab]! >= this.ownRow) return;
     return "note";
   }
-  /** The note being edited on this tab, if any. */
-  get noteText() { return this.answers[this.tab]?.note ?? ""; }
+  /** The note on the focused option, if any. */
+  get noteText() { return this.notes[this.tab]?.[this.cursor[this.tab]!] ?? ""; }
   /**
-   * Picks the focused option with a note on the answer. Single-select moves on;
-   * multi-select stays so more options can be toggled. Blank text removes the note.
+   * Saves the note on the focused option; blank text removes it. With `choose`,
+   * also picks the option: single-select moves on, multi-select checks it and
+   * stays. Without it (Esc), picks are left as they are.
    */
-  note(text: string): Step {
+  note(text: string, choose = true): Step {
     const q = this.question!, row = this.cursor[this.tab]!, value = text.trim();
+    if (value) this.notes[this.tab]![row] = value;
+    else delete this.notes[this.tab]![row];
+    if (!choose) return;
+    if (!q.multi) { this.set({ picked: [row] }); return this.advance(); }
     const previous = this.answers[this.tab];
-    const base = q.multi ? { ...previous, picked: [...new Set([...(previous?.picked ?? []), row])].sort((a, b) => a - b) } : { picked: [row] };
-    const { note: _old, ...rest } = base as Answer;
-    this.set({ ...rest, ...(value ? { note: value } : {}) });
-    return q.multi ? undefined : this.advance();
-  }
-  /** A single choice keeps its note only when the same option is chosen again. */
-  private single(row: number): Answer {
-    const previous = this.answers[this.tab];
-    return previous?.note && !previous.custom && previous.picked[0] === row ? { picked: [row], note: previous.note } : { picked: [row] };
+    this.set({ ...previous, picked: [...new Set([...(previous?.picked ?? []), row])].sort((a, b) => a - b) });
   }
   /** 1-based shortcut: single-select chooses, multi-select toggles. */
   number(n: number): Step {
@@ -142,7 +158,8 @@ export class Form {
   custom(text: string): Step {
     const multi = this.question!.multi, previous = this.answers[this.tab], value = text.trim();
     const picked = multi ? previous?.picked ?? [] : [];
-    this.set({ picked, ...(multi && previous?.note ? { note: previous.note } : {}), ...(value ? { custom: value } : {}) });
+    this.drafts[this.tab] = "";
+    this.set({ picked, ...(value ? { custom: value } : {}) });
     return this.advance();
   }
   private set(answer: Answer) { this.answers[this.tab] = answer.picked.length || answer.custom ? answer : undefined; }
@@ -156,27 +173,46 @@ export class Form {
 
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 
+/** Notes in option order, marked chosen or not. */
+export function notesOf(q: Question, a: Answer | undefined): Note[] {
+  return Object.entries(a?.notes ?? {}).map(([i, text]) => ({ i: Number(i), text })).filter(n => q.options[n.i]).sort((x, y) => x.i - y.i)
+    .map(n => ({ option: q.options[n.i]!.label, text: n.text, chosen: !!a?.picked.includes(n.i) }));
+}
+
+/** Model-facing answer: each chosen option carries its note; notes on options not chosen follow. */
 export function answerText(q: Question, a: Answer | undefined): string | undefined {
   if (!a) return;
-  const parts = [a.picked.map(i => q.options[i]?.label).filter(Boolean).join(", ")].filter(Boolean);
-  if (a.note) parts.push(`note: "${a.note}"`);
-  if (a.custom) parts.push(`own answer: "${a.custom}"`);
+  const quote = (text: string) => `"${text}"`;
+  const chosen = a.picked.filter(i => q.options[i]).map(i => `${q.options[i]!.label}${a.notes?.[i] ? ` (note: ${quote(a.notes[i]!)})` : ""}`);
+  const parts = [chosen.join(", ")].filter(Boolean);
+  if (a.custom) parts.push(`own answer: ${quote(a.custom)}`);
+  for (const note of notesOf(q, a).filter(n => !n.chosen)) parts.push(`note on ${note.option}, not chosen: ${quote(note.text)}`);
   return parts.join("; ") || undefined;
 }
 
-export function items(questions: Question[], answers: (Answer | undefined)[]): Item[] {
-  return questions.map((q, i) => ({ question: q.question, ...(q.header ? { header: q.header } : {}), ...(answerText(q, answers[i]) ? { answer: answerText(q, answers[i]) } : {}) }));
+/** Result items. Unsent answers (the user left the dialog) become drafts, so they survive in the transcript. */
+export function items(questions: Question[], answers: (Answer | undefined)[], sent = true): Item[] {
+  return questions.map((q, i) => {
+    const a = answers[i], text = answerText(q, a), notes = notesOf(q, a);
+    const chosen = a?.picked.map(n => q.options[n]?.label).filter((l): l is string => !!l) ?? [];
+    return { question: q.question, ...(q.header ? { header: q.header } : {}), ...(text ? { [sent ? "answer" : "draft"]: text } : {}),
+      ...(chosen.length ? { chosen } : {}), ...(a?.custom ? { custom: a.custom } : {}), ...(notes.length ? { notes } : {}) };
+  });
 }
 
 const line = (item: Item) => `- ${item.question} → ${item.answer ?? "no answer; decide yourself and state your assumption"}`;
+const drafts = (items: Item[]) => {
+  const entered = items.filter(item => item.draft);
+  return entered.length ? ["", "", "Not submitted, but entered before leaving the dialog:", ...entered.map(item => `- ${item.question} → ${item.draft}`)].join("\n") : "";
+};
 
 /** Model-facing tool result text. */
 export function resultText(details: Details, note = ""): string {
   switch (details.outcome) {
     case "answered": return ["User answers:", ...details.items.map(line)].join("\n");
-    case "discuss": return "The user wants to discuss these questions in chat instead. Nothing was answered; wait for their message.";
-    case "handback": return "The user wants to answer these through your parent agent. Stop now: give your progress so far and list these questions under Open questions.";
-    case "interrupted": return "Interrupted before the user answered.";
+    case "discuss": return `The user wants to discuss these questions in chat instead. Nothing was answered; wait for their message.${drafts(details.items)}`;
+    case "handback": return `The user wants to answer these through your parent agent. Stop now: give your progress so far and list these questions under Open questions.${drafts(details.items)}`;
+    case "interrupted": return `Interrupted before the user answered.${drafts(details.items)}`;
     case "unavailable": return "No interactive user is available. Decide yourself and state your assumptions.";
     case "invalid": return `Not shown to the user: ${note} Fix the call and ask again.`;
   }

@@ -62,44 +62,68 @@ test("multi-select toggles, keeps typed text with picks, and advances through re
   assert.equal(text, 'User answers:\n- Many? → C; own answer: "and D"\n- One? → no answer; decide yourself and state your assumption');
 });
 
-test("a note picks the focused option with it, and reaches the agent beside the choice", () => {
+test("a note picks the focused option and reaches the agent beside it", () => {
   const form = new Form(normalize([q("Q?", { recommended: 1 })]));
   assert.equal(form.startNote(), "note");
   assert.equal(form.noteText, "");
   assert.equal(form.note("  only if it stays portable "), "submit");
-  assert.deepEqual(form.answers[0], { picked: [1], note: "only if it stays portable" });
-  assert.equal(resultText({ outcome: "answered", items: items(form.questions, form.answers) }), 'User answers:\n- Q? → B; note: "only if it stays portable"');
-  // Choosing the same option keeps the note; another option or an own answer drops it.
+  assert.deepEqual(form.result[0], { picked: [1], notes: { 1: "only if it stays portable" } });
+  assert.equal(resultText({ outcome: "answered", items: items(form.questions, form.result) }), 'User answers:\n- Q? → B (note: "only if it stays portable")');
   assert.equal(form.noteText, "only if it stays portable");
-  form.enter();
-  assert.deepEqual(form.answers[0], { picked: [1], note: "only if it stays portable" });
+  // Notes stay on their option: choosing another option or typing an own answer keeps them, marked not chosen.
   form.move(1); form.enter();
-  assert.deepEqual(form.answers[0], { picked: [2] });
-  form.move(-1); form.note("again"); form.custom("something else");
-  assert.deepEqual(form.answers[0], { picked: [], custom: "something else" });
-  // Blank text clears the note but still chooses; the own-answer row takes no note.
-  form.note("x"); form.note(" ");
-  assert.deepEqual(form.answers[0], { picked: [1] });
+  assert.equal(form.noteText, "");
+  assert.equal(items(form.questions, form.result)[0].answer, 'C; note on B, not chosen: "only if it stays portable"');
+  form.custom("something else");
+  assert.deepEqual(form.result[0], { picked: [], notes: { 1: "only if it stays portable" }, custom: "something else" });
+  // Blank text removes the note but still chooses; the own-answer row takes no note.
+  form.move(-1); form.note(" ");
+  assert.deepEqual(form.result[0], { picked: [1] });
   form.move(5);
   assert.equal(form.startNote(), undefined);
 });
 
-test("multi-select notes add the focused option and stay on the question", () => {
+test("multi-select keeps a separate note on each option and stays on the question", () => {
   const form = new Form(normalize([q("Many?", { multi: true }), q("One?")]));
   form.number(1);
+  assert.equal(form.note("for writes"), undefined);
   form.move(1);
-  assert.equal(form.note("for reads"), undefined);
+  assert.equal(form.note("for reads\nonly hot paths"), undefined);
   assert.equal(form.tab, 0);
-  assert.deepEqual(form.answers[0], { picked: [0, 1], note: "for reads" });
+  assert.deepEqual(form.result[0], { picked: [0, 1], notes: { 0: "for writes", 1: "for reads\nonly hot paths" } });
+  form.move(-1);
+  assert.equal(form.noteText, "for writes");
+  // Unchecking keeps the note on its option, and the agent hears it was not chosen.
   form.toggle();
-  assert.deepEqual(form.answers[0], { picked: [0], note: "for reads" });
   form.move(5); form.custom("and D");
-  assert.equal(items(form.questions, form.answers)[0].answer, 'A; note: "for reads"; own answer: "and D"');
+  const [item] = items(form.questions, form.result);
+  assert.equal(item.answer, 'B (note: "for reads\nonly hot paths"); own answer: "and D"; note on A, not chosen: "for writes"');
+  assert.deepEqual(item.notes, [{ option: "A", text: "for writes", chosen: false }, { option: "B", text: "for reads\nonly hot paths", chosen: true }]);
   // The own answer moved on to the next question; the review tab takes no note.
   assert.equal(form.tab, 1);
   form.go(1);
   assert.equal(form.reviewing, true);
   assert.equal(form.startNote(), undefined);
+});
+
+test("leaving a note without choosing keeps it on the option and leaves picks alone", () => {
+  const form = new Form(normalize([q("Q?")]));
+  form.move(2);
+  assert.equal(form.note("maybe later", false), undefined);
+  assert.equal(form.answers[0], undefined);
+  assert.deepEqual(form.result[0], { picked: [], notes: { 2: "maybe later" } });
+  form.note("", false);
+  assert.equal(form.result[0], undefined);
+});
+
+test("what was entered before discussing survives as drafts", () => {
+  const form = new Form(normalize([q("Many?", { multi: true }), q("One?")]));
+  form.number(2); form.note("keep it small");
+  const details = { outcome: "discuss" as const, items: items(form.questions, form.result, false) };
+  assert.equal(details.items[0].answer, undefined);
+  assert.equal(details.items[0].draft, 'B (note: "keep it small")');
+  assert.match(resultText(details), /Nothing was answered; wait for their message\.\n\nNot submitted, but entered before leaving the dialog:\n- Many\? → B \(note: "keep it small"\)$/);
+  assert.equal(resultText({ outcome: "discuss", items: items(form.questions, [], false) }), "The user wants to discuss these questions in chat instead. Nothing was answered; wait for their message.");
 });
 
 test("Enter on a multi-select question with nothing picked picks the focused option", () => {

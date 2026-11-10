@@ -30,12 +30,18 @@ toggles in multi-select. Every question has a last row for typing your own
 answer, which multi-select keeps alongside checked options. With several
 questions, Tab and the arrow keys switch between them, and a Review tab submits.
 
-To accept an option with a caveat, press `n` on it and type a note. Saving
-chooses that option with the note; multi-select checks it and stays on the
-question. The agent receives `Postgres; note: "…"`. Choosing another option or
-typing your own answer drops the note, and saving a blank note removes it.
-Notes are available in the terminal UI only; RPC hosts can type their own
-answer instead.
+To add a caveat, press `n` on an option and type a note. The editor opens under
+that option, and the saved note stays there, so each option in a multi-select
+can carry its own. Enter chooses the option with the note; multi-select checks
+it and stays on the question. Esc keeps the note without changing your picks,
+and a blank note removes it. Changing picks never discards a note. A note on an
+option you did not choose is still sent and marked as such. The agent receives
+`HTTP (note: "…"), Query; note on None, not chosen: "…"`. Notes are available
+in the terminal UI only; RPC hosts can type their own answer instead. Esc in
+the own-answer editor keeps the draft for when you reopen it.
+
+The Review tab and the tool result in the transcript show each note under its
+question, with the option it belongs to.
 
 There are three outcomes:
 
@@ -45,6 +51,10 @@ There are three outcomes:
   without answers. Tool calls after the ask in the same response are blocked;
   ones before it have already run. Reply in your own words.
 - **Interrupted.** Aborting the run closes the dialog.
+
+When the dialog closes without being submitted, the picks and notes you had entered
+stay in the transcript as drafts. The agent also sees them, labelled as not
+submitted.
 
 Dialogs run one at a time. Print and JSON runs remove the tool at startup;
 nothing re-enables it, so a `/tools` choice stands. RPC hosts get Pi's own

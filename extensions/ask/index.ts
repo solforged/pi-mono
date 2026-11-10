@@ -45,9 +45,10 @@ export default function (pi: ExtensionAPI) {
       if (problem) return { ...done({ outcome: "invalid", items: [] }, problem), isError: true };
       if (!ctx.hasUI) return done({ outcome: "unavailable", items: [] });
       const ending = ctx.mode === "tui" ? await askInTerminal(ctx, questions, signal) : await askWithDialogs(ctx, questions, signal);
-      if (ending.outcome === "discuss" && process.env.PI_REX_CHILD) return done({ outcome: "handback", items: items(questions, []) });
+      // Whatever was entered before leaving the dialog stays in the result as drafts.
+      if (ending.outcome === "discuss" && process.env.PI_REX_CHILD) return done({ outcome: "handback", items: items(questions, ending.answers, false) });
       discussing = ending.outcome === "discuss";
-      if (ending.outcome !== "answered") return { ...done({ outcome: ending.outcome, items: items(questions, []) }), terminate: discussing };
+      if (ending.outcome !== "answered") return { ...done({ outcome: ending.outcome, items: items(questions, ending.answers, false) }), terminate: discussing };
       return done({ outcome: "answered", items: items(questions, ending.answers) });
     },
     renderCall(args: any, theme) {
@@ -58,8 +59,19 @@ export default function (pi: ExtensionAPI) {
     renderResult(result: any, _options, theme) {
       const details: Details | undefined = result?.details;
       if (!details?.outcome) return new Text(theme.fg("muted", result?.content?.[0]?.text ?? ""), 0, 0);
-      if (details.outcome !== "answered") return new Text(theme.fg(details.outcome === "discuss" ? "warning" : "muted", STATUS[details.outcome]), 0, 0);
-      return new Text(details.items.map(item => `${item.answer ? theme.fg("success", "✓ ") : theme.fg("dim", "· ")}${theme.fg("muted", `${item.header ?? item.question}: `)}${item.answer ?? theme.fg("dim", "left to the agent")}`).join("\n"), 0, 0);
+      const answered = details.outcome === "answered";
+      const lines = answered ? [] : [theme.fg(details.outcome === "discuss" ? "warning" : "muted", STATUS[details.outcome])];
+      for (const item of details.items) {
+        const entered = answered ? item.answer : item.draft;
+        if (!answered && !entered) continue;
+        // Older results carry only the answer text.
+        const summary = item.chosen || item.custom ? [item.chosen?.join(", "), item.custom ? `own answer: "${item.custom}"` : ""].filter(Boolean).join("; ") : item.notes ? "" : entered;
+        const mark = !answered ? theme.fg("dim", "  draft ") : entered ? theme.fg("success", "✓ ") : theme.fg("dim", "· ");
+        lines.push(`${mark}${theme.fg("muted", `${item.header ?? item.question}: `)}${summary || theme.fg("dim", entered ? "notes only" : "left to the agent")}`);
+        for (const note of item.notes ?? []) note.text.split("\n").forEach((row, i) =>
+          lines.push(`    ${i ? "  " : theme.fg(note.chosen ? "accent" : "dim", "✎ ")}${row}${i ? "" : theme.fg("dim", ` (${note.option}${note.chosen ? "" : ", not chosen"})`)}`));
+      }
+      return new Text(lines.join("\n"), 0, 0);
     },
   });
 
