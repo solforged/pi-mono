@@ -1,0 +1,16 @@
+#!/bin/bash
+# Serves one SSH connection on stdin and stdout for the host's browser tool.
+# The host starts it through `container exec`, so sshd never listens on a port,
+# and it accepts only the public key the host passes in. The connection only
+# carries the browser's SOCKS traffic; sshd_config refuses shells.
+set -eu
+if [[ $# -ne 2 || $1 != ssh-ed25519 || ! $2 =~ ^[A-Za-z0-9+/]+=*$ ]]; then
+  echo "usage: browser-sshd ssh-ed25519 PUBLIC-KEY" >&2
+  exit 2
+fi
+mkdir -p /run/sshd
+mkdir -p -m 0700 /run/pi-sandbox
+keys="$(mktemp /run/pi-sandbox/browser-key.XXXXXX)"
+trap 'rm -f "$keys"' EXIT
+printf '%s %s\n' "$1" "$2" > "$keys"
+/usr/sbin/sshd -i -f /etc/pi-sandbox/sshd_config -o "AuthorizedKeysFile=$keys"

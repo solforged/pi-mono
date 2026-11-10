@@ -70,6 +70,37 @@ throwaway lanes share one build instead of each copying every dependency. An
 existing `CARGO_TARGET_DIR` wins, and a command can export its own to build in
 isolation. In the guest, `target/` is the Linux build overlay instead.
 
+## Browser
+
+While the sandbox is on, the `browser` tool shows a real browser
+([terminal-browser](https://terminal-browser.com)) in a Rex pane to the right of
+Pi, and the model drives it with
+[agent-browser](https://github.com/vercel-labs/agent-browser) commands:
+`["open", "localhost:3000"]`, `["snapshot", "-i"]`, `["click", "@e3"]`,
+`["screenshot"]`. The browser runs on the host, but all of its traffic goes
+through the guest, so a dev server listening on the guest's `127.0.0.1` opens as
+`localhost`. Screenshots come back as images; a `.png` path also saves one in
+the guest.
+
+It needs interactive Pi in a Rex pane and a terminal-browser build with Rex
+support (the dev channel after v0.15.3) on the host's `PATH`. Child agents never
+get it. Pi gets focus back after the pane opens. The pane closes when the
+sandbox turns off or Pi quits; `["close"]` closes it sooner.
+
+The traffic uses terminal-browser's `--ssh` mode. The host's SSH connection
+runs over `container exec` into a per-connection `sshd -i`, so the guest
+opens no port. That sshd accepts one key, kept with its SSH config under
+`~/.cache/pi-sandbox/state/browser/<container>/` where the guest cannot reach
+it, and allows only forwarding. Cookies and storage persist per worktree,
+separate from your own terminal-browser.
+
+The tool accepts only commands that act on the open page. It refuses host
+files (`upload`, `download`, `pdf`, state and recording paths), the clipboard,
+`read URL` (which fetches from the host's network), and setup flags. Pages must
+be `http` or `https`; serve local files from the guest, for example with
+`python3 -m http.server --bind 127.0.0.1`. With the sandbox off, Pi uses
+terminal-browser through bash and its skill instead.
+
 ## Settings
 
 Settings are read only from `~/.pi/agent/settings.json`, never from a project's
@@ -93,8 +124,9 @@ named directory and everything below it.
 ```
 
 `wiki` is `"rw"`, `"ro"`, or `"off"`. `image` replaces the built image with your
-own, which must provide `/usr/local/libexec/pi-sandbox/pi-run`, `rg`, and `fd`;
-building `FROM` the default image is simplest.
+own, which must provide `/usr/local/libexec/pi-sandbox/pi-run`, `rg`, and `fd`
+(and `browser-sshd` with OpenSSH's server for the browser); building `FROM` the
+default image is simplest.
 
 ## Sessions and children
 
@@ -113,6 +145,9 @@ host processes. It does not make untrusted code safe to run later: the guest
 can still edit project files that you or your tools execute on the host
 (package scripts, Makefiles, `mise.toml`, hooks configured from the work tree),
 and it can reach the network. Submodule Git directories are not guarded.
+
+The browser is Chromium on the host, rendering pages the guest serves. It is
+as exposed to them as to any website, with its own profile.
 
 Locks do not work across containers. Concurrent Cargo or mise installs from two
 worktrees into the shared `/cache` can conflict; rerun the install if one fails.

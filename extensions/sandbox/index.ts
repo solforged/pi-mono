@@ -2,14 +2,15 @@
 // default; Ctrl+Shift+S, /sandbox, `--sandbox off`, or settings turn it off.
 import {
   createBashToolDefinition, createEditToolDefinition, createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition,
-  createReadToolDefinition, createWriteToolDefinition, getAgentDir, getPackageDir,
-  type ExtensionAPI, type ExtensionContext,
+  createReadToolDefinition, createWriteToolDefinition, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, getAgentDir, getPackageDir,
+  truncateHead, type ExtensionAPI, type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
+import { Browser, parseCommand, which } from "./browser.ts";
 import { shareCargoTarget } from "./cargo.ts";
 import { ContainerCli, runProcess } from "./container.ts";
 import { buildPlan, promptNote, type Plan } from "./plan.ts";
@@ -42,7 +43,7 @@ const resolvePath = (path: string | undefined, cwd: string) => {
 // A session switch, fork, or reload replaces the extension instance inside one
 // process. The running sandbox waits here for the next instance, so the
 // container and anything running in it survive.
-const handoff = globalThis as { __piSolSandbox?: Sandbox };
+const handoff = globalThis as { __piSolSandbox?: Sandbox; __piSolSandboxBrowser?: Browser };
 const REPLACED = new Set(["reload", "new", "resume", "fork"]);
 
 export default function sandboxExtension(pi: ExtensionAPI) {
@@ -55,6 +56,9 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   let inherited: Sandbox | undefined;
   let failure: Error | undefined;
   let commitAllowed: boolean | undefined;
+  let browserAllowed: boolean | undefined;
+  // Why the browser tool is unavailable in this session, if it is.
+  let browserProblem: string | undefined = "not started";
   let ui: ExtensionContext | undefined;
   let generation = 0;
   let opening: Promise<void> | undefined;
@@ -79,10 +83,37 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     pi.events.emit("statusline:segment", { key: STATUS, text, color, priority: 8 });
   };
 
+  // git_commit and browser exist only while the sandbox is on, and never in
+  // children started with --tools that leave them out.
   const syncCommitTool = () => {
-    if (!commitAllowed) return;
-    const active = pi.getActiveTools().filter((name) => name !== "git_commit");
-    pi.setActiveTools(enabled ? [...active, "git_commit"] : active);
+    const extra = [
+      ...(commitAllowed ? ["git_commit"] : []),
+      ...(browserAllowed && !browserProblem ? ["browser"] : []),
+    ];
+    const active = pi.getActiveTools().filter((name) => name !== "git_commit" && name !== "browser");
+    const next = enabled ? [...active, ...extra] : active;
+    const before = pi.getActiveTools();
+    if (next.length !== before.length || next.some((name, i) => name !== before[i])) pi.setActiveTools(next);
+  };
+
+  // One browser per Pi process: it survives session switches and closes when
+  // the sandbox turns off or Pi quits.
+  const browser = () => handoff.__piSolSandboxBrowser ??= new Browser({
+    run: runProcess, terminalBrowser: which("terminal-browser")!, rex: which("rex") ?? (process.env.REX_BIN_DIR ? which("rex", process.env.REX_BIN_DIR) : undefined),
+    container: which("container")!, stateRoot: join(cacheRoot(), "state"), env: process.env,
+  });
+  const closeBrowser = async () => {
+    const open = handoff.__piSolSandboxBrowser;
+    handoff.__piSolSandboxBrowser = undefined;
+    await open?.close().catch(() => {});
+  };
+  const findBrowserProblem = (ctx: ExtensionContext) => {
+    if (ctx.mode !== "tui") return "The browser needs interactive Pi.";
+    if (process.env.PI_REX_CHILD || process.env.PI_WORKFLOW_CHILD_CONFIG) return "The browser is not available to child agents.";
+    if (!process.env.REX_SESSION || !process.env.REX_BLOCK) return "The browser needs Pi running in a Rex pane.";
+    if (!which("terminal-browser")) return "terminal-browser is not installed on the host.";
+    if (!which("container")) return "The container CLI is not on PATH.";
+    return undefined;
   };
 
   function turnOn(ctx: ExtensionContext) {
@@ -133,6 +164,7 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     generation++;
     const old = box ?? inherited;
     box = undefined; inherited = undefined; plan = undefined; failure = undefined; opening = undefined;
+    if (!handOver) await closeBrowser();
     if (!old) return;
     if (handOver) { old.options.onPhase = undefined; handoff.__piSolSandbox = old; }
     else await old.release();
@@ -173,8 +205,10 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     inherited = handoff.__piSolSandbox;
     handoff.__piSolSandbox = undefined;
     // Checked once: later sessions in this process see our own changes. Children
-    // started with --tools never get git_commit.
+    // started with --tools never get git_commit or browser.
     commitAllowed ??= pi.getActiveTools().includes("git_commit");
+    browserAllowed ??= pi.getActiveTools().includes("browser");
+    browserProblem = findBrowserProblem(ctx);
     let choice;
     projectRoot = await findRoot(ctx.cwd);
     try {
@@ -278,6 +312,45 @@ export default function sandboxExtension(pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event) => {
     if (enabled && plan) return { systemPrompt: `${event.systemPrompt}\n\n${promptNote(plan)}` };
+  });
+
+  pi.registerTool({
+    name: "browser",
+    label: "browser",
+    description: "Drive a real browser shown beside the user's Pi pane. It runs on the macOS host, but all of its traffic goes through the sandbox, so localhost is the sandbox's. Pass one agent-browser command as a list of strings: [\"open\", \"localhost:3000\"] starts the browser or navigates it; then [\"snapshot\", \"-i\"], [\"click\", \"@e3\"], [\"fill\", \"@e2\", \"text\"], [\"press\", \"Enter\"], [\"get\", \"text\", \"h1\"], [\"eval\", \"document.title\"], [\"wait\", \"--text\", \"Saved\"], [\"console\"], [\"errors\"], [\"set\", \"viewport\", \"390\", \"844\"]. [\"screenshot\"] returns the image; add a selector for one element, --full for the whole page, or a .png path to also save it in the sandbox. [\"close\"] closes the pane. Only http and https pages open; commands that touch host files or the clipboard are refused.",
+    promptSnippet: "Show and drive a web page in a browser beside the user, with the sandbox's network",
+    promptGuidelines: [
+      "Use browser, not the terminal-browser command (it is not installed in the sandbox), to view or test a web page; a dev server listening on the sandbox's localhost is reachable as localhost.",
+    ],
+    parameters: Type.Object({
+      command: Type.Array(Type.String(), { description: "One agent-browser command and its arguments, such as [\"click\", \"@e3\"]" }),
+    }),
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      if (!enabled) throw new Error("The sandbox is off; use terminal-browser with bash instead.");
+      if (browserProblem) throw new Error(browserProblem);
+      const command = parseCommand(params.command);
+      const box = (await current())!;
+      const text = (value: string) => ({ content: [{ type: "text" as const, text: value }], details: undefined });
+      if (command.kind === "open") return text(await browser().open(command.url, box.plan.name, signal));
+      if (command.kind === "close") return text(await closeBrowser().then(() => "Closed the browser pane."));
+      if (command.kind === "screenshot") {
+        const png = await browser().screenshot(command.selector, command.flags, signal);
+        let note = "Screenshot of the page.";
+        if (command.save) {
+          // Written by the guest, so the path means what it means there.
+          const path = resolvePath(command.save, ctx.cwd);
+          const saved = await box.exec(["sh", "-c", 'mkdir -p -- "$(dirname -- "$1")" && cat > "$1"', "sh", path], { input: png, signal, timeoutMs: 30000 });
+          if (saved.code !== 0) throw new Error(`Could not save the screenshot to ${path}: ${saved.stderr.trim()}`);
+          note = `Screenshot saved to ${path}.`;
+        }
+        return { content: [{ type: "text" as const, text: note }, { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" }], details: undefined };
+      }
+      const output = await browser().action(command.args, signal);
+      const cut = truncateHead(output || "Done.", { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+      return text(cut.truncated
+        ? `${cut.content}\n\n[Output truncated: ${cut.outputLines} of ${cut.totalLines} lines (${formatSize(cut.outputBytes)} of ${formatSize(cut.totalBytes)}). Narrow it, for example snapshot -i or -s SELECTOR.]`
+        : cut.content);
+    },
   });
 
   pi.registerTool({

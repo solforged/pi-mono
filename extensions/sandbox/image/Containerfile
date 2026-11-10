@@ -5,13 +5,17 @@ FROM docker.io/library/debian:trixie-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bash build-essential ca-certificates curl fd-find file git golang-go jq \
-      less libssl-dev pkg-config procps python3 ripgrep unzip xz-utils zstd \
+      less libssl-dev openssh-server pkg-config procps python3 ripgrep unzip \
+      xz-utils zstd \
  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && rm -f /etc/ssh/ssh_host_* \
+ && ssh-keygen -q -t ed25519 -N '' -f /etc/ssh/ssh_host_ed25519_key
 
 RUN curl -fsSL https://mise.run | MISE_INSTALL_PATH=/usr/local/bin/mise sh
 
-COPY pi-run refuse-sign /usr/local/libexec/pi-sandbox/
+COPY pi-run refuse-sign browser-sshd /usr/local/libexec/pi-sandbox/
 COPY profile.sh /etc/profile.d/pi-sandbox.sh
-COPY gitconfig /etc/pi-sandbox/gitconfig
-RUN chmod 0755 /usr/local/libexec/pi-sandbox/pi-run /usr/local/libexec/pi-sandbox/refuse-sign
+COPY gitconfig sshd_config /etc/pi-sandbox/
+RUN chmod 0755 /usr/local/libexec/pi-sandbox/pi-run /usr/local/libexec/pi-sandbox/refuse-sign \
+      /usr/local/libexec/pi-sandbox/browser-sshd
