@@ -1,4 +1,4 @@
-import { ProviderError, type SearchResponse, type Source } from "./format.ts";
+import { errorDetail, ProviderError, type SearchResponse, type Source } from "./format.ts";
 
 const EXA_API_URL = "https://api.exa.ai/search";
 const MAX_ANSWER_SUMMARIES = 3;
@@ -84,7 +84,7 @@ export async function searchExa(options: {
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new ProviderError("exa", `Exa API error (${response.status}): ${text}`, response.status);
+    throw new ProviderError("exa", `Exa API error (${response.status}): ${errorDetail(text)}`, response.status);
   }
   return parseExaResponse(await response.json() as ExaJson, options.limit);
 }

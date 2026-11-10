@@ -1,4 +1,5 @@
 import {
+  errorDetail,
   addSource,
   citationSnippet,
   preferFirst,
@@ -222,7 +223,7 @@ export async function searchCodex(options: {
       });
       if (!response.ok) {
         const text = await response.text();
-        throw new ProviderError("codex", `Codex API error (${response.status}): ${text}`, response.status);
+        throw new ProviderError("codex", `Codex API error (${response.status}): ${errorDetail(text)}`, response.status);
       }
       if (!response.body) throw new ProviderError("codex", "Codex API returned no response body", 500);
       const events: Record<string, unknown>[] = [];

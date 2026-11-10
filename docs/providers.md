@@ -15,7 +15,8 @@ the live Grok or Codex backend, then walks the rest of the chain.
 
 A Grok session tries xAI first; an OpenAI session tries Codex first. Each starts
 with the current model, then its configured candidate list. Other parents keep
-Codex then xAI then Exa. Unavailable backends are skipped. Candidate model IDs
+Codex then xAI then Exa. Unavailable backends are skipped, and one that fails
+or takes over 60 seconds falls through to the next. Candidate model IDs
 live in [codex.ts](../extensions/web-search/codex.ts) and
 [xai.ts](../extensions/web-search/xai.ts), not a second documentation snapshot.
 `/web-search` prints the session-aware order; `/web-search <query>` runs it.

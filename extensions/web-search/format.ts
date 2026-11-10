@@ -63,6 +63,18 @@ export function truncateText(text: string, max: number): string {
   return trimmed.length <= max ? trimmed : `${trimmed.slice(0, max - 3)}...`;
 }
 
+// An API error body, cut down for an error message: the API's own message when
+// the body is JSON, and never a whole HTML error page.
+export function errorDetail(body: string): string {
+  let text = body;
+  try {
+    const json = JSON.parse(body);
+    const found = [json?.error?.message, json?.error, json?.message, json?.detail].find((value) => typeof value === "string" && value.trim());
+    if (found) text = found;
+  } catch { /* not JSON */ }
+  return truncateText(text.replace(/\s+/g, " "), 500);
+}
+
 export function addSource(sources: Source[], source: Source): void {
   const url = cleanSourceUrl(source.url);
   const existing = sources.find((candidate) => candidate.url === url);

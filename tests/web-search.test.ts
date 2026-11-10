@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { codexModels, consumeCodexEvents, extractTextSources, resolveCodexUrl, shouldRetryCodexModel } from "../extensions/web-search/codex.ts";
 import { buildExaBody, parseExaResponse, recencyStartDate, synthesizeAnswer } from "../extensions/web-search/exa.ts";
-import { formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, withRecencyHint } from "../extensions/web-search/format.ts";
+import { errorDetail, formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, withRecencyHint } from "../extensions/web-search/format.ts";
 import { executeSearch, registryAuth, type SearchAuth } from "../extensions/web-search/search.ts";
 import { sseText } from "../extensions/web-search/sse.ts";
 import { buildXaiBody, parseXaiResponse, xaiModels } from "../extensions/web-search/xai.ts";
@@ -241,4 +241,42 @@ test("Grok and Codex sessions prefer their own backend first", async () => {
   assert.equal(result.response?.provider, "xai");
   assert.equal(calls.length, 1);
   assert.match(calls[0] ?? "", /api.x.ai/);
+});
+
+test("a stalled backend times out on its own and the next one answers", async () => {
+  const hang = (init?: RequestInit) => new Promise<Response>((_, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+  });
+  const auth: SearchAuth = { codex: async () => ({ token: jwt() }), xai: async () => undefined, exa: async () => "exa-key" };
+  const fetchImpl = async (input: any, init?: RequestInit) => String(input).includes("api.openai.com")
+    ? hang(init)
+    : jsonResponse({ results: [{ title: "Exa hit", url: "https://exa.ai", summary: "Fallback worked." }] });
+  const result = await executeSearch({ query: "slow codex" }, { auth, timeoutMs: 40, fetchImpl });
+  assert.equal(result.response?.provider, "exa");
+
+  // Credential lookups take no signal; the limit still applies to them.
+  const stuck = await executeSearch({ query: "stuck auth" }, {
+    auth: { ...auth, codex: () => new Promise(() => {}) }, timeoutMs: 40, fetchImpl,
+  });
+  assert.equal(stuck.response?.provider, "exa");
+
+  const alone = await executeSearch({ query: "slow codex", provider: "codex" }, { auth, timeoutMs: 40, fetchImpl });
+  assert.equal(alone.error, "Error: codex timed out after 0 s");
+
+  // The caller's cancellation ends the whole search instead of trying the next backend.
+  const cancel = new AbortController();
+  setTimeout(() => cancel.abort(), 10);
+  await assert.rejects(executeSearch({ query: "cancelled" }, { auth, signal: cancel.signal, fetchImpl }), { name: "AbortError" });
+});
+
+test("API error bodies are reduced to their message and bounded", async () => {
+  assert.equal(errorDetail(JSON.stringify({ error: { message: "The requested model is not supported." } })), "The requested model is not supported.");
+  assert.equal(errorDetail(JSON.stringify({ detail: "No access" })), "No access");
+  assert.equal(errorDetail("<html>\n  <body>Bad   gateway</body>\n</html>"), "<html> <body>Bad gateway</body> </html>");
+  const result = await executeSearch({ query: "big error", provider: "exa" }, {
+    auth: { exa: async () => "exa-key" },
+    fetchImpl: async () => new Response("x".repeat(200_000), { status: 502 }),
+  });
+  assert(result.error && result.error.length < 600, `error was ${result.error?.length} characters`);
+  assert.match(result.error!, /Exa API error \(502\)/);
 });

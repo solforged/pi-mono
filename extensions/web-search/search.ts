@@ -81,10 +81,10 @@ function candidates(query: SearchQuery): ProviderId[] {
   return searchOrder(query.sessionProvider, query.provider);
 }
 
-function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const timeout = AbortSignal.timeout(ms);
-  return signal ? AbortSignal.any([signal, timeout]) : timeout;
-}
+// Rejects when the signal aborts, for steps that take no signal (credential refresh, body parsing).
+const abandoned = (signal: AbortSignal) => new Promise<never>((_, reject) => {
+  signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+});
 
 export async function executeSearch(query: SearchQuery, options: {
   auth: SearchAuth;
@@ -95,14 +95,18 @@ export async function executeSearch(query: SearchQuery, options: {
   const order = candidates(query);
   const errors: Array<{ provider: ProviderId; message: string }> = [];
   const fetchImpl = options.fetchImpl ?? fetch;
-  const signal = withTimeout(options.signal, options.timeoutMs ?? SEARCH_TIMEOUT_MS);
+  const timeoutMs = options.timeoutMs ?? SEARCH_TIMEOUT_MS;
   const hinted = withRecencyHint(query.query, query.recency);
 
   const explicit = Boolean(query.provider && query.provider !== "auto");
   for (const provider of order) {
+    // Each backend has its own time limit, so a stalled one still falls through
+    // to the next. Only the caller's cancellation ends the whole search.
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
     try {
       signal.throwIfAborted();
-      const response = await runProvider(provider, hinted, query, options.auth, signal, fetchImpl);
+      const response = await Promise.race([runProvider(provider, hinted, query, options.auth, signal, fetchImpl), abandoned(signal)]);
       if (response === "skip") {
         if (explicit) errors.push({ provider, message: `${provider} credentials not configured` });
         continue;
@@ -112,8 +116,9 @@ export async function executeSearch(query: SearchQuery, options: {
       }
       return { text: formatForLLM(response), response };
     } catch (error) {
-      if (signal.aborted) throw error;
-      const message = error instanceof Error ? error.message : String(error);
+      if (options.signal?.aborted) throw error;
+      const message = timeout.aborted ? `${provider} timed out after ${Math.round(timeoutMs / 1000)} s`
+        : error instanceof Error ? error.message : String(error);
       errors.push({ provider, message });
     }
   }

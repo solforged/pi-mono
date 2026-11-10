@@ -1,4 +1,5 @@
 import {
+  errorDetail,
   addSource,
   citationSnippet,
   preferFirst,
@@ -167,7 +168,7 @@ export async function searchXai(options: {
       });
       if (!response.ok) {
         const text = await response.text();
-        throw new ProviderError("xai", `xAI Responses API error (${response.status}): ${text}`, response.status);
+        throw new ProviderError("xai", `xAI Responses API error (${response.status}): ${errorDetail(text)}`, response.status);
       }
       const json = await response.json() as XaiJson;
       return parseXaiResponse(json, options.limit ?? DEFAULT_CAP);
