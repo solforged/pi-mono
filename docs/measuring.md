@@ -101,3 +101,8 @@ across tasks with a 95% bootstrap interval. With ten tasks and three runs only
 a large effect clears the noise: the first use, a system-prompt rule asking for
 read-only calls to be batched, cost $17.67 and measured +$0.006 a run with an
 interval of −$0.005 to +$0.016 on runs averaging $0.29, so the rule was dropped.
+
+## Deferred tool discovery
+
+`mise run deferred-tools:eval` is a separate paid check of whether each preset
+model finds deferred tools on demand; see [Deferred tools](deferred-tools.md#measured).

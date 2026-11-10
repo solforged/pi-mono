@@ -6,6 +6,9 @@ writes, a persistent index, or automatic context injection. `/sessions check`
 shows the storage policy; `/sessions <query>` runs a project search without a
 model request.
 
+Both tools are [deferred](deferred-tools.md): they are declared once
+`tool_search` loads the `sessions` group.
+
 ## Search and read
 
 ```json

@@ -17,7 +17,7 @@ export default function (pi: ExtensionAPI) {
   const saved = process.env.PI_CODING_AGENT_DIR;
   const events: Record<string, any> = {}, commands: Record<string, any> = {}, renderers: Record<string, any> = {};
   const sent: Array<{ message: any; options: any }> = [];
-  let tool: any;
+  let tool: any, active = ["read"];
   process.env.PI_CODING_AGENT_DIR = base;
   try {
     install({
@@ -27,6 +27,8 @@ export default function (pi: ExtensionAPI) {
       registerMessageRenderer: (type: string, fn: any) => { renderers[type] = fn; },
       sendMessage: (message: any, options: any) => { sent.push({ message, options }); },
       getSessionName: () => "My session",
+      getActiveTools: () => active,
+      setActiveTools: (names: string[]) => { active = names; },
     } as any);
   } finally {
     if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = saved;
@@ -39,7 +41,10 @@ export default function (pi: ExtensionAPI) {
       const dir = join(base, "intercom");
       let peer: Station | undefined;
       try {
-        assert.ok(pi.getAllTools().some(t => t.name === "intercom"));
+        const registered = pi.getAllTools().find(t => t.name === "intercom");
+        // Situational: loaded through tool_search rather than declared with every request.
+        assert.equal(registered?.exposure, "deferred");
+        assert.equal(registered?.namespace?.name, "intercom");
         const size = JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }).length;
         assert.ok(size <= 480, `intercom declaration grew to ${size} characters`);
         assert.equal(tool.promptSnippet ?? tool.promptGuidelines, undefined);
@@ -80,6 +85,8 @@ export default function (pi: ExtensionAPI) {
         const note = (text: string, delivery: "quiet" | "aside" = "quiet") => request(dir, me, { kind: "message", from: peerCard, text, delivery });
         for (let i = 0; i < MAX_WAKES; i++) assert.deepEqual(await note(`n${i}`), { ok: true, delivered: "quiet", busy: false, reply: false });
         assert.deepEqual(sent[0].options, { deliverAs: "followUp", triggerTurn: true });
+        // A note asks for an answer through intercom, so the deferred tool is declared on arrival.
+        assert.deepEqual(active, ["read", "intercom"]);
         assert.match(sent[0].message.content, /^<intercom from="abcdef" name="Peer" cwd="\/work\/peer">\nn0\n<\/intercom>\nA note from/);
         assert.deepEqual(await note("one more"), { ok: true, delivered: "held", busy: false, reply: false });
         assert.deepEqual(sent.at(-1)!.options, { deliverAs: "nextTurn" });

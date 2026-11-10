@@ -70,6 +70,9 @@ export default function intercom(pi: ExtensionAPI) {
     // A quiet note to a busy session waits for its run to end, so it may predate that work.
     const queued = wake && busy && delivery === "quiet";
     if (wake) wakes++;
+    // The note asks for any answer through this tool, so declare it instead of leaving it to tool_search.
+    const active = pi.getActiveTools();
+    if (!active.includes("intercom")) pi.setActiveTools([...active, "intercom"]);
     pi.sendMessage(
       { customType: "intercom", content: wrap(from, text, queued), display: true, details: { from: { id: from.id, title: from.title, cwd: from.cwd }, delivery, text, held: !wake, reply, queued } },
       wake ? { deliverAs: delivery === "aside" ? "steer" : "followUp", triggerTurn: true } : { deliverAs: "nextTurn" },
@@ -163,7 +166,10 @@ export default function intercom(pi: ExtensionAPI) {
   pi.registerTool({
     name: "intercom",
     label: "Intercom",
-    // Sent with every request: keep it short. Peek and focus are /intercom only.
+    // Deferred: declared only once tool_search loads it (docs/deferred-tools.md),
+    // then sent with every request, so keep it short. Peek and focus are /intercom only.
+    exposure: "deferred",
+    namespace: { name: "intercom", description: "Message other live Pi sessions running on this machine" },
     description: "Message other live Pi sessions on this machine. list; status: busy and last reply; send: message to (id, folder or title); aside: reach a busy peer at its next step. Send only when the user asks or to answer a peer.",
     parameters: Type.Object({
       action: StringEnum(["list", "status", "send"] as const),

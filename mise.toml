@@ -18,6 +18,10 @@ run = "node tests/fixtures/fault-smoke.ts"
 description = "PAID: run past fixes with and without an extension and compare cost, turns and test results"
 run = "node scripts/paired.ts"
 
+[tasks."deferred-tools:eval"]
+description = "PAID: check that each preset model finds deferred tools through tool_search, with and without the prompt list"
+run = "node scripts/deferred-tools-eval.ts"
+
 [tasks."sandbox:smoke"]
 description = "Exercise the tool sandbox against live Apple containers, without model calls"
 run = "pi --offline --no-extensions --no-skills --no-context-files --no-prompt-templates --no-session -e ./tests/fixtures/sandbox-smoke.ts -p /sandbox-smoke"

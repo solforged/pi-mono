@@ -26,8 +26,9 @@ whitespace-free token; the tool also accepts names containing spaces.
 
 Agents use the `intercom` tool with `action` set to `list`, `status`, or
 `send` (`to`, `message`, and optional `aside: true`). Peek and focus are left
-out of the tool to keep its declaration, which every request carries, under
-480 characters. A regression check enforces that limit.
+out of the tool to keep its declaration under 480 characters. A regression
+check enforces that limit. The tool is [deferred](deferred-tools.md):
+`tool_search` loads it, and an arriving note declares it straight away.
 
 ## Delivery
 

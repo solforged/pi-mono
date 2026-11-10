@@ -79,7 +79,12 @@ export default function (pi: ExtensionAPI) {
           assert.ok(size <= budget, `${tool.name} declaration grew to ${size} characters`);
           assert.equal(tool.promptSnippet ?? tool.promptGuidelines, undefined);
         }
-        assert.ok(pi.getAllTools().some(t => t.name === "session_search"));
+        // Situational: loaded through tool_search rather than declared with every request.
+        for (const name of ["session_search", "session_read"]) {
+          const registered = pi.getAllTools().find(t => t.name === name);
+          assert.equal(registered?.exposure, "deferred", name);
+          assert.equal(registered?.namespace?.name, "sessions", name);
+        }
         const fake = { ...ctx, sessionManager: { getSessionDir: () => store, getSessionId: () => "live", getSessionFile: () => undefined } };
         const search = await tools[0].execute("search", { query: "smoke decision" }, undefined, undefined, fake);
         assert.equal(JSON.parse(search.content[0].text).hits[0].entry_id, "entry");
