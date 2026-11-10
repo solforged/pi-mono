@@ -46,7 +46,9 @@ export function commandActions(command: string): string[] {
     if (!WORD.test(head) || QUIET_COMMANDS.has(head)) continue;
     const action = [head];
     for (const word of parts.slice(1)) {
-      // Flags and machine-local paths vary between runs of the same workflow.
+      // Flags and machine-local paths vary between runs of the same workflow;
+      // after a subcommand, words following a flag are its values.
+      if (word.startsWith("-") && action.length > 1) break;
       if (/^[-/~$]/.test(word)) continue;
       if (action.length === 1 && PATH.test(word)) { action.push(word.replace(/^\.\//, "")); break; }
       if (!WORD.test(word) || action.length >= 3) break;
@@ -168,10 +170,29 @@ export interface PatternReview { core: string[]; sessions: number; at: string; o
  * sessions as when it was last reviewed.
  */
 export function alreadyReviewed(core: string[], sessions: number, reviews: PatternReview[]): boolean {
-  return reviews.some((review) => {
-    const shared = review.core.filter((feature) => core.includes(feature)).length;
-    return shared / Math.min(core.length, review.core.length) >= 0.6 && sessions < review.sessions * 2;
-  });
+  return reviews.some((review) => similarCore(core, review.core) && sessions < review.sessions * 2);
+}
+/** Mostly the same steps: the smaller core largely contained in the other. */
+export function similarCore(a: string[], b: string[]): boolean {
+  return b.filter((feature) => a.includes(feature)).length / Math.min(a.length, b.length) >= 0.6;
+}
+/**
+ * Every distinct pattern recurring now, checking each session's runs against
+ * all the others. Similar cores merge, keeping the most widespread.
+ */
+export function recurringPatterns(indexed: Map<string, Run[]>, minSessions: number, population: number): Array<Recurrence & { session: string }> {
+  const found: Array<Recurrence & { session: string }> = [];
+  for (const [session, list] of indexed) {
+    const others = new Map([...indexed].filter(([other]) => other !== session));
+    for (const run of list) {
+      const match = recurrence(run, others, minSessions, population);
+      if (!match) continue;
+      const similar = found.findIndex((pattern) => similarCore(pattern.core, match.core));
+      if (similar < 0) found.push({ ...match, session });
+      else if (match.sessions > found[similar].sessions) found[similar] = { ...match, session };
+    }
+  }
+  return found.sort((a, b) => b.sessions - a.sessions);
 }
 /** True when project instructions already name every command in the pattern. */
 export function documented(core: string[], instructions: string): boolean {

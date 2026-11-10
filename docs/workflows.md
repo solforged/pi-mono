@@ -13,7 +13,7 @@
 | `/learn-sessions` | Pick sessions to mine; the current session starts checked. |
 | `/learn-review` | Inspect, approve, or dismiss a queued proposal. |
 | `/curate-skills` | Audit changed, workflow-managed skills. |
-| `/autolearn [on\|off]` | Show or toggle automatic learning for this project. |
+| `/autolearn [on\|off\|dry-run]` | Show, toggle, or preview automatic learning for this project. |
 | `/workflows` | Show private state location and auxiliary usage. |
 | `/web-search [query\|check]` | Inspect search routing or run a query. |
 | `/snapcompact` | Show whether this model archives compacted history as images. |

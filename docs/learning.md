@@ -48,6 +48,9 @@ update, and only then a new skill. New skills are refused once `maxSkills`
 instead of being published. Selected transcripts go to the `learn` provider
 without a command, so enable it only where that is acceptable.
 
+`/autolearn dry-run` lists the patterns recurring now, with whether each would
+be reviewed or why not. It makes no model call and saves nothing.
+
 New skills from any learning path use gerund names, such as `processing-pdfs`,
 following Anthropic's [skill authoring guidance](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/best-practices).
 

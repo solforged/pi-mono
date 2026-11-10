@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { alreadyReviewed, documented, recurrence, runs, segments, skillUse, summarizeRun, type PatternReview, type Recurrence, type Run } from "./autolearn.ts";
+import { alreadyReviewed, documented, recurrence, recurringPatterns, runs, similarCore, segments, skillUse, summarizeRun, type PatternReview, type Recurrence, type Run } from "./autolearn.ts";
 import { evidenceFromBranch, inventorySkills, LEARNING_SYSTEM, parseCandidates, readDrafts, stageCandidate, type Draft } from "./learning.ts";
 import { completeRole } from "./requests.ts";
 import { configSnapshot, resolveRole, type Config, type ConfigSource } from "./roles.ts";
@@ -38,7 +38,7 @@ export const enabledFor = (config: Config, state: AutoState) => state.enabled ??
 
 type Open = (path: string) => { getSessionId(): string; getHeader(): { timestamp?: string } | null; getBranch(): any[] };
 /** Project session access; Pi's SessionManager in production. */
-export interface Sessions { list(cwd: string): Promise<Array<{ path: string }>>; open: Open }
+export interface Sessions { list(cwd: string): Promise<Array<{ path: string; name?: string; firstMessage?: string }>>; open: Open }
 /**
  * Refresh the run index from changed project sessions. Returns the other
  * sessions' runs, keyed by file, and how many sessions were indexed in all.
@@ -210,14 +210,43 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
     return await stageCandidate(root, candidate, inventory, "autolearn");
   }
 
+  // What would be reviewed the next time each pattern recurs. Reads sessions
+  // and state only: no model call, and the index is not saved.
+  async function dryRun(ctx: ExtensionCommandContext, config: Config, root: string): Promise<string> {
+    const state = await readState(root);
+    const listed = await sessions.list(ctx.cwd);
+    const label = new Map(listed.map((item) => [item.path, (item.name || item.firstMessage || item.path.replace(/^.*\//, "")).replace(/\s+/g, " ").slice(0, 60)]));
+    const { others, sessions: population } = await indexSessions(state, listed, { entryIds: new Set() }, sessions.open);
+    const contextText = (ctx.getSystemPromptOptions().contextFiles ?? []).map((file) => file.content).join("\n");
+    const patterns = recurringPatterns(others, config.learning.auto.minSessions, population - 1);
+    const pending = (await readDrafts(root)).filter((draft) => draft.status === "pending").length;
+    const lines = [
+      `Dry run: no model call, nothing saved. ${population - 1} sessions indexed; a pattern needs ${config.learning.auto.minSessions}.`,
+      ...!enabledFor(config, state) ? ["Autolearn is off here, so nothing below runs until /autolearn on."] : [],
+      ...pending ? [`${pending} pending proposal${pending === 1 ? "" : "s"} must be resolved in /learn-review before any review runs.`] : [],
+      ...patterns.length ? [] : ["No workflow currently recurs often enough."],
+    ];
+    patterns.forEach((pattern, i) => {
+      const reviewed = state.reviews.filter((review) => similarCore(pattern.core, review.core)).at(-1);
+      const status = documented(pattern.core, contextText) ? "skip: already in project instructions"
+        : alreadyReviewed(pattern.core, pattern.sessions, state.reviews) ? `skip: reviewed ${reviewed!.at.slice(0, 10)} (${reviewed!.outcome}) until ${reviewed!.sessions * 2} sessions`
+        : "would review";
+      const steps = pattern.core.filter((feature) => !feature.includes(" → ")).map((feature) => feature.replace(/^\$ /, ""));
+      lines.push(`${i + 1}. ${status} · ${pattern.sessions} sessions · ${steps.join(", ")}`,
+        `   seen in: ${[pattern.session, ...pattern.matches.map((match) => match.session)].map((path) => `"${label.get(path) ?? path}"`).join(", ")}`);
+    });
+    return lines.join("\n");
+  }
+
   pi.registerCommand("autolearn", {
-    description: "Show automatic learning for this project; /autolearn on|off",
+    description: "Show automatic learning for this project; /autolearn on|off|dry-run",
     handler: async (args, ctx: ExtensionCommandContext) => {
       const action = args.trim();
-      if (!["", "on", "off"].includes(action)) throw new Error("Usage: /autolearn [on|off]");
+      if (!["", "on", "off", "dry-run"].includes(action)) throw new Error("Usage: /autolearn [on|off|dry-run]");
       const config = configSnapshot(source);
       const root = await scopeRoot(agentDir, config.profile, ctx.cwd);
       const role = config.roles.learn;
+      if (action === "dry-run") { report(ctx, await dryRun(ctx, config, root)); return; }
       if (action) {
         if (action === "on") resolveRole(config, "learn", ctx.modelRegistry); // Unconfigured roles fail; no fallback.
         if (action === "off") { disabled.abort(); disabled = new AbortController(); }

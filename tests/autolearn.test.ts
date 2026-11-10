@@ -28,6 +28,7 @@ test("shell commands reduce to the steps that identify a workflow", () => {
   assert.deepEqual(commandActions("timeout 30 node scripts/install.ts --check"), ["node scripts/install.ts"]);
   assert.deepEqual(commandActions("rex client:01a1beda-42d5 send-key Enter"), ["rex"]);
   assert.deepEqual(commandActions("gh pr create --fill"), ["gh pr create"]);
+  assert.deepEqual(commandActions("npm publish --access public"), ["npm publish"]);
 });
 
 test("a workflow recurs only when its distinctive steps repeat across enough sessions", () => {
@@ -144,4 +145,34 @@ test("autolearn stays idle until enabled, then stages one proposal for a recurri
   setBranch([...branch, ...release("v4")]);
   await settle();
   assert.equal(prompts.length, 1);
+});
+
+test("a dry run lists recurring patterns and why each would or would not run, without saving", async (t) => {
+  const dir = await temporary(t);
+  const history = new Map<string, any[]>();
+  for (const [i, entries] of [release("v1"), release("v2"), release("v3"), chore("a")].entries()) history.set(join(dir, `${i}.jsonl`), entries);
+  for (const file of history.keys()) await writeFile(file, "x");
+  const sessions = {
+    list: async () => [...history.keys()].map((path, i) => ({ path, name: i === 0 ? "first release" : undefined, firstMessage: `release ${i}` })),
+    open: (path: string) => ({ getSessionId: () => path, getHeader: () => null, getBranch: () => history.get(path)! }),
+  };
+  const commands: Record<string, any> = {};
+  const reports: string[] = [];
+  const pi = { on() {}, registerCommand: (name: string, command: any) => { commands[name] = command; }, appendEntry() {} } as any;
+  registerAutolearn(pi, config, dir, new AbortController().signal, (_ctx, text) => reports.push(text), sessions);
+  let instructions = "";
+  const ctx = { cwd: dir, getSystemPromptOptions: () => ({ contextFiles: [{ path: "AGENTS.md", content: instructions }] }) } as any;
+
+  await commands.autolearn.handler("dry-run", ctx);
+  assert.match(reports[0], /no model call, nothing saved\. 4 sessions indexed; a pattern needs 3/);
+  assert.match(reports[0], /Autolearn is off here/);
+  assert.match(reports[0], /1\. would review · 3 sessions · .*gh release create/);
+  assert.match(reports[0], /seen in: .*"first release"/);
+  assert.doesNotMatch(reports[0], /cargo/);
+  const root = await scopeRoot(dir, config.profile, dir);
+  assert.deepEqual((await readState(root)).files, {});
+
+  instructions = "Run mise run test, then release with git tag, gh release create, npm publish and gh release view.";
+  await commands.autolearn.handler("dry-run", ctx);
+  assert.match(reports[1], /skip: already in project instructions/);
 });
