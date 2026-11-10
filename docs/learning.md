@@ -40,8 +40,11 @@ half the project's sessions. The review runs only when:
 - the pattern was not already reviewed, or has since recurred in twice as many
   sessions; no proposal is pending; and no other review is running.
 
-The review sees one run per session and is asked to prefer nothing, then
-`automate` (deterministic tooling such as a script or task), then a skill
+The review sees one run per session, managed skills in full, and other loaded
+skills by name and description only, since it can change only managed skills.
+If managed skills alone exceed `learning.maxInputChars`, it warns and leaves the
+pattern unreviewed, so raising the limit lets it run. It is asked to prefer
+nothing, then `automate` (deterministic tooling such as a script or task), then a skill
 update, and only then a new skill. New skills are refused once `maxSkills`
 (12) managed skills exist. A proposal raises one notification. In
 `/learn-review`, an `automate` proposal can be handed to the agent to build

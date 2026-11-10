@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { alreadyReviewed, documented, recurrence, recurringPatterns, runs, similarCore, segments, skillUse, summarizeRun, type PatternReview, type Recurrence, type Run } from "./autolearn.ts";
-import { evidenceFromBranch, inventorySkills, LEARNING_SYSTEM, parseCandidates, readDrafts, stageCandidate, type Draft } from "./learning.ts";
+import { evidenceFromBranch, inventorySkills, LEARNING_SYSTEM, parseCandidates, readDrafts, stageCandidate, type Draft, type SkillSnapshot } from "./learning.ts";
 import { completeRole } from "./requests.ts";
 import { configSnapshot, resolveRole, type Config, type ConfigSource } from "./roles.ts";
 import { readJson, saveJson, scopeRoot, withLock } from "./state.ts";
@@ -95,7 +95,7 @@ const FOCUS = `A deterministic detector, not a person, flagged this workflow bec
 export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentDir: string, lifetime: AbortSignal, report: (ctx: ExtensionContext, text: string) => void, sessions: Sessions) {
   const child = !!(process.env.PI_REX_CHILD || process.env.PI_WORKFLOW_CHILD_CONFIG);
   let instructions = "";
-  let loadedSkills: Array<{ name: string; filePath: string }> = [];
+  let loadedSkills: Array<{ name: string; filePath: string; description?: string }> = [];
   let session = new AbortController();
   let disabled = new AbortController(); // Aborted by /autolearn off.
   let running = false;
@@ -111,7 +111,7 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
   pi.on("session_shutdown", () => { session.abort(); });
   pi.on("before_agent_start", (event) => {
     instructions = (event.systemPromptOptions.contextFiles ?? []).map((file: { content: string }) => file.content).join("\n");
-    loadedSkills = (event.systemPromptOptions.skills ?? []).map((skill: { name: string; filePath: string }) => ({ name: skill.name, filePath: skill.filePath }));
+    loadedSkills = (event.systemPromptOptions.skills ?? []).map((skill: { name: string; filePath: string; description?: string }) => ({ name: skill.name, filePath: skill.filePath, description: skill.description }));
   });
 
   // Runs once the agent is idle, off the conversation: no prompt, tool or
@@ -163,11 +163,14 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
       resolveRole(config, "learn", ctx.modelRegistry);
       // Another process may have turned it off while this one was indexing.
       if (!enabledFor(configSnapshot(source), await readState(root))) return;
+      // A budget problem is configuration, not the pattern's outcome: fail
+      // before recording, so raising the limit lets the pattern be reviewed.
+      const skills = await skillInput(config, root);
       signal.throwIfAborted();
       // Record failures too, so a bad answer is not retried on every later task.
       let staged: Draft | undefined, outcome = "nothing", failure: unknown;
       try {
-        staged = await review(ctx, config, root, task, found, usedSkills, signal);
+        staged = await review(ctx, config, root, task, found, usedSkills, skills, signal);
         if (staged) outcome = `${staged.action} ${staged.name}`;
       } catch (error) {
         if (signal.aborted) throw error;
@@ -183,13 +186,22 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
     });
   }
 
-  async function review(ctx: ExtensionContext, config: Config, root: string, task: any[], found: Recurrence, usedSkills: string[], signal: AbortSignal): Promise<Draft | undefined> {
+  // Only managed skills can be updated or deleted, so only they are sent in
+  // full. Other loaded skills are read-only, and autolearn drops notes, so
+  // their name and description (what Pi routes on) suffice to avoid duplicates.
+  async function skillInput(config: Config, root: string): Promise<{ inventory: SkillSnapshot[]; text: string; budget: number }> {
     const inventory = await inventorySkills(root, loadedSkills);
+    const describe = new Map(loadedSkills.map((skill) => [skill.name, skill.description ?? ""]));
+    const text = JSON.stringify(inventory.map(({ name, content, managed }) => managed ? { name, managed, content } : { name, managed, description: describe.get(name) ?? "" }));
+    const budget = config.learning.maxInputChars - text.length - LEARNING_SYSTEM.length - FOCUS.length - 2000;
+    if (budget < 4000) throw new Error("Managed skills exceed the learning input budget; raise learning.maxInputChars");
+    return { inventory, text, budget };
+  }
+
+  async function review(ctx: ExtensionContext, config: Config, root: string, task: any[], found: Recurrence, usedSkills: string[], skills: { inventory: SkillSnapshot[]; text: string; budget: number }, signal: AbortSignal): Promise<Draft | undefined> {
+    const { inventory, text: inventoryText, budget } = skills;
     const managed = inventory.filter((skill) => skill.managed).length;
     const atLimit = managed >= config.learning.auto.maxSkills;
-    const inventoryText = JSON.stringify(inventory.map(({ name, content, managed }) => ({ name, managed, content })));
-    const budget = config.learning.maxInputChars - inventoryText.length - LEARNING_SYSTEM.length - FOCUS.length - 2000;
-    if (budget < 4000) throw new Error("Full skill inventory exceeds the learning input budget; raise learning.maxInputChars");
     const share = Math.floor(budget / (found.matches.length + 1));
     const parts = [evidenceText(task, ctx.sessionManager.getSessionId(), share)];
     for (const match of found.matches) {
@@ -202,7 +214,7 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
       usedSkills.length ? `The latest run consulted these skills and still hit errors: ${usedSkills.join(", ")}.` : "",
     ].filter(Boolean).join("\n");
     const result = await completeRole(ctx, config, "learn", LEARNING_SYSTEM,
-      `Candidate limit: 1\nRecurring steps (in ${found.sessions} sessions): ${found.core.join(" | ")}\nFocus: ${focus}\nFully read skill inventory:\n${inventoryText}\nEvidence, one run per session:\n${parts.map((part) => part.text).join("\n")}`, signal);
+      `Candidate limit: 1\nRecurring steps (in ${found.sessions} sessions): ${found.core.join(" | ")}\nFocus: ${focus}\nSkill inventory (managed skills in full; others read-only, by description):\n${inventoryText}\nEvidence, one run per session:\n${parts.map((part) => part.text).join("\n")}`, signal);
     signal.throwIfAborted();
     pi.appendEntry("workflow-usage", { role: "learn", ...result, text: undefined });
     const candidate = parseCandidates(result.text, new Set(parts.flatMap((part) => part.refs)), 1)[0];

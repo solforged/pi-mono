@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { utimes, writeFile } from "node:fs/promises";
+import { mkdir, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { alreadyReviewed, commandActions, documented, recurrence, runs, type Run } from "../extensions/workflows/autolearn.ts";
 import { indexSessions, readState, registerAutolearn, type AutoState } from "../extensions/workflows/autolearn-ui.ts";
@@ -119,10 +119,15 @@ test("autolearn stays idle until enabled, then stages one proposal for a recurri
     events.agent_settled({ aborted: false }, ctx);
     for (let i = 0; i < 50; i++) await new Promise((resolve) => setTimeout(resolve, 5));
   };
+  // Authored skills are read-only, so only their description is sent: a
+  // large one must not exhaust the input budget.
+  const authored = join(dir, "authored", "SKILL.md");
+  await mkdir(join(dir, "authored"));
+  await writeFile(authored, `---\nname: writing-prose\ndescription: Edits prose.\n---\n${"AUTHORED BODY ".repeat(5000)}\n`);
   registerAutolearn(pi, config, dir, new AbortController().signal, () => {}, sessions);
   events.session_start({}, ctx);
   setBranch(release("v0"));
-  events.before_agent_start({ systemPromptOptions: { contextFiles: [{ path: "AGENTS.md", content: "Run mise run test." }], skills: [] } });
+  events.before_agent_start({ systemPromptOptions: { contextFiles: [{ path: "AGENTS.md", content: "Run mise run test." }], skills: [{ name: "writing-prose", filePath: authored, description: "Edits prose." }] } });
 
   await settle();
   assert.equal(sessions.listed, 0);
@@ -134,6 +139,9 @@ test("autolearn stays idle until enabled, then stages one proposal for a recurri
   assert.equal(prompts.length, 1);
   assert.match(prompts[0], /Recurring steps \(in 3 sessions\)/);
   assert.match(prompts[0], /gh release create/);
+  assert.match(prompts[0], /"name":"writing-prose","managed":false,"description":"Edits prose\."/);
+  assert.doesNotMatch(prompts[0], /AUTHORED BODY/);
+  assert.deepEqual(notices.filter((text) => /skipped/.test(text)), []);
   const root = await scopeRoot(dir, config.profile, dir);
   const [draft] = await readDrafts(root);
   assert.equal(draft.action, "automate");
@@ -145,6 +153,37 @@ test("autolearn stays idle until enabled, then stages one proposal for a recurri
   setBranch([...branch, ...release("v4")]);
   await settle();
   assert.equal(prompts.length, 1);
+});
+
+test("an over-budget skill inventory warns without marking the pattern reviewed", async (t) => {
+  const dir = await temporary(t);
+  const history = new Map([[join(dir, "one.jsonl"), release("v1")], [join(dir, "two.jsonl"), release("v2")]]);
+  for (const file of history.keys()) await writeFile(file, "x");
+  const sessions = { list: async () => [...history.keys()].map((path) => ({ path })), open: (path: string) => ({ getSessionId: () => path, getHeader: () => null, getBranch: () => history.get(path)! }) };
+  const events: Record<string, (...args: any[]) => any> = {};
+  const commands: Record<string, any> = {};
+  const pi = { on: (event: string, fn: any) => { events[event] = fn; }, registerCommand: (name: string, command: any) => { commands[name] = command; }, appendEntry() {} } as any;
+  let calls = 0;
+  const notices: string[] = [];
+  let branch: any[] = [];
+  const ctx = {
+    hasUI: true, cwd: dir, ui: { notify: (text: string) => notices.push(text) },
+    modelRegistry: registry(async () => { calls++; return { stopReason: "stop", usage: {}, content: [{ type: "text", text: "[]" }] }; }),
+    sessionManager: { getBranch: () => branch, getLeafId: () => branch.at(-1)?.id ?? null, getSessionFile: () => join(dir, "current.jsonl"), getSessionId: () => "current" },
+  } as any;
+  const root = await scopeRoot(dir, config.profile, dir);
+  await mkdir(join(root, "skills", "huge"), { recursive: true });
+  await writeFile(join(root, "skills", "huge", "SKILL.md"), `---\nname: huge\ndescription: "Huge."\n---\n${"x".repeat(config.learning.maxInputChars)}\n`);
+  registerAutolearn(pi, config, dir, new AbortController().signal, () => {}, sessions);
+  events.session_start({}, ctx);
+  events.before_agent_start({ systemPromptOptions: { contextFiles: [], skills: [] } });
+  await commands.autolearn.handler("on", ctx);
+  branch = release("v3");
+  events.agent_settled({ aborted: false }, ctx);
+  for (let i = 0; i < 50; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(calls, 0);
+  assert.match(notices.at(-1)!, /Managed skills exceed the learning input budget/);
+  assert.deepEqual((await readState(root)).reviews, []); // Raising the limit lets this pattern be reviewed.
 });
 
 test("a dry run lists recurring patterns and why each would or would not run, without saving", async (t) => {
