@@ -157,6 +157,17 @@ test("ledger restates only answered decisions that compaction removed", () => {
   assert.equal(withLedger(messages as any[], branch.filter(e => e.type !== "compaction")), undefined);
 });
 
+test("ledger leaves system messages in place, and without an anchor goes after the leading ones", () => {
+  const branch = [result("old", "answered", "Postgres"), { type: "compaction", id: "c", summary: "SUMMARY", firstKeptEntryId: "c" }];
+  const patch = { role: "system", content: "patch" };
+  const messages = [{ role: "system", content: "head" }, { role: "compactionSummary", summary: "SUMMARY" }, patch, { role: "user", content: "next" }];
+  const out = withLedger(messages as any[], branch)!;
+  assert.deepEqual(out.map((m: any) => m.customType ?? m.role), ["system", "compactionSummary", LEDGER, "system", "user"]);
+  assert.equal(out[3], patch);
+  const orphan = withLedger([{ role: "system", content: "head" }, { role: "user", content: "next" }] as any[], branch)!;
+  assert.deepEqual(orphan.map((m: any) => m.customType ?? m.role), ["system", LEDGER, "user"]);
+});
+
 test("ledger follows a summary that snapcompact already turned into a user message", () => {
   const branch = [result("old", "answered", "Postgres"), { type: "compaction", id: "c", summary: "SUMMARY", firstKeptEntryId: "c" }];
   const messages = [{ role: "user", content: [{ type: "text", text: "SUMMARY" }, { type: "image" }] }, { role: "user", content: "next" }];

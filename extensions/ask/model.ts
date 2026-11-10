@@ -266,6 +266,8 @@ export function withLedger<T extends Message>(messages: T[], branch: Entry[]): T
   // Snapcompact may already have turned the summary into a user message.
   let at = messages.findIndex(m => m.role === "compactionSummary");
   if (at < 0) at = messages.findIndex(m => m.role === "user" && Array.isArray(m.content) && (m.content as any[])[0]?.text === compaction.summary);
+  // Without an anchor, go after the leading system messages, which must stay first.
+  if (at < 0) { const lead = messages.findIndex(m => (m.role as string) !== "system"); at = (lead < 0 ? messages.length : lead) - 1; }
   const anchor = messages[at];
   const ledger = { role: "custom", customType: LEDGER, content: ledgerText(lost), display: false, timestamp: anchor?.timestamp ?? 0 } as unknown as T;
   return [...messages.slice(0, at + 1), ledger, ...messages.slice(at + 1)];

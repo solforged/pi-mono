@@ -105,6 +105,12 @@ test("compactMessages stores frames and injectHistory attaches them for vision m
   );
   const fallback = textOnly[0] as { role: string; content: Array<{ type: string }> };
   assert.equal(fallback.content.some((block) => block.type === "image"), false);
+  // The hook sees the full transcript; system messages must pass through untouched and in place.
+  const head = { role: "system", timestamp: 0 }, patch = { role: "system", timestamp: 2 };
+  const full = injectHistory([head, { role: "compactionSummary", summary: packed.summary, timestamp: 1 }, patch], archive, true);
+  assert.deepEqual(full.map((m) => m.role), ["system", "user", "system"]);
+  assert.equal(full[0], head);
+  assert.equal(full[2], patch);
 });
 
 test("historyBlocks keep newest frames when the byte budget is tight", () => {

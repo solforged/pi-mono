@@ -80,8 +80,10 @@ export default function (pi: ExtensionAPI) {
     if (!ctx.hasUI && pi.getActiveTools().includes(TOOL)) pi.setActiveTools(pi.getActiveTools().filter(name => name !== TOOL));
   });
 
-  // Restate answered questions that compaction removed from context.
-  pi.on("context", (event, ctx) => {
+  // Restate answered questions that compaction removed from context. A changed
+  // list from a context handler makes Pi fold every system message into the
+  // head, so later tool and prompt patches would rewrite the cached prefix.
+  pi.on("context_with_system", (event, ctx) => {
     const messages = withLedger(event.messages as any[], ctx.sessionManager.getBranch() as any[]);
     return messages ? { messages } : undefined;
   });

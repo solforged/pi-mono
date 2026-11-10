@@ -74,7 +74,10 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("context", async (event, ctx) => {
+  // Not a context handler: its changed list would make Pi fold every system
+  // message into the head, so later tool and prompt patches would rewrite the
+  // cached prefix and drop earlier thinking.
+  pi.on("context_with_system", async (event, ctx) => {
     const archive = archiveFrom(ctx);
     if (!archive) return;
     return { messages: injectHistory(event.messages, archive, isVision(ctx.model)) };
