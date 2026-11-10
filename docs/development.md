@@ -30,7 +30,8 @@ node --test computer/tests/*.test.mjs
 
 The suites make no model calls. `mise run profile` and `mise run faults` are
 the offline [measuring](measuring.md) tools; the second runs the installed Pi
-against a scripted provider. `mise run sandbox:smoke` is a separate live
+against a scripted provider, as does `mise run compaction:smoke` for
+[compaction timing](context.md#compaction-summaries). `mise run sandbox:smoke` is a separate live
 check of the [sandbox](sandbox.md) that needs Apple container services. Git hooks are isolated only in throwaway test
 repositories; production hooks remain active. `tests/git-env.ts` clears
 `GIT_DIR` and the other variables that would point those repositories at

@@ -6,6 +6,7 @@ import {
   injectHistory,
   isVision,
   previousSnapcompact,
+  usesSnapcompact,
   type Archive,
 } from "./compact.ts";
 
@@ -35,7 +36,7 @@ export default function (pi: ExtensionAPI) {
       const lines = [
         `Session: ${model ? `${model.provider}/${model.id}` : "none"}`,
         `Vision: ${vision ? "yes" : "no"}`,
-        `Auto: ${vision ? "snapcompact on compact" : "default LLM summary"}`,
+        `Auto: ${usesSnapcompact(model) ? "snapcompact on compact" : "LLM summary"}`,
         archive
           ? `Last archive: ${archive.frames.length} frames, ${archive.totalChars.toLocaleString()} chars${archive.omittedFrames ? `, ${archive.omittedFrames} older pages not imaged` : ""}${archive.truncatedChars ? `, dropped ${archive.truncatedChars.toLocaleString()}` : ""}`
           : "Last archive: none",
@@ -46,7 +47,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_before_compact", async (event, ctx) => {
     if (event.customInstructions?.trim()) return;
-    if (!isVision(ctx.model)) return;
+    if (!usesSnapcompact(ctx.model)) return;
     const { preparation, branchEntries, signal } = event;
     if (!preparation.firstKeptEntryId) return;
     signal.throwIfAborted();

@@ -1,13 +1,43 @@
 # Context management
 
+## Compaction summaries
+
+Pi's default compaction asks the current model to summarize discarded history
+at the session's thinking level, and the run waits for it. The `compaction`
+extension writes that summary instead:
+
+- **At low thinking.** Summaries extract rather than reason, so they use `low`,
+  or the session's level when that is lower (`SUMMARY_THINKING` in
+  `extensions/compaction/plan.ts`).
+- **In the background.** Once a completed turn brings the context within
+  `clamp(threshold × 12.5%, 8,192, 32,000)` tokens of the threshold, it starts
+  summarizing a snapshot of the branch while the run continues, as oh-my-pi's
+  async compaction does. When Pi compacts, the prepared summary commits at
+  once, or Pi waits for the one under way. Turns added since the snapshot stay
+  verbatim after it. The status line shows `summarizing`, then `summary ready`.
+
+The threshold is Pi's window minus reserve, or compact-ratio's share when that
+is lower. A prepared summary is discarded when another compaction ran, its
+history left the branch, summarized entries were edited, or the context would
+stay above 80% of the threshold; a much larger context replans it. One failed
+attempt is not retried before the next compaction. Every other case, including
+`/compact` with instructions, summarizes Pi's own preparation at low thinking;
+if that fails, Pi's default runs with a warning. Virtual models stay with Pi.
+A background summary is paid for when it starts, so a replanned one, or one
+from a session abandoned inside the band, is wasted.
+
+`mise run compaction:smoke` runs the installed Pi against a scripted slow agent
+and summarizer, with and without the extension, and reports how long each
+compaction blocked the run.
+
 ## Snapcompact
 
-Pi's default compaction asks the current model to summarize discarded history.
-For vision-capable models this extension instead archives that history as dense
-PNG frames of 8x13 pixel text, the same idea as oh-my-pi's snapcompact,
-implemented with Node built-ins and a vendored public-domain font. Text-only
-models keep the default LLM summary. `/compact` with extra instructions also
-keeps the default summarizer.
+For vision-capable models this extension instead archives discarded history as
+dense PNG frames of 8x13 pixel text, the same idea as oh-my-pi's snapcompact,
+implemented with Node built-ins and a vendored public-domain font. OpenAI
+models (`TEXT_SUMMARY_PROVIDERS`) and text-only models get a text summary from
+the compaction extension, which builds on an earlier archive's transcript.
+`/compact` with extra instructions also uses a text summary.
 
 `/snapcompact` shows whether this model will use it and the size of the last
 archive on this branch. Frames are stored on the compaction entry and

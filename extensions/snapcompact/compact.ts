@@ -53,6 +53,22 @@ export function isVision(model?: { input?: string[] } | null) {
   return Array.isArray(model?.input) && model.input.includes("image");
 }
 
+// Providers whose models compact with a text summary even when they read images.
+// The compaction extension then prepares that summary in the background.
+export const TEXT_SUMMARY_PROVIDERS = new Set(["openai", "openai-codex"]);
+
+/** Whether automatic compaction archives this model's history as images. */
+export function usesSnapcompact(model?: { input?: string[]; provider?: string } | null) {
+  return isVision(model) && !TEXT_SUMMARY_PROVIDERS.has(model?.provider ?? "");
+}
+
+/** The archived transcript as plain text, for a later text summary to build on. */
+export function archiveText(details: unknown): string | undefined {
+  const archive = getArchive(details);
+  const text = archive?.text ?? [archive?.textHead, archive?.textTail].filter(Boolean).join(NEWLINE_GLYPH);
+  return text ? toPlain(text) : undefined;
+}
+
 export function resolveShape(model?: { id?: string; provider?: string; api?: string } | null): Shape {
   const id = `${model?.id ?? ""} ${model?.provider ?? ""} ${model?.api ?? ""}`;
   if (/claude.*(fable|mythos)|claude-?opus-?4[.-][7-9]/i.test(id)) return { cellWidth: 11, cellHeight: 16, frameSize: 1932 };
