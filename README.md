@@ -32,6 +32,7 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Model roles](docs/roles.md): profiles, `/modelpreset` lineups, local overrides, and the role editor.
 - [Workflows](docs/workflows.md): commands, naming, commits, and private state.
 - [Subagents](docs/subagents.md): delegation, retained worktrees, sandboxing, and cancellation.
+- [Worktree sessions](docs/worktree.md): non-trivial work moves the session to its own worktree and branch; `/wt` lands, returns and resumes.
 - [Ask](docs/ask.md): multiple-choice questions for the user, kept through compaction.
 - [Rex prototype](docs/rex.md): named asynchronous children in a live deck and Agents window.
 - [Learning](docs/learning.md): session mining, skill drafts, and approval.
