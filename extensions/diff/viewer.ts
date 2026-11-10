@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, realpathSync, rmSync, watch, writeFileSync, ty
 import { isAbsolute, join, relative } from "node:path";
 import { parseArgs } from "node:util";
 import { changedHunks, collect, SOURCES, type FileDiff, type Snapshot, type Source } from "./git.ts";
-import { body, DEFAULT_PALETTE, layout, type Layout, type Palette, type View } from "./render.ts";
+import { DEFAULT_PALETTE, fileBody, layout, maxScroll, sameTarget, type Layout, type Palette, type Target, type View } from "./render.ts";
 import { loadHighlighter } from "./syntax.ts";
 import { paint } from "./text.ts";
 
@@ -50,11 +50,12 @@ function draw(full = false) {
   out.write(frame);
 }
 
+const RESTORE = "\x1b[0m\x1b]22;default\x1b\\\x1b[?1004l\x1b[?1003l\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l";
 let closing = false;
 function quit(code = 0) {
   if (closing) return;
   closing = true;
-  out.write("\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l");
+  out.write(RESTORE);
   try { if (readFileSync(pidFile, "utf8").trim() === String(process.pid)) rmSync(pidFile); } catch {}
   process.exit(code);
 }
@@ -63,13 +64,12 @@ function quit(code = 0) {
 
 const files = () => view.snapshot?.files ?? [];
 const selectedFile = (): FileDiff | undefined => files()[view.selected];
-const total = () => current?.body.total ?? 0;
 const page = () => Math.max(1, current?.body.height ?? 10);
 
 function clampScroll() {
   const file = selectedFile();
-  const rows = file ? body(file, view.columns, view.wrap, palette, view.highlighter).rows.length : 0;
-  view.scroll = Math.max(0, Math.min(view.scroll, rows - Math.max(1, page() - 2)));
+  const rows = file ? fileBody(file, view).rows.length : 0;
+  view.scroll = Math.max(0, Math.min(view.scroll, maxScroll(rows, page())));
 }
 
 function scrollBy(delta: number) {
@@ -77,21 +77,31 @@ function scrollBy(delta: number) {
   clampScroll();
 }
 
+/** Where each file was scrolled to, so returning to it picks up there. */
+const positions = new Map<string, number>();
+
 function select(index: number) {
   const count = files().length;
   if (!count) return;
+  const from = selectedFile();
+  if (from) positions.set(from.path, view.scroll);
   view.selected = (index + count) % count;
-  view.scroll = 0;
+  view.scroll = positions.get(selectedFile()!.path) ?? 0;
+  clampScroll();
 }
 
+/** Moves to the next or previous change, on into the next or previous file. */
 function hunk(direction: 1 | -1) {
   const file = selectedFile();
   if (!file) return;
-  const starts = body(file, view.columns, view.wrap, palette, view.highlighter).hunks;
-  const target = direction > 0 ? starts.find((row) => row > view.scroll) : starts.findLast((row) => row < view.scroll);
-  if (target !== undefined) view.scroll = target;
-  else if (direction > 0) select(view.selected + 1);
-  else if (view.selected > 0) { select(view.selected - 1); view.scroll = Number.MAX_SAFE_INTEGER; }
+  const { rows, hunks: starts } = fileBody(file, view);
+  const limit = maxScroll(rows.length, page());
+  // The top row sits on a hunk's separator or just above its first line.
+  const target = direction > 0 ? starts.find((row) => row > view.scroll + 1) : starts.findLast((row) => row < view.scroll);
+  // Short files show every change at once, so a step goes straight to the next file.
+  if (target !== undefined && (direction < 0 ? limit > 0 : Math.min(target, limit) > view.scroll)) view.scroll = target;
+  else if (direction > 0) { select(view.selected + 1); view.scroll = 0; }
+  else { select(view.selected - 1); view.scroll = fileBody(selectedFile()!, view).hunks.at(-1) ?? 0; }
   clampScroll();
 }
 
@@ -103,7 +113,7 @@ function focus(path: string, before?: FileDiff) {
   if (index !== view.selected || !before) view.scroll = 0;
   view.selected = index;
   const changed = changedHunks(before, file);
-  if (changed.length) view.scroll = Math.max(0, body(file, view.columns, view.wrap, palette, view.highlighter).hunks[changed[0]] - 1);
+  if (changed.length) view.scroll = Math.max(0, fileBody(file, view).hunks[changed[0]] - 1);
   clampScroll();
 }
 
@@ -211,8 +221,9 @@ function key(name: string) {
     case "G": case "end": manual(() => { view.scroll = Number.MAX_SAFE_INTEGER; clampScroll(); }); break;
     case "]": case "tab": case "J": case "right": case "l": manual(() => select(view.selected + 1)); break;
     case "[": case "shift-tab": case "K": case "left": case "h": manual(() => select(view.selected - 1)); break;
-    case "n": manual(() => hunk(1)); break;
-    case "p": case "N": manual(() => hunk(-1)); break;
+    case "n": case "shift-down": manual(() => hunk(1)); break;
+    case "p": case "N": case "shift-up": manual(() => hunk(-1)); break;
+    case "blur": pointAt(undefined); return;
     case "w": view.wrap = !view.wrap; view.scroll = 0; break;
     case "f":
       view.follow = !view.follow;
@@ -235,28 +246,72 @@ function cycleSource() {
   void refresh();
 }
 
+/** What is under a cell, by 0-based column and row. */
+function hit(x: number, y: number): Target | undefined {
+  if (!current || view.help) return undefined;
+  const { list, source, keys, scrollbar } = current;
+  if (y === source.row && x >= source.from && view.snapshot) return { area: "source" };
+  if (y >= list.top && y < list.top + list.height) {
+    const index = list.first + (y - list.top);
+    const hint = files().length > list.height && y === list.top + list.height - 1;
+    return index < files().length && !hint ? { area: "file", index } : undefined;
+  }
+  if (keys && y === keys.row) {
+    const item = keys.items.find((candidate) => x >= candidate.from && x < candidate.to);
+    return item && { area: "key", key: item.key };
+  }
+  if (scrollbar && x === scrollbar.column && y >= scrollbar.top && y < scrollbar.top + scrollbar.height) return { area: "scrollbar" };
+  return undefined;
+}
+
+/** Highlights what the pointer is over, and shows a hand where a click does something. */
+function pointAt(target: Target | undefined) {
+  if (sameTarget(target, view.hover)) return;
+  const was = view.hover !== undefined;
+  view.hover = target;
+  if (was !== (target !== undefined)) out.write(`\x1b]22;${target ? "pointer" : "default"}\x1b\\`);
+  draw();
+}
+
+let dragging = false;
+function scrollTo(y: number) {
+  const bar = current?.scrollbar;
+  if (!bar) return;
+  const share = Math.min(1, Math.max(0, (y - bar.top) / Math.max(1, bar.height - 1)));
+  manual(() => { view.scroll = Math.round(share * maxScroll(current!.body.total, bar.height)); clampScroll(); });
+  draw();
+}
+
 function mouse(button: number, column: number, row: number, press: boolean) {
-  if (!current || !press) return;
-  const y = row - 1;
+  if (!current) return;
+  const x = column - 1, y = row - 1;
+  const motion = (button & 32) !== 0, code = button & ~32 & ~28; // Ignore shift, alt and ctrl.
+  if (motion) {
+    if (dragging && code === 0) scrollTo(y);
+    else pointAt(hit(x, y));
+    return;
+  }
+  if (!press) { dragging = false; return; }
   const inList = y >= current.list.top && y < current.list.top + current.list.height;
-  if (button === 64 || button === 65) {
-    const delta = button === 64 ? -3 : 3;
+  if (code === 64 || code === 65) {
+    const delta = code === 64 ? -3 : 3;
     if (inList) manual(() => select(view.selected + Math.sign(delta)));
     else manual(() => scrollBy(delta));
-  } else if (button === 0) {
-    if (y === current.source.row && column - 1 >= current.source.from) { cycleSource(); return; }
-    if (inList) {
-      const index = current.list.first + (y - current.list.top);
-      if (index < files().length && (y < current.list.top + current.list.height - 1 || files().length <= current.list.height)) manual(() => select(index));
-    } else return;
-  } else return;
-  draw();
+    draw();
+    return;
+  }
+  if (code !== 0) return;
+  const target = hit(x, y);
+  if (target?.area === "source") cycleSource();
+  else if (target?.area === "key") key(target.key);
+  else if (target?.area === "scrollbar") { dragging = true; scrollTo(y); }
+  else if (target?.area === "file") { manual(() => select(target.index)); draw(); }
 }
 
 const KEYS: Record<string, string> = {
   "\x1b[A": "up", "\x1b[B": "down", "\x1b[C": "right", "\x1b[D": "left", "\x1bOA": "up", "\x1bOB": "down",
   "\x1bOC": "right", "\x1bOD": "left", "\x1b[5~": "pageup", "\x1b[6~": "pagedown", "\x1b[H": "home", "\x1b[F": "end",
-  "\x1b[1~": "home", "\x1b[4~": "end", "\x1bOH": "home", "\x1bOF": "end", "\x1b[Z": "shift-tab", "\t": "tab",
+  "\x1b[1;2A": "shift-up", "\x1b[1;2B": "shift-down", "\x1b[a": "shift-up", "\x1b[b": "shift-down", "\x1b[O": "blur", "\x1b[1~": "home", "\x1b[4~": "end", "\x1bOH": "home", "\x1bOF": "end", "\x1b[Z": "shift-tab", "\t": "tab",
   "\x03": "ctrl-c", "\x04": "ctrl-d", "\x15": "ctrl-u", "\x06": "ctrl-f", "\x02": "ctrl-b", "\x05": "ctrl-e", "\x19": "ctrl-y",
 };
 
@@ -291,7 +346,7 @@ writeFileSync(pidFile, String(process.pid), { mode: 0o600 });
 process.title = "pi-diff";
 for (const signal of ["SIGTERM", "SIGHUP", "SIGINT"] as const) process.on(signal, () => quit());
 process.on("uncaughtException", (error) => {
-  out.write("\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l");
+  out.write(RESTORE);
   console.error(error);
   closing = true;
   try { rmSync(pidFile); } catch {}
@@ -301,7 +356,7 @@ process.on("uncaughtException", (error) => {
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", input);
-out.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h\x1b[2J\x1b]11;?\x1b\\");
+out.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[2J\x1b]11;?\x1b\\");
 out.on("resize", () => { clampScroll(); draw(true); });
 draw(true);
 

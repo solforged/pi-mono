@@ -52,19 +52,26 @@ back on.
 
 ## Keys
 
+A bar along the bottom shows the main keys, and you can click them. Files,
+the source label and the scrollbar highlight under the pointer.
+
 | Keys | Action |
 |---|---|
-| `j` `k`, arrows, mouse wheel | Scroll |
+| `↑` `↓`, `j` `k`, mouse wheel | Scroll |
 | `d` `u`, `space` `b` | Half page, page |
 | `g` `G` | Top, bottom |
-| `]` `[`, `tab`, click a file | Next or previous file |
-| `n` `p` | Next or previous hunk |
+| `←` `→`, `]` `[`, `tab`, click a file | Previous or next file |
+| `shift+↑` `shift+↓`, `p` `n` | Previous or next change, on into the next file |
+| Click or drag the scrollbar | Jump through a long diff |
 | `s`, click the source | Switch source |
 | `w` | Toggle wrapping |
 | `f` | Follow Pi's edits |
 | `r` | Refresh |
 | `?` | Help |
 | `q` | Close |
+
+The title shows which change you are on (`change 2/5`), or how many there are
+when they all fit. A file you come back to keeps its scroll position.
 
 ## How it works
 

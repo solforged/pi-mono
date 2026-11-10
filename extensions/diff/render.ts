@@ -1,7 +1,7 @@
 // Lays out the diff pane as styled rows. Pure: the viewer owns terminal I/O.
 import type { DiffLine, FileDiff, Hunk, Snapshot } from "./git.ts";
 import type { Highlighter, Piece, Token } from "./syntax.ts";
-import { luminance, mix, sanitize, truncate, truncateStart, width, wrapSpans, type Row, type Span, type Style } from "./text.ts";
+import { clipSpans, luminance, mix, sanitize, truncate, truncateStart, width, wrapSpans, type Row, type Span, type Style } from "./text.ts";
 
 export interface Palette {
   text: string; muted: string; dim: string; accent: string; border: string;
@@ -36,7 +36,12 @@ export interface View {
   rows: number;
   palette: Palette;
   highlighter?: Highlighter;
+  /** What the mouse pointer is over. */
+  hover?: Target;
 }
+
+/** Something on screen that reacts to the mouse. */
+export type Target = { area: "file"; index: number } | { area: "source" } | { area: "key"; key: string } | { area: "scrollbar" };
 
 /** Screen areas the viewer needs for mouse input and scrolling. */
 export interface Layout {
@@ -44,6 +49,28 @@ export interface Layout {
   list: { top: number; height: number; first: number };
   body: { top: number; height: number; total: number };
   source: { row: number; from: number };
+  /** Clickable keys in the bottom bar, by column range [from, to). */
+  keys?: { row: number; items: Array<{ from: number; to: number; key: string }> };
+  scrollbar?: { column: number; top: number; height: number };
+}
+
+export const sameTarget = (a?: Target, b?: Target) => JSON.stringify(a) === JSON.stringify(b);
+
+/** The farthest the body scrolls: its last rows can rise to near the top. */
+export const maxScroll = (total: number, height: number) => Math.max(0, total - Math.max(1, height - 2));
+
+/** Diff rows for a file as the pane shows them, one column narrower for the scrollbar. */
+export function fileBody(file: FileDiff, view: View): Body {
+  return body(file, Math.max(1, view.columns - 1), view.wrap, view.palette, view.highlighter);
+}
+
+/**
+ * Which hunk is current, 1-based: the one at the top of the body, or once
+ * scrolled to the end, the last one in view.
+ */
+export function hunkAt(starts: number[], scroll: number, total: number, height: number): number {
+  const line = scroll >= maxScroll(total, height) ? scroll + height - 1 : scroll + 1;
+  return Math.max(1, starts.filter((start) => start <= line).length);
 }
 
 export interface Body { rows: Row[]; hunks: number[] }
@@ -241,8 +268,8 @@ function split(left: Span[], right: Span[], columns: number, fill?: string): Row
   return { spans: [...kept, { text: " ".repeat(gap), style: fill ? { bg: fill } : undefined }, ...right], fill };
 }
 
-function fileRow(file: FileDiff, selected: boolean, columns: number, p: Palette): Row {
-  const bg = selected ? p.selectedBg : undefined;
+function fileRow(file: FileDiff, selected: boolean, hovered: boolean, columns: number, p: Palette): Row {
+  const bg = selected ? p.selectedBg : hovered ? mix(p.selectedBg, p.bg, 0.55) : undefined;
   const [mark, color] = STATUS[file.status];
   const right = [...counts(file, p, bg), { text: " ", style: { bg } }];
   const room = Math.max(4, columns - 4 - spanWidth(right));
@@ -256,10 +283,53 @@ function fileRow(file: FileDiff, selected: boolean, columns: number, p: Palette)
 }
 
 const HELP: Array<[string, string]> = [
-  ["j k  ↑ ↓", "scroll"], ["d u  space", "half page / page"], ["g G", "top / bottom"],
-  ["] [  tab", "next / previous file"], ["n p", "next / previous hunk"], ["click, wheel", "select, scroll"],
+  ["↑ ↓  j k", "scroll"], ["d u  space", "half page / page"], ["g G", "top / bottom"],
+  ["← →  ] [  tab", "previous / next file"], ["⇧↑ ⇧↓  p n", "previous / next change, across files"],
+  ["click", "select a file, press a key below"], ["wheel, drag bar", "scroll"],
   ["s", "switch source"], ["w", "toggle wrap"], ["f", "follow Pi's edits"], ["r", "refresh"], ["q", "close the pane"],
 ];
+
+/** The bottom bar: clickable keys, then a label. Items that do not fit are dropped from the end. */
+const BAR: Array<{ keys: Array<[string, string]>; label: string }> = [
+  { keys: [["←", "left"], ["→", "right"]], label: "file" },
+  { keys: [["⇧↑", "shift-up"], ["⇧↓", "shift-down"]], label: "change" },
+  { keys: [["s", "s"]], label: "source" },
+  { keys: [["f", "f"]], label: "follow" },
+  { keys: [["?", "?"]], label: "help" },
+];
+
+function keyBar(view: View, row: number): { row: Row; items: Array<{ from: number; to: number; key: string }> } {
+  const p = view.palette;
+  const spans: Span[] = [{ text: " " }];
+  const items: Array<{ from: number; to: number; key: string }> = [];
+  let used = 1;
+  for (const group of BAR) {
+    const label = group.label;
+    const cells = group.keys.reduce((sum, [glyph]) => sum + width(glyph) + 2, 0) + width(label) + 2;
+    if (used + cells > view.columns) break;
+    for (const [glyph, key] of group.keys) {
+      const hovered = view.hover?.area === "key" && view.hover.key === key;
+      const text = ` ${glyph} `;
+      spans.push({ text, style: { fg: hovered ? p.text : p.accent, bg: hovered ? p.selectedBg : undefined, bold: hovered } });
+      items.push({ from: used, to: used + width(text), key });
+      used += width(text);
+    }
+    const accent = group.label === "follow" && !view.follow;
+    spans.push({ text: `${label}  `, style: { fg: accent ? p.warning : p.dim } });
+    used += width(label) + 2;
+  }
+  return { row: { spans }, items };
+}
+
+/** Body rows cut to leave the last column for a scrollbar. */
+function withBar(rows: Row[], columns: number, bar: Span[] | undefined): Row[] {
+  const room = Math.max(0, columns - 1);
+  return rows.map((row, i) => {
+    const spans = clipSpans(row.spans, room);
+    const used = spans.reduce((sum, span) => sum + width(span.text), 0);
+    return { spans: [...spans, { text: " ".repeat(Math.max(0, room - used)), style: row.fill ? { bg: row.fill } : undefined }, bar?.[i] ?? { text: " ", style: row.fill ? { bg: row.fill } : undefined }] };
+  });
+}
 
 export function layout(view: View): Layout {
   const { columns, palette: p } = view;
@@ -275,12 +345,13 @@ export function layout(view: View): Layout {
   const sourceText = view.snapshot?.label ?? "";
   const right: Span[] = [
     { text: view.follow ? "● " : "○ ", style: { fg: view.follow ? p.success : p.dim } },
-    { text: `${sourceText} ▾ `, style: { fg: p.accent } },
+    { text: `${sourceText} ▾ `, style: view.hover?.area === "source" ? { fg: p.text, bg: p.selectedBg, bold: true } : { fg: p.accent } },
   ];
   rows.push(split(summary, right, columns));
   const source = { row: 0, from: columns - spanWidth(right) };
   if (height >= 30) rows.push({ spans: [] });
 
+  const hovered = (index: number) => view.hover?.area === "file" && view.hover.index === index;
   // File list, at most a third of the pane, keeping the selection visible.
   const room = height - rows.length - 3;
   const listHeight = files.length && room >= 6 ? Math.min(files.length, Math.max(3, Math.floor(height / 3))) : 0;
@@ -288,17 +359,27 @@ export function layout(view: View): Layout {
   if (listHeight && files.length > listHeight) {
     const visible = listHeight - 1; // Last row reports what is hidden.
     first = Math.min(Math.max(0, view.selected - Math.floor(visible / 2)), files.length - visible);
-    for (let i = first; i < first + visible; i++) rows.push(fileRow(files[i], i === view.selected, columns, p));
+    for (let i = first; i < first + visible; i++) rows.push(fileRow(files[i], i === view.selected, hovered(i), columns, p));
     const above = first, below = files.length - first - visible;
     const hint = [below ? `↓ ${below} more` : "", above ? `↑ ${above} above` : ""].filter(Boolean).join("  ");
     rows.push({ spans: [{ text: `   ${hint}`, style: { fg: p.dim } }] });
   } else {
-    for (let i = 0; i < listHeight; i++) rows.push(fileRow(files[i], i === view.selected, columns, p));
+    for (let i = 0; i < listHeight; i++) rows.push(fileRow(files[i], i === view.selected, hovered(i), columns, p));
   }
   const list = { top: height >= 30 ? 2 : 1, height: listHeight, first };
 
   const file = files[view.selected];
+  // Rows below the list: a rule and the title, then the body, then the key bar.
+  const showKeys = height - rows.length - 2 >= 8 && columns >= 20;
+  const full = file && !view.help && !view.error && !file.binary && file.hunks.length ? fileBody(file, view) : undefined;
   if (rows.length < height) rows.push({ spans: [{ text: "─".repeat(columns), style: { fg: p.border } }] });
+  /** The change counter, or the number of changes when they all fit. */
+  const changes = () => {
+    if (!full || full.hunks.length < 2) return "";
+    const space = Math.max(0, height - rows.length - 1 - (showKeys ? 1 : 0));
+    if (!maxScroll(full.rows.length, space)) return `${full.hunks.length} changes · `;
+    return `change ${hunkAt(full.hunks, view.scroll, full.rows.length, space)}/${full.hunks.length} · `;
+  };
   if (file && rows.length < height) {
     const notes = [
       file.oldPath ? `from ${file.oldPath}` : "",
@@ -309,11 +390,15 @@ export function layout(view: View): Layout {
       { text: " ", style: undefined },
       { text: file.path, style: { fg: p.text, bold: true } },
       { text: notes ? `  ${notes}` : "", style: { fg: p.dim } },
-    ], [{ text: `${view.selected + 1}/${files.length} `, style: { fg: p.dim } }], columns));
+    ], [
+      { text: changes(), style: { fg: p.dim } },
+      { text: `file ${view.selected + 1}/${files.length} `, style: { fg: p.dim } },
+    ], columns));
   }
 
   const top = rows.length;
-  const bodyHeight = Math.max(0, height - top);
+
+  const bodyHeight = Math.max(0, height - top - (showKeys ? 1 : 0));
   let content: Row[];
   let total = 0;
   const message = (text: string, color: string): Row[] => [{ spans: [] }, { spans: [{ text: `   ${text}`, style: { fg: color } }] }];
@@ -330,11 +415,34 @@ export function layout(view: View): Layout {
   } else if (!file.hunks.length) {
     content = message(file.notes.length || file.oldPath ? "No content changes." : "Empty file.", p.dim);
   } else {
-    const all = body(file, columns, view.wrap, p, view.highlighter).rows;
+    const all = full!.rows;
     total = all.length;
     content = all.slice(view.scroll, view.scroll + bodyHeight);
   }
+  let scrollbar: Layout["scrollbar"];
+  if (full) {
+    let bar: Span[] | undefined;
+    if (total > bodyHeight && bodyHeight >= 3) {
+      scrollbar = { column: columns - 1, top, height: bodyHeight };
+      const size = Math.max(1, Math.round(bodyHeight * bodyHeight / (total + bodyHeight - 2)));
+      const limit = maxScroll(total, bodyHeight);
+      const start = limit ? Math.round((bodyHeight - size) * Math.min(1, view.scroll / limit)) : 0;
+      const active = view.hover?.area === "scrollbar";
+      bar = Array.from({ length: bodyHeight }, (_, i) => i >= start && i < start + size
+        ? { text: "┃", style: { fg: active ? p.text : p.dim } }
+        : { text: "│", style: { fg: mix(p.border, p.bg, 0.5) } });
+    }
+    while (content.length < bodyHeight) content.push({ spans: [] });
+    content = withBar(content, columns, bar);
+  }
   rows.push(...content.slice(0, bodyHeight));
+  while (rows.length < top + bodyHeight) rows.push({ spans: [] });
+  let keys: Layout["keys"];
+  if (showKeys) {
+    const bar = keyBar(view, rows.length);
+    keys = { row: rows.length, items: bar.items };
+    rows.push(bar.row);
+  }
   while (rows.length < height) rows.push({ spans: [] });
-  return { rows: rows.slice(0, height), list, body: { top, height: bodyHeight, total }, source };
+  return { rows: rows.slice(0, height), list, body: { top, height: bodyHeight, total }, source, keys, scrollbar };
 }

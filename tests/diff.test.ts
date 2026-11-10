@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { changedHunks, collect, parseDiff, unquote } from "../extensions/diff/git.ts";
 import { bundledHighlighter, DEFAULT_SETTINGS, readPanes, readSettings, registerDiff, tick, which } from "../extensions/diff/pane.ts";
-import { body, DEFAULT_PALETTE, emphasis, layout, type View } from "../extensions/diff/render.ts";
+import { body, DEFAULT_PALETTE, emphasis, fileBody, hunkAt, layout, type View } from "../extensions/diff/render.ts";
 import { createHighlighter, loadHighlighter, piecesFromHtml, tokenFor } from "../extensions/diff/syntax.ts";
 import { paint, sanitize, width, wrapSpans } from "../extensions/diff/text.ts";
 
@@ -165,6 +165,99 @@ test("lays out the summary, a scrolling file list and the selected diff", () => 
   assert.ok(empty.some((line) => line.includes("Nothing is staged.")));
   const help = layout(view({ help: true })).rows.map((row) => plain(paint(row, 40)));
   assert.ok(help.some((line) => line.includes("follow Pi's edits")));
+});
+
+test("shows hover, a key bar, a change counter and a scrollbar", () => {
+  const files = parseDiff(SAMPLE);
+  const long = { ...files[0], hunks: [{ ...files[0].hunks[0], lines: Array.from({ length: 40 }, (_, i) => ({ kind: "+" as const, text: `line ${i}`, new: i + 1 })) }, files[0].hunks[0]] };
+  const base = view({ snapshot: { source: "uncommitted", label: "uncommitted", files: [long, files[1] ?? files[0]] }, rows: 24, columns: 60 });
+  const screen = layout(base);
+  const text = screen.rows.map((row) => plain(paint(row, 60)));
+  assert.match(text[23], /← +→ file +⇧↑ +⇧↓ change +s source +f follow +\? help/);
+  assert.ok(screen.keys && screen.keys.items.some((item) => item.key === "shift-down"));
+  assert.ok(text.some((line) => /change 1\/2 · file 1\/2 $/.test(line)));
+  assert.ok(screen.scrollbar);
+  assert.equal(screen.scrollbar.column, 59);
+  const bar = text.slice(screen.body.top, screen.body.top + screen.body.height).map((line) => line.at(-1));
+  assert.equal(bar[0], "┃");
+  assert.equal(bar.at(-1), "│");
+
+  // Scrolled to the end, the thumb sits at the bottom and the counter moves on.
+  const starts = fileBody(long, base).hunks;
+  const end = layout({ ...base, scroll: starts[1] }).rows.map((row) => plain(paint(row, 60)));
+  assert.equal(hunkAt(starts, 0, 60, 15), 1);
+  assert.equal(hunkAt(starts, starts[1] - 1, 200, 15), 2);
+  assert.equal(hunkAt(starts, 45, 60, 15), 2); // At the end, the last change in view.
+  assert.ok(end.some((line) => line.includes("change 2/2")));
+  assert.equal(end[screen.body.top + screen.body.height - 1].at(-1), "┃");
+
+  // Hovering a file row tints it, and paused following is called out.
+  const hovered = layout({ ...base, hover: { area: "file", index: 1 }, follow: false });
+  assert.notDeepEqual(hovered.rows[screen.list.top + 1], screen.rows[screen.list.top + 1]);
+  assert.notEqual(paint(hovered.rows[23], 60), paint(screen.rows[23], 60));
+});
+
+/** Replays the viewer's frames into rows of plain text. */
+function replay(output: string, rows = 24): string[] {
+  const screen = Array<string>(rows).fill("");
+  for (const match of output.matchAll(/\x1b\[(\d+);1H(.*?)(?=\x1b\[\d+;1H|\x1b\[\?2026l|$)/gs)) screen[Number(match[1]) - 1] = plain(match[2]);
+  return screen;
+}
+
+test("the viewer answers keys, hovering, clicks and scrollbar drags", async (t) => {
+  const repo = realpathSync(await mkdtemp(join(tmpdir(), "diff-viewer-")));
+  t.after(() => rm(repo, { recursive: true, force: true }));
+  const original = Array.from({ length: 80 }, (_, i) => `line ${i}`);
+  await writeFile(join(repo, "a.ts"), `${original.join("\n")}\n`);
+  git(repo, "init", "-q", "-b", "main"); git(repo, "add", "."); git(repo, "commit", "-qm", "init");
+  const changed = original.map((line, i) => (i < 20 ? `${line} early` : i === 70 ? `${line} late` : line));
+  await writeFile(join(repo, "a.ts"), `${changed.join("\n")}\n`);
+  await writeFile(join(repo, "b.ts"), "export const b = 1;\n");
+
+  const viewer = spawn(process.execPath, [join(import.meta.dirname, "../extensions/diff/viewer.ts"), "--root", repo, "--ipc", join(repo, ".git", "ipc"), "--pi-pid", String(process.pid)], { stdio: ["pipe", "pipe", "pipe"] });
+  t.after(() => viewer.kill());
+  let output = "";
+  viewer.stdout.setEncoding("utf8").on("data", (chunk) => { output += chunk; });
+  const until = async (check: (screen: string[]) => boolean, what: string) => {
+    for (let i = 0; i < 100; i++) {
+      if (check(replay(output))) return replay(output);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    assert.fail(`${what}:\n${replay(output).join("\n")}`);
+  };
+  const send = (data: string) => viewer.stdin.write(data);
+  const has = (text: string) => (screen: string[]) => screen.some((line) => line.includes(text));
+
+  let screen = await until(has("change 1/2 · file 1/2"), "first change of a.ts");
+  assert.match(screen[23], /← +→ file/);
+  send("\x1b[1;2B");
+  await until(has("change 2/2 · file 1/2"), "shift-down moves to the next change");
+  send("\x1b[1;2B");
+  await until(has("file 2/2"), "and on into the next file");
+  send("\x1b[1;2A");
+  await until(has("change 2/2 · file 1/2"), "shift-up comes back to the last change");
+
+  // Hovering b.ts asks for a hand pointer; clicking selects it.
+  screen = replay(output);
+  const row = screen.findIndex((line) => line.includes("U b.ts")) + 1;
+  send(`\x1b[<35;6;${row}M`);
+  await until(() => output.includes("\x1b]22;pointer"), "a hand over a file row");
+  send(`\x1b[<0;6;${row}M\x1b[<0;6;${row}m`);
+  await until(has("file 2/2"), "a click selects the file");
+
+  // Clicking ← in the key bar goes back; scroll position there is kept.
+  screen = replay(output);
+  send(`\x1b[<0;${screen[23].indexOf("←") + 1};24M`);
+  await until(has("change 2/2 · file 1/2"), "the ← key in the bar");
+
+  // Dragging the scrollbar to the top shows the first lines again.
+  send("\x1b[<0;80;20M\x1b[<32;80;5M");
+  await until(has("change 1/2 · file 1/2"), "dragging the scrollbar up");
+  send("\x1b[<0;80;5m\x1b[O");
+  await until(() => output.endsWith("\x1b]22;default\x1b\\") || output.includes("\x1b]22;default"), "the pointer resets when focus leaves");
+
+  send("q");
+  assert.equal(await new Promise((resolve) => viewer.on("exit", resolve)), 0);
 });
 
 function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean; reopen?: boolean; columns?: number; pid?: number } = {}) {
