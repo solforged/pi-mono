@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { ContainerCli, type RunResult } from "../extensions/sandbox/container.ts";
+import { sharedTarget, shareCargoTarget } from "../extensions/sandbox/cargo.ts";
+import { ContainerCli, runProcess, type RunResult } from "../extensions/sandbox/container.ts";
 import { commandEnv, fdArgs, GrepCollector, guestError, parseListing, rgArgs, sniffImage } from "../extensions/sandbox/guest.ts";
 import { buildPlan, containerName, promptNote, runArgs, type Probe } from "../extensions/sandbox/plan.ts";
 import { imageTag, Sandbox, withLock } from "../extensions/sandbox/sandbox.ts";
@@ -275,4 +276,36 @@ test("a sandbox kept across a session switch fits only the same plan while healt
   assert(!box.fits(livePlan(join(stateRoot, "other"))));
   box.phase = "error";
   assert(!box.fits(plan));
+});
+
+test("host bash in a linked Rust worktree builds into the main checkout's target/", async (t) => {
+  const dir = await temporary(t), main = join(dir, "main"), lane = join(dir, "lane");
+  const git = async (...args: string[]) => assert.equal((await runProcess("git", ["-C", main, ...args], { timeoutMs: 10000 })).code, 0);
+  await mkdir(main);
+  await git("init", "-q");
+  // Only this disposable repository bypasses host hooks, including post-checkout.
+  await git("config", "core.hooksPath", await temporary(t));
+  await writeFile(join(main, "Cargo.toml"), "[workspace]\n");
+  await git("add", "Cargo.toml");
+  await git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "--no-verify", "-qm", "test: created fixture");
+  await git("worktree", "add", "-q", lane);
+  await mkdir(join(lane, "src"));
+  assert.equal(sharedTarget(join(lane, "src")), join(main, "target"));
+  // The main checkout keeps its default; a lane without Cargo.toml or outside Git gets nothing.
+  assert.equal(sharedTarget(main), undefined);
+  assert.equal(sharedTarget(dir), undefined);
+  await git("worktree", "add", "-q", "--detach", join(dir, "plain"));
+  await rm(join(dir, "plain", "Cargo.toml"));
+  assert.equal(sharedTarget(join(dir, "plain")), undefined);
+  // A submodule-style .git file has no commondir.
+  await mkdir(join(dir, "sub", "modules"), { recursive: true });
+  await writeFile(join(dir, "sub", ".git"), "gitdir: modules\n");
+  await writeFile(join(dir, "sub", "Cargo.toml"), "");
+  assert.equal(sharedTarget(join(dir, "sub")), undefined);
+
+  const spawn = { command: "cargo build", cwd: lane, env: { PATH: "/bin" } };
+  assert.deepEqual(shareCargoTarget(spawn).env, { PATH: "/bin", CARGO_TARGET_DIR: join(main, "target") });
+  const own = { ...spawn, env: { CARGO_TARGET_DIR: "/tmp/isolated" } };
+  assert.equal(shareCargoTarget(own), own);
+  assert.equal(shareCargoTarget({ ...spawn, cwd: main }).env, spawn.env);
 });

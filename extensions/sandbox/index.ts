@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
+import { shareCargoTarget } from "./cargo.ts";
 import { ContainerCli, runProcess } from "./container.ts";
 import { buildPlan, promptNote, type Plan } from "./plan.ts";
 import { cacheRoot, probe } from "./probe.ts";
@@ -228,7 +229,7 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   pi.registerTool(route((cwd, s) => createReadToolDefinition(cwd, s ? { operations: readOps(s) } : undefined)));
   pi.registerTool(route((cwd, s) => createWriteToolDefinition(cwd, s ? { operations: writeOps(s) } : undefined)));
   pi.registerTool(route((cwd, s) => createEditToolDefinition(cwd, s ? { operations: editOps(s) } : undefined)));
-  pi.registerTool(route((cwd, s) => createBashToolDefinition(cwd, s ? { operations: bashOps(s) } : undefined)));
+  pi.registerTool(route((cwd, s) => createBashToolDefinition(cwd, s ? { operations: bashOps(s) } : { spawnHook: shareCargoTarget })));
   pi.registerTool(route((cwd, s) => createLsToolDefinition(cwd, s ? { operations: lsOps(s) } : undefined)));
   pi.registerTool(route((cwd, s) => createFindToolDefinition(cwd, s ? { operations: findOps(s) } : undefined)));
   const grepTool = createGrepToolDefinition(process.cwd());

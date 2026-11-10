@@ -59,6 +59,12 @@ stages with `git add`, and the model calls `git_commit`, which runs
 `git commit` on the host. Guest commits fail unless forced with
 `--no-gpg-sign`.
 
+With the sandbox off, host bash in a linked Git worktree whose root has a
+`Cargo.toml` sets `CARGO_TARGET_DIR` to the main checkout's `target/`, so
+throwaway lanes share one build instead of each copying every dependency. An
+existing `CARGO_TARGET_DIR` wins, and a command can export its own to build in
+isolation. In the guest, `target/` is the Linux build overlay instead.
+
 ## Settings
 
 Settings are read only from `~/.pi/agent/settings.json`, never from a project's
