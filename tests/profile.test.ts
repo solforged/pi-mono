@@ -82,6 +82,15 @@ test("cache rewrites are attributed to what happened between the two requests", 
   assert.equal(timeline(mainBranch(session(user(), assistant(big, [text("a")]), user(), assistant({ cacheRead: 30_050 }, [text("b")])))).drops.length, 0);
 });
 
+test("cache warming refreshes are counted apart from model calls", () => {
+  const warm = { type: "usage", kind: "cache_warm", usage: { cacheRead: 500, cost: { total: 500 * READ } } };
+  const report = profile([session(user(), assistant({ cacheWrite: 100 }, [text("done")]), warm, warm)]);
+  assert.deepEqual(report.warming, { count: 2, dollars: 1000 });
+  assert.equal(report.calls, 1);
+  assert.equal(report.total, 100 * FIRST + 1000);
+  assert.match(render(report), /Cache warming: 2 refreshes/);
+});
+
 test("bash commands are classified by the program they run", () => {
   assert.equal(program("cd /repo && FOO=1 /usr/bin/sed -n 1,20p a.ts"), "sed");
   assert.equal(program("git status --short | head"), "git");

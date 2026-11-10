@@ -183,6 +183,8 @@ export type Report = {
   tools: Record<string, { calls: number; bytes: number; errors: number; carried: number }>;
   bash: Record<string, { calls: number; bytes: number }>;
   drops: Record<string, { count: number; rewritten: number; extra: number; details: string[] }>;
+  // Pi's own prompt-cache refreshes (the cacheWarming setting), to weigh against idle rewrites.
+  warming: { count: number; dollars: number };
   validation: Record<string, number>; context: Record<string, number>; bytesPerToken: Record<string, number>;
   // Turn endings Pi leaves to the user, and the notes extensions/recover wrote about them.
   endings: { empty: number; cut: number; repeats: number; recovered: Record<string, number> };
@@ -192,7 +194,7 @@ export type Report = {
 export function profile(sessions: readonly Entry[][]): Report {
   const report: Report = {
     sessions: sessions.length, calls: 0, total: 0, auxiliary: 0, compactions: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    models: {}, stops: {}, callsPerTurn: [0, 0, 0, 0], prompts: { n: 0, median: 0, mean: 0, p90: 0, max: 0 }, tools: {}, bash: {}, drops: {}, validation: {}, context: {}, bytesPerToken: {}, endings: { empty: 0, cut: 0, repeats: 0, recovered: {} }, sizings: [],
+    models: {}, stops: {}, callsPerTurn: [0, 0, 0, 0], prompts: { n: 0, median: 0, mean: 0, p90: 0, max: 0 }, tools: {}, bash: {}, drops: {}, warming: { count: 0, dollars: 0 }, validation: {}, context: {}, bytesPerToken: {}, endings: { empty: 0, cut: 0, repeats: 0, recovered: {} }, sizings: [],
   };
   const runs: number[] = [];
   const size = (candidate: string, note: string): Sizing => { const s = { candidate, count: 0, dollars: 0, note }; report.sizings.push(s); return s; };
@@ -215,6 +217,7 @@ export function profile(sessions: readonly Entry[][]): Report {
       report.total += total;
       if (e.type === "message" && e.message?.role === "assistant") report.calls++; else report.auxiliary += total;
       if (e.type === "compaction") report.compactions++;
+      if (e.type === "usage" && e.kind === "cache_warm") { report.warming.count++; report.warming.dollars += total; }
       if (e.type === "custom_message" && e.customType === "recover") report.endings.recovered[e.details?.kind ?? "?"] = (report.endings.recovered[e.details?.kind ?? "?"] ?? 0) + 1;
       const ts = Date.parse(e.timestamp);
       if (ts) { report.first = Math.min(report.first ?? ts, ts); report.last = Math.max(report.last ?? ts, ts); }
@@ -319,6 +322,7 @@ export function render(r: Report): string {
   out.push("Cache rewrites (extra: what the miss cost beyond a hit)");
   const drops = Object.entries(r.drops).sort((a, b) => b[1].extra - a[1].extra);
   out.push(drops.length ? table([["cause", "count", "tokens", "extra"], ...drops.map(([cause, d]) => [d.details.length ? `${cause} (${d.details.slice(0, 2).join("; ")})` : cause, String(d.count), short(d.rewritten), usd(d.extra)])]) : "none", "");
+  out.push(`Cache warming: ${r.warming.count} refreshes, ${usd(r.warming.dollars)}.`, "");
   const notes = Object.entries(r.endings.recovered).map(([kind, n]) => `${kind} ${n}`).join(", ");
   out.push(`Turn endings left to the user: ${r.endings.empty} empty stops, ${r.endings.cut} cut at the output limit, ${r.endings.repeats} turns repeating a call and its result a third time or more. Recovery notes: ${notes || "none"}.`, "");
   const invalid = Object.entries(r.validation);

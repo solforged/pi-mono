@@ -24,7 +24,8 @@ directory) and reports, for the branch each session would resume:
 - **Cache rewrites**: requests that read less than half of a prompt over 20,000
   tokens from cache, by cause, with what the miss cost beyond a hit. A prompt
   or tool change normally keeps the cache, so it is shown as context for an
-  unexplained miss.
+  unexplained miss. Pi's own cache-warming refreshes are totalled beneath, to
+  weigh against the idle rewrites they prevent.
 - **Turn endings** Pi leaves to the user, the notes
   [recovery](recover.md) wrote, and argument validation failures by field.
 - **Candidate sizing**: each candidate feature replayed against the recorded
