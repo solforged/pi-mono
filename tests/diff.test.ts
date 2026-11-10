@@ -260,7 +260,7 @@ test("the viewer answers keys, hovering, clicks and scrollbar drags", async (t) 
   assert.equal(await new Promise((resolve) => viewer.on("exit", resolve)), 0);
 });
 
-function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean; reopen?: boolean; columns?: number; pid?: number } = {}) {
+function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean; reopen?: boolean; columns?: number; pid?: number; resizeError?: string } = {}) {
   const commands = new Map<string, any>(), handlers = new Map<string, Function>();
   const calls: Array<[string, string[]]> = [], notes: string[] = [];
   const state = { status: "", columns: options.columns ?? 200 };
@@ -271,6 +271,7 @@ function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean;
     if (args[0] === "rev-parse") return "/repo\n";
     if (args[0] === "status") return state.status;
     if (args[0] === "split") return JSON.stringify({ block_ids: ["block:pane"] });
+    if (args[4] === "session.resize_pane" && options.resizeError) throw new Error(options.resizeError);
     return "{}";
   };
   registerDiff(pi as any, {
@@ -313,6 +314,18 @@ test("opens the viewer in a Rex split beside Pi's own pane", async (t) => {
 
   await h.command.handler("bogus", h.ctx);
   assert.match(h.notes.at(-1)!, /Usage: \/diff/);
+});
+
+test("warns when the pane cannot be narrowed", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "diff-ipc-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const bin = await mkdtemp(join(tmpdir(), "diff-bin-"));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  for (const name of ["rex", "node"]) await writeFile(join(bin, name), "", { mode: 0o755 });
+  const h = harness({ PATH: bin, REX_SESSION: "session:s", REX_BLOCK: "block:b" }, dir, { resizeError: "not in the same window" });
+  await h.command.handler("", h.ctx);
+  assert.equal(h.splits().length, 1);
+  assert.match(h.notes.at(-1)!, /default width: not in the same window/);
 });
 
 test("closes an open viewer and sends it the files Pi edits", async (t) => {

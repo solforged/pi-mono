@@ -187,13 +187,15 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
     opened = root;
     writePane(panes, root, pid);
     // Rex splits evenly whatever --ratio says, so move the border afterwards.
-    // The pane is already open, so a failure here only leaves it wider.
+    // The pane is already open, so a failure here only leaves it wider; say so
+    // rather than leaving an even split unexplained.
     let pane: unknown;
     try { pane = JSON.parse(created).block_ids?.[0]; } catch {}
-    if (typeof pane !== "string") return;
+    const widened = (why: string) => ctx.ui.notify(`The diff pane opened at Rex's default width: ${why}`, "warning");
+    if (typeof pane !== "string") { widened("rex split returned no block ID"); return; }
     await exec(rex, ["api", "call", "--session", session, "session.resize_pane", JSON.stringify({
       session_id: session, direction: "horizontal", before_block_id: block, after_block_id: pane, ratio: Math.round((1 - SHARE) * 10_000) / 10_000,
-    })], ctx.cwd).catch(() => undefined);
+    })], ctx.cwd).catch((error: Error) => widened(error.message));
   }
 
   // Automatic opening: armed per session, with a baseline of the tree's state
