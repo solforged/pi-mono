@@ -317,7 +317,7 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "browser",
     label: "browser",
-    description: "Drive a real browser shown beside the user's Pi pane. It runs on the macOS host, but all of its traffic goes through the sandbox, so localhost is the sandbox's. Pass one agent-browser command as a list of strings: [\"open\", \"localhost:3000\"] starts the browser or navigates it; then [\"snapshot\", \"-i\"], [\"click\", \"@e3\"], [\"fill\", \"@e2\", \"text\"], [\"press\", \"Enter\"], [\"get\", \"text\", \"h1\"], [\"eval\", \"document.title\"], [\"wait\", \"--text\", \"Saved\"], [\"console\"], [\"errors\"], [\"set\", \"viewport\", \"390\", \"844\"]. [\"screenshot\"] returns the image; add a selector for one element, --full for the whole page, or a .png path to also save it in the sandbox. [\"close\"] closes the pane. Only http and https pages open; commands that touch host files or the clipboard are refused.",
+    description: "Drive a real browser shown beside the user's Pi pane. It runs on the macOS host, but all of its traffic goes through the sandbox, so localhost is the sandbox's. Pass one agent-browser command as a list of strings: [\"open\", \"localhost:3000\"] starts the browser or navigates it; then [\"snapshot\", \"-i\"], [\"click\", \"@e3\"], [\"fill\", \"@e2\", \"text\"], [\"press\", \"Enter\"], [\"get\", \"text\", \"h1\"], [\"eval\", \"document.title\"], [\"wait\", \"--text\", \"Saved\"], [\"console\"], [\"errors\"], [\"set\", \"viewport\", \"390\", \"844\"]. [\"screenshot\"] returns the image; add a selector for one element, --full for the whole page, or a .png path to also save it in the sandbox. Screenshots can show the page as it was a few actions earlier, so confirm what changed with snapshot or get before trusting one. [\"close\"] closes the pane. Only http and https pages open; commands that touch host files or the clipboard are refused.",
     promptSnippet: "Show and drive a web page in a browser beside the user, with the sandbox's network",
     promptGuidelines: [
       "Use browser, not the terminal-browser command (it is not installed in the sandbox), to view or test a web page; a dev server listening on the sandbox's localhost is reachable as localhost.",
@@ -335,7 +335,10 @@ export default function sandboxExtension(pi: ExtensionAPI) {
       if (command.kind === "close") return text(await closeBrowser().then(() => "Closed the browser pane."));
       if (command.kind === "screenshot") {
         const png = await browser().screenshot(command.selector, command.flags, signal);
-        let note = "Screenshot of the page.";
+        // terminal-browser's offscreen rendering hands DevTools captures a
+        // cached frame that can lag behind the page; no command refreshes it
+        // reliably. Its own capturePage path would fix this upstream.
+        let note = "Screenshot of the page. It can lag behind recent changes; snapshot or get shows the current state.";
         if (command.save) {
           // Written by the guest, so the path means what it means there.
           const path = resolvePath(command.save, ctx.cwd);

@@ -80,7 +80,10 @@ Pi, and the model drives it with
 `["screenshot"]`. The browser runs on the host, but all of its traffic goes
 through the guest, so a dev server listening on the guest's `127.0.0.1` opens as
 `localhost`. Screenshots come back as images; a `.png` path also saves one in
-the guest.
+the guest. They can show the page as it was a few actions earlier, even though
+the pane is current: terminal-browser hands DevTools captures a cached frame,
+and no agent-browser command refreshes it reliably. The tool tells the model to
+check the page with `snapshot` or `get` instead.
 
 It needs interactive Pi in a Rex pane and a terminal-browser build with Rex
 support (the dev channel after v0.15.3) on the host's `PATH`. Child agents never
