@@ -49,7 +49,7 @@ test("one delegation tool per session, restoring only what the switch removed", 
 test("installed Pi keeps every repo tool declaration within budget", t => {
   const env = { ...process.env };
   for (const key of ["PI_REX_CHILD", "PI_WORKFLOW_CHILD_CONFIG", "REX_SESSION", "REX_BLOCK"]) delete env[key];
-  const extensions = ["artifacts", "ask", "figure", "intercom", "rex", "sessions", "todo", "web-search", "workflows"].flatMap(name => ["-e", join(root, "extensions", name, "index.ts")]);
+  const extensions = ["artifacts", "ask", "figure", "goal", "intercom", "rex", "sessions", "todo", "web-search", "workflows"].flatMap(name => ["-e", join(root, "extensions", name, "index.ts")]);
   const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", ...extensions, "-e", join(root, "tests/fixtures/prompt-size-smoke.ts"), "-p", "/prompt-size-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
   if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
   assert.equal(check.status, 0, check.stderr || check.stdout);

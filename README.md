@@ -41,6 +41,7 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Retry](docs/retry.md): `/retry` and F5 rerun a failed or aborted turn.
 - [Recovery](docs/recover.md): empty, cut-off and repeating turns continue without you.
 - [Todo list](docs/todo.md): a per-session list with stop reminders and delegated context.
+- [Goal](docs/goal.md): `/goal` keeps the agent working toward one objective until it is done, blocked or out of budget.
 - [Figures](docs/figure.md): themed SVG mockups and diagrams shown inline on macOS.
 - [Intercom](docs/intercom.md): notes between separate Pi sessions for coordinating work.
 - [Herdr](docs/herdr.md): Desktop support and the separate TUI title bridge.

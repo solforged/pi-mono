@@ -69,6 +69,9 @@ pi --offline --no-extensions --no-skills --no-context-files \
   -e ./extensions/todo/index.ts -p '/todos list'
 pi --offline --no-extensions --no-skills --no-context-files \
   --no-prompt-templates --no-session \
+  -e ./extensions/goal/index.ts -p '/goal'
+pi --offline --no-extensions --no-skills --no-context-files \
+  --no-prompt-templates --no-session \
   -e ./extensions/intercom/index.ts -p '/intercom list'
 ```
 
