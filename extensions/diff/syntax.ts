@@ -16,6 +16,8 @@ interface Hljs {
 
 export interface Highlighter {
   language(path: string): string | undefined;
+  /** A code fence's language, by highlight.js name or alias or by file extension. */
+  named(name: string): string | undefined;
   /** One array of pieces per input line; joined, each array equals its line. */
   highlight(lines: string[], language: string): Piece[][];
 }
@@ -92,6 +94,12 @@ export function createHighlighter(hljs: Hljs): Highlighter {
       const name = basename(path).toLowerCase();
       const language = NAMES[name] ?? EXTENSIONS[extname(name).slice(1)];
       return language && hljs.getLanguage(language) ? language : undefined;
+    },
+    named(name) {
+      const lower = name.toLowerCase();
+      if (!/^[\w+#.-]+$/.test(lower)) return undefined;
+      const language = EXTENSIONS[lower] ?? lower;
+      return hljs.getLanguage(language) ? language : undefined;
     },
     highlight(lines, language) {
       const code = lines.join("\n");

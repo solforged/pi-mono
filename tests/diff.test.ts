@@ -515,8 +515,8 @@ test("reads diff settings with defaults", async (t) => {
   const agent = await mkdtemp(join(tmpdir(), "diff-agent-"));
   t.after(() => rm(agent, { recursive: true, force: true }));
   assert.deepEqual(readSettings(agent), DEFAULT_SETTINGS);
-  await writeFile(join(agent, "settings.json"), JSON.stringify({ diff: { autoOpen: false, minColumns: 180 } }));
-  assert.deepEqual(readSettings(agent), { autoOpen: false, reopen: true, minColumns: 180 });
+  await writeFile(join(agent, "settings.json"), JSON.stringify({ diff: { autoOpen: false, minColumns: 180, links: false } }));
+  assert.deepEqual(readSettings(agent), { autoOpen: false, reopen: true, minColumns: 180, links: false });
   await writeFile(join(agent, "settings.json"), JSON.stringify({ diff: { autoOpen: "yes", minColumns: -1 } }));
   assert.deepEqual(readSettings(agent), DEFAULT_SETTINGS);
 });

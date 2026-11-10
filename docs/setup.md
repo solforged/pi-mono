@@ -18,7 +18,10 @@ mise run install -- --with herdr-title # include an opt-in extension
 ```
 
 The [Herdr TUI title bridge](herdr.md#tui-agent-titles) is opt-in; every other
-extension is linked by default.
+extension is linked by default. On macOS the task also builds `Pi Open.app` in
+`apps/` under the agent directory, which opens
+[Markdown links](diff.md#markdown-documents) beside Pi; it rebuilds only when
+its sources change.
 
 Rerun it after pulling a new release; new extensions are picked up without
 documentation changes. Correct links are kept. Dangling links into this

@@ -1,8 +1,12 @@
 // /diff opens a live Git diff in a Rex pane beside Pi and follows the files Pi
-// edits; it also opens on its own once Pi starts changing files. The pane runs
-// viewer.ts as its own process; see docs/diff.md.
+// edits; it also opens on its own once Pi starts changing files. /md and
+// ⌘-clicks on Markdown links show a document in the diff's place until it
+// closes. The panes run viewer.ts and doc.ts as their own processes; see
+// docs/diff.md.
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { colorToHex } from "@earendil-works/pi-tui";
+import { registerDocs, type Docs } from "./docs.ts";
+import { bundledMarked } from "./markdown.ts";
 import { bundledHighlighter, registerDiff } from "./pane.ts";
 import type { Palette } from "./render.ts";
 import { TOKENS } from "./syntax.ts";
@@ -20,6 +24,12 @@ function palette(theme: Theme): Partial<Palette> {
     const value = hex(name);
     if (value) (out as Record<string, string>)[key] = value;
   }
+  out.md = {};
+  const md = { heading: "mdHeading", link: "mdLink", code: "mdCode", quote: "mdQuote", quoteBorder: "mdQuoteBorder", hr: "mdHr", bullet: "mdListBullet" } as const;
+  for (const [key, name] of Object.entries(md)) {
+    const value = hex(name);
+    if (value) out.md[key as keyof typeof md] = value;
+  }
   out.syntax = {};
   for (const token of TOKENS) {
     const value = hex(`syntax${token[0].toUpperCase()}${token.slice(1)}`);
@@ -29,5 +39,8 @@ function palette(theme: Theme): Partial<Palette> {
 }
 
 export default function (pi: ExtensionAPI) {
-  registerDiff(pi, { palette: (ctx) => palette(ctx.ui.theme), highlighter: bundledHighlighter() });
+  const highlighter = bundledHighlighter();
+  let docs: Docs | undefined;
+  const diff = registerDiff(pi, { palette: (ctx) => palette(ctx.ui.theme), highlighter, held: () => docs?.open() ?? false });
+  docs = registerDocs(pi, { palette: (ctx) => palette(ctx.ui.theme), highlighter, marked: bundledMarked(), diff });
 }

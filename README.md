@@ -47,7 +47,7 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Intercom](docs/intercom.md): notes between separate Pi sessions for coordinating work.
 - [Herdr](docs/herdr.md): Desktop support and the separate TUI title bridge.
 - [Status line](docs/statusline.md): a one-line footer with Git, context, and cache use.
-- [Diff pane](docs/diff.md): a live, highlighted Git diff beside Pi in Rex that opens once Pi edits.
+- [Diff pane](docs/diff.md): a live, highlighted Git diff beside Pi in Rex that opens once Pi edits, and Markdown files, ⌘-clicked or opened with `/md`, in its place.
 - [Providers and search](docs/providers.md): Anthropic compatibility and nested web search.
 - [Context management](docs/context.md): background compaction summaries, snapcompact, compaction ratios, output artifacts, and `/prompt-size`.
 - [Measuring](docs/measuring.md): the session profile and fault injection that size a feature.

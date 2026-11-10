@@ -12,6 +12,8 @@ import type { Palette } from "./render.ts";
 const VIEWER = join(import.meta.dirname, "viewer.ts");
 /** The pane's share of the split it makes with Pi's pane. */
 const SHARE = 1 / 3;
+/** Pi's share of that split, as Rex takes it. */
+export const RATIO = Math.round((1 - SHARE) * 10_000) / 10_000;
 /** Tools whose `path` argument names the file they changed. */
 const EDITORS = new Set(["edit", "write", "multiedit", "apply_patch"]);
 /** Tools that may change files without naming them. */
@@ -25,10 +27,12 @@ export interface Settings {
   reopen: boolean;
   /** Pi's narrowest terminal width, in columns, for opening it automatically. */
   minColumns: number;
+  /** Link Markdown files in the transcript to the document pane, once the handler app is installed. */
+  links: boolean;
 }
-export const DEFAULT_SETTINGS: Settings = { autoOpen: true, reopen: true, minColumns: 150 };
+export const DEFAULT_SETTINGS: Settings = { autoOpen: true, reopen: true, minColumns: 150, links: true };
 
-const agentDir = () => process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+export const agentDir = () => process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 
 /** The `diff` object in the agent directory's settings.json. */
 export function readSettings(dir = agentDir()): Settings {
@@ -38,6 +42,7 @@ export function readSettings(dir = agentDir()): Settings {
       autoOpen: typeof value.autoOpen === "boolean" ? value.autoOpen : DEFAULT_SETTINGS.autoOpen,
       reopen: typeof value.reopen === "boolean" ? value.reopen : DEFAULT_SETTINGS.reopen,
       minColumns: Number.isInteger(value.minColumns) && value.minColumns > 0 ? value.minColumns : DEFAULT_SETTINGS.minColumns,
+      links: typeof value.links === "boolean" ? value.links : DEFAULT_SETTINGS.links,
     };
   } catch {
     return DEFAULT_SETTINGS;
@@ -83,8 +88,8 @@ export function bundledHighlighter(execPath = process.execPath): string | undefi
   return existsSync(file) ? file : undefined;
 }
 
-type Run = (command: string, args: string[], cwd: string) => Promise<string>;
-const run: Run = (command, args, cwd) => new Promise((resolve, reject) => {
+export type Run = (command: string, args: string[], cwd: string) => Promise<string>;
+export const run: Run = (command, args, cwd) => new Promise((resolve, reject) => {
   // Optional locks off: a status check must never block Pi's own Git commands.
   execFile(command, args, { cwd, timeout: 10_000, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } },
     (error, stdout, stderr) => error ? reject(new Error(stderr.trim().split("\n").at(-1) || error.message)) : resolve(stdout));
@@ -100,9 +105,10 @@ export function which(name: string, path = process.env.PATH ?? ""): string | und
   return undefined;
 }
 
-function viewerPid(dir: string, piPid: number): number | undefined {
+/** The live process named by a PID file in the IPC directory, such as `<pi>.viewer`. */
+export function viewerPid(dir: string, piPid: number, kind = "viewer"): number | undefined {
   try {
-    const pid = Number(readFileSync(join(dir, `${piPid}.viewer`), "utf8").trim());
+    const pid = Number(readFileSync(join(dir, `${piPid}.${kind}`), "utf8").trim());
     if (!Number.isInteger(pid) || pid <= 0) return undefined;
     process.kill(pid, 0);
     return pid;
@@ -151,6 +157,58 @@ export function paneSize(pi: { columns?: unknown; rows?: unknown }): { columns: 
   return { columns: Math.max(20, Math.round((columns as number) * SHARE) - 2), rows: rows as number };
 }
 
+/** What a pane beside Pi needs from Rex: the session, Pi's block, and the programs to run. */
+export interface RexSetup { session: string; block: string; rex: string; node: string }
+
+export async function rexSetup(env: NodeJS.ProcessEnv, exec: Run, cwd: string, name: string): Promise<RexSetup> {
+  const session = env.REX_SESSION, block = env.REX_BLOCK;
+  if (!session || !block) throw new Error(`${name} needs Pi running in a Rex pane (REX_SESSION and REX_BLOCK are unset)`);
+  const rex = which("rex", env.PATH) ?? (env.REX_BIN_DIR && which("rex", env.REX_BIN_DIR));
+  if (!rex) throw new Error(`${name} needs the rex CLI on PATH`);
+  const node = which("node", env.PATH);
+  if (!node) throw new Error(`${name} needs Node on PATH to run the viewer`);
+  const version = (await exec(node, ["--version"], cwd)).trim();
+  const [major, minor] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) throw new Error(`${name} needs Node 22.18 or later for the viewer (found ${version})`);
+  return { session, block, rex, node };
+}
+
+export const rexCall = (exec: Run, rex: string, session: string, method: string, args: object, cwd: string) =>
+  exec(rex, ["api", "call", "--session", session, method, JSON.stringify({ session_id: session, ...args })], cwd);
+
+/**
+ * Splits Pi's pane and runs `command` in the new pane, which gets a third of
+ * the width. Returns the new block's ID, or undefined when Rex returned none.
+ */
+export async function splitBeside(exec: Run, setup: RexSetup, cwd: string, label: string, command: string[], warn: (why: string) => void, split?: () => void): Promise<string | undefined> {
+  const { session, block, rex } = setup;
+  // A new terminal is 80x24 until Rex shows it, so start it at about its
+  // final size; the viewer then lays out once rather than per size.
+  const size = await exec(rex, ["block", "call", "-s", session, "-b", block, "size"], cwd)
+    .then((out) => paneSize(JSON.parse(out)), () => undefined);
+  const created = await rexCall(exec, rex, session, "session.new_split", {
+    anchor_id: block, direction: "horizontal", side: "after", focus: false, ratio: RATIO,
+    layout: { block: { flavor: "com.superlogical.terminal.shell", label, options: { shell: "none", cwd, ...(size ? { size } : {}), command } } },
+  }, cwd);
+  split?.();
+  let pane: unknown;
+  try { pane = JSON.parse(created).block_ids?.[0]; } catch {}
+  if (typeof pane !== "string") { warn("Rex returned no block ID"); return undefined; }
+  await keepShare(exec, setup, pane, cwd).catch((error: Error) => warn(error.message));
+  return pane;
+}
+
+/** Rex splits evenly whatever ratio it is given, so move the border to give `pane` its third. */
+export function keepShare(exec: Run, setup: RexSetup, pane: string, cwd: string) {
+  return rexCall(exec, setup.rex, setup.session, "session.resize_pane", { direction: "horizontal", before_block_id: setup.block, after_block_id: pane, ratio: RATIO }, cwd);
+}
+
+/** The diff pane, for the document pane to take its place and give it back. */
+export interface DiffPane {
+  /** The diff's Rex block, while this Pi's viewer runs. */
+  block(): string | undefined;
+}
+
 export interface Options {
   palette: (ctx: ExtensionContext) => Partial<Palette>;
   highlighter?: string;
@@ -160,9 +218,11 @@ export interface Options {
   columns?: () => number;
   /** Where open panes are remembered across restarts. */
   panes?: string;
+  /** Whether opening on its own should wait, such as while a document has the pane's place. */
+  held?: () => boolean;
 }
 
-export function registerDiff(pi: ExtensionAPI, options: Options) {
+export function registerDiff(pi: ExtensionAPI, options: Options): DiffPane {
   const exec = options.run ?? run;
   const dir = options.dir ?? ipcDir();
   const env = options.env ?? process.env;
@@ -173,50 +233,29 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
   const panes = options.panes ?? join(agentDir(), "diff-panes.json");
   /** The worktree of the last pane this Pi opened. */
   let opened: string | undefined;
+  /** The block of the pane this Pi opened last. */
+  let diffBlock: string | undefined;
   const gitRoot = (cwd: string) => exec("git", ["rev-parse", "--show-toplevel"], cwd).then((out) => out.trim(), () => "");
 
   async function open(ctx: ExtensionContext, source: Source, focus?: string) {
-    const session = env.REX_SESSION, block = env.REX_BLOCK;
-    if (!session || !block) throw new Error("/diff needs Pi running in a Rex pane (REX_SESSION and REX_BLOCK are unset)");
-    const rex = which("rex", env.PATH) ?? (env.REX_BIN_DIR && which("rex", env.REX_BIN_DIR));
-    if (!rex) throw new Error("/diff needs the rex CLI on PATH");
-    const node = which("node", env.PATH);
-    if (!node) throw new Error("/diff needs Node on PATH to run the viewer");
-    const version = (await exec(node, ["--version"], ctx.cwd)).trim();
-    const [major, minor] = version.replace(/^v/, "").split(".").map(Number);
-    if (major < 22 || (major === 22 && minor < 18)) throw new Error(`/diff needs Node 22.18 or later for the viewer (found ${version})`);
+    const setup = await rexSetup(env, exec, ctx.cwd, "/diff");
     const root = await gitRoot(ctx.cwd);
     if (!root) throw new Error("/diff needs a Git working tree");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    // A new terminal is 80x24 until Rex shows it, so start it at about its
-    // final size; the viewer then lays the diff out once rather than per size.
-    const size = await exec(rex, ["block", "call", "-s", session, "-b", block, "size"], ctx.cwd)
-      .then((out) => paneSize(JSON.parse(out)), () => undefined);
-    const ratio = Math.round((1 - SHARE) * 10_000) / 10_000;
-    const created = await exec(rex, ["api", "call", "--session", session, "session.new_split", JSON.stringify({
-      session_id: session, anchor_id: block, direction: "horizontal", side: "after", focus: false, ratio,
-      layout: { block: { flavor: "com.superlogical.terminal.shell", label: "Diff", options: {
-        shell: "none", cwd: root, ...(size ? { size } : {}),
-        command: [
-          node, VIEWER, "--root", root, "--ipc", dir, "--pi-pid", String(pid),
-          "--palette", JSON.stringify(options.palette(ctx)), "--source", source,
-          ...(options.highlighter ? ["--highlighter", options.highlighter] : []),
-          ...(focus ? ["--focus", focus] : []),
-        ],
-      } } },
-    })], ctx.cwd);
-    opened = root;
-    writePane(panes, root, pid);
-    // Rex splits evenly whatever ratio new_split is given, so move the border
-    // afterwards. The pane is already open, so a failure here only leaves it
-    // wider; say so rather than leaving an even split unexplained.
-    let pane: unknown;
-    try { pane = JSON.parse(created).block_ids?.[0]; } catch {}
+    const command = [
+      setup.node, VIEWER, "--root", root, "--ipc", dir, "--pi-pid", String(pid),
+      "--palette", JSON.stringify(options.palette(ctx)), "--source", source,
+      ...(options.highlighter ? ["--highlighter", options.highlighter] : []),
+      ...(focus ? ["--focus", focus] : []),
+    ];
+    // The pane is open before its border moves, so a failure there only leaves
+    // it wider; say so rather than leaving an even split unexplained.
     const widened = (why: string) => ctx.ui.notify(`The diff pane opened at Rex's default width: ${why}`, "warning");
-    if (typeof pane !== "string") { widened("Rex returned no block ID"); return; }
-    await exec(rex, ["api", "call", "--session", session, "session.resize_pane", JSON.stringify({
-      session_id: session, direction: "horizontal", before_block_id: block, after_block_id: pane, ratio,
-    })], ctx.cwd).catch((error: Error) => widened(error.message));
+    diffBlock = undefined;
+    diffBlock = await splitBeside(exec, setup, root, "Diff", command, widened, () => {
+      opened = root;
+      writePane(panes, root, pid);
+    });
   }
 
   // Automatic opening: armed per session, with a baseline of the tree's state
@@ -267,6 +306,7 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
         if (!auto.armed || session !== auto.session || state === undefined || state === auto.baseline) continue;
         if (viewerPid(dir, pid) !== undefined) { auto.armed = false; return; }
         if (columns() < settings().minColumns) continue; // Stay armed: the window may widen.
+        if (options.held?.()) continue; // Stay armed until the document pane closes.
         auto.armed = false;
         try { await open(ctx, "uncommitted", auto.focus); }
         catch (error) {
@@ -352,4 +392,6 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
     tick(dir, pid, { event: "agent_start" });
     if (auto.armed) auto.ready = rebaseline();
   });
+
+  return { block: () => viewerPid(dir, pid) !== undefined ? diffBlock : undefined };
 }

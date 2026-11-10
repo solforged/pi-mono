@@ -7,6 +7,7 @@
 import { lstat, mkdir, readdir, readlink, realpath, rm, stat, symlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { buildHandler } from "../extensions/diff/handler/build.ts";
 
 const OPT_IN = new Set(["herdr-title"]);
 
@@ -85,6 +86,19 @@ if (await exists(extensionsDir)) {
       if (!dryRun) await rm(target);
       report(`${prefix}remove stale`, target);
     }
+  }
+}
+
+// The macOS handler for pi-open:// links, which the diff extension's Markdown
+// links open through. It is self-contained, so it does not follow this checkout.
+if (process.platform === "darwin") {
+  const app = join(agentDir, "apps", "Pi Open.app");
+  try {
+    const status = buildHandler(app, dryRun);
+    report(status === "build" ? `${prefix}build` : status, app);
+  } catch (error) {
+    conflicts++;
+    report("failed", app, (error as Error).message.split("\n")[0]);
   }
 }
 

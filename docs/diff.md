@@ -3,7 +3,8 @@
 `extensions/diff` adds `/diff`, which opens a live Git diff in a Rex pane to
 the right of Pi. The pane takes a third of the width, and Pi reflows into the rest.
 Run `/diff` again, or press `q` in the pane, to close it. The pane also closes
-when Pi exits.
+when Pi exits. Markdown files can take the pane's place for a while; see
+[Markdown documents](#markdown-documents).
 
 ## Opening automatically
 
@@ -30,7 +31,7 @@ change files, and stops once the pane is open. Configure it in
 `~/.pi/agent/settings.json`:
 
 ```json
-{ "diff": { "autoOpen": true, "reopen": true, "minColumns": 150 } }
+{ "diff": { "autoOpen": true, "reopen": true, "minColumns": 150, "links": true } }
 ```
 
 `/diff staged` and `/diff branch` open the pane on another source. Press `s` in
@@ -78,6 +79,39 @@ the source label and the scrollbar highlight under the pointer.
 The title shows which change you are on (`change 2/5`), or how many there are
 when they all fit. A file you come back to keeps its scroll position.
 
+## Markdown documents
+
+`/md PATH` shows a Markdown file beside Pi, rendered with headings, lists,
+tables and highlighted code. While the diff pane is open, the document takes
+its place at the same size, and closing the document (`q` or the pane's close
+button) puts the diff back. The diff keeps running in the meantime. Without a
+diff pane, the document opens in a third of the width, as the diff would.
+While a document is showing, the diff pane does not open on its own.
+
+In Pi's messages, Markdown files that exist become links: link targets, inline
+code that is just a path, and bare paths such as `docs/diff.md`, relative to
+Pi's working directory. ⌘-click one to show it, at its `#anchor` if it has one.
+Another ⌘-click, or another `/md`, switches the open pane to that document.
+
+The links use a `pi-open://` URL that names the Pi process, and macOS hands it
+to `Pi Open.app`, which `mise run install` builds in the agent directory's
+`apps/`. The app writes the request into the IPC directory below, and only the
+Pi it names acts on it. Rex asks before opening a link that launches an app;
+choose Always Open to stop it asking. Links are only made inside Rex, with that
+app installed and Pi's hyperlinks on; set `links` to `false` to keep the
+transcript as it was. To remove the handler, delete the app and run
+`lsregister -u` on it (in `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/`).
+
+| Keys | Action |
+|---|---|
+| `↑` `↓`, `j` `k`, `d` `u`, `space` `b`, `g` `G`, wheel | Scroll |
+| `n` `p` | Next or previous heading |
+| Click a link | Follow it: Markdown in the pane, anything else in its app |
+| `⌫` | Back to the previous document |
+| `o` | Open the file in its default app |
+| `r` | Reload; edits to the file also show up on their own |
+| `q` | Close, and bring the diff back |
+
 ## How it works
 
 `/diff` splits `$REX_BLOCK` with Rex's `session.new_split` and starts
@@ -101,4 +135,15 @@ The extension sends edit hints through a private directory,
 viewer to close straight away; the viewer also checks every 250 ms that Pi is
 still running, to close after a crash or a kill.
 
-Outside Rex, `/diff` reports that it needs a Rex pane and does nothing else.
+The document pane runs `doc.ts`, another standalone viewer, which parses
+Markdown with the marked build that Pi ships beside highlight.js
+(`export-html/vendor/marked.min.js`); without it, documents show as plain
+paragraphs and code. To take the diff's place, Pi splits the diff's pane,
+starts the document there and detaches the diff with `session.detach_block`,
+which keeps it running. `rex wait` reports when the document ends; once Rex
+has dropped its block, Pi moves the diff back beside its own pane with
+`session.move_block` and restores the third. If you have placed the diff
+somewhere yourself by then, it is left there.
+
+Outside Rex, `/diff` and `/md` report that they need a Rex pane and do nothing
+else.

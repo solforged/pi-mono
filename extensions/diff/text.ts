@@ -1,6 +1,10 @@
 // Terminal cell measurement and styled spans for the diff viewer.
 
-export interface Style { fg?: string; bg?: string; bold?: boolean; italic?: boolean }
+export interface Style {
+  fg?: string; bg?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean;
+  /** An OSC 8 hyperlink target. */
+  link?: string;
+}
 export interface Span { text: string; style?: Style }
 /** One terminal row: spans, then padding to the full width in `fill`. */
 export interface Row { spans: Span[]; fill?: string }
@@ -151,17 +155,28 @@ export function sgr(style: Style | undefined): string {
   const codes: string[] = [];
   if (style.bold) codes.push("1");
   if (style.italic) codes.push("3");
+  if (style.underline) codes.push("4");
+  if (style.strike) codes.push("9");
   const fg = style.fg && hex(style.fg), bg = style.bg && hex(style.bg);
   if (fg) codes.push(`38;2;${fg.join(";")}`);
   if (bg) codes.push(`48;2;${bg.join(";")}`);
   return codes.length ? `\x1b[${codes.join(";")}m` : "";
 }
 
-/** Serializes a row to exactly `columns` cells; every row ends reset. */
+/** Link targets may not carry control characters into the escape sequence. */
+const safeLink = (url: string) => url.replace(/[\x00-\x1f\x7f]/g, "");
+
+/** Serializes a row to exactly `columns` cells; every row ends reset, with no link left open. */
 export function paint(row: Row, columns: number): string {
   const spans = clipSpans(row.spans, columns);
   let out = "";
-  for (const span of spans) out += `\x1b[0m${sgr(span.style)}${span.text}`;
+  let link: string | undefined;
+  for (const span of spans) {
+    const next = span.style?.link ? safeLink(span.style.link) : undefined;
+    if (next !== link) { out += `\x1b]8;;${next ?? ""}\x1b\\`; link = next; }
+    out += `\x1b[0m${sgr(span.style)}${span.text}`;
+  }
+  if (link) out += "\x1b]8;;\x1b\\";
   const pad = columns - spans.reduce((sum, span) => sum + width(span.text), 0);
   if (pad > 0) out += `\x1b[0m${sgr(row.fill ? { bg: row.fill } : undefined)}${" ".repeat(pad)}`;
   return `${out}\x1b[0m`;

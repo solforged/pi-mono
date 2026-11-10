@@ -11,6 +11,8 @@ export interface Palette {
   bg: string;
   /** Pi's syntax colors; tokens without one use the line's text color. */
   syntax?: Partial<Record<Token, string>>;
+  /** Pi's Markdown colors, for the document pane. */
+  md?: Partial<Record<"heading" | "link" | "code" | "quote" | "quoteBorder" | "hr" | "bullet", string>>;
 }
 
 export const DEFAULT_PALETTE: Palette = {
@@ -289,8 +291,10 @@ const HELP: Array<[string, string]> = [
   ["s", "switch source"], ["w", "toggle wrap"], ["f", "follow Pi's edits"], ["r", "refresh"], ["q", "close the pane"],
 ];
 
-/** The bottom bar: clickable keys, then a label. Items that do not fit are dropped from the end. */
-const BAR: Array<{ keys: Array<[string, string]>; label: string }> = [
+/** A group in the bottom bar: clickable keys, then a label. */
+export interface KeyGroup { keys: Array<[glyph: string, key: string]>; label: string; warn?: boolean }
+
+const BAR: KeyGroup[] = [
   { keys: [["←", "left"], ["→", "right"]], label: "file" },
   { keys: [["p", "p"], ["n", "n"]], label: "change" },
   { keys: [["s", "s"]], label: "source" },
@@ -298,31 +302,41 @@ const BAR: Array<{ keys: Array<[string, string]>; label: string }> = [
   { keys: [["?", "?"]], label: "help" },
 ];
 
-function keyBar(view: View, row: number): { row: Row; items: Array<{ from: number; to: number; key: string }> } {
-  const p = view.palette;
+/** The bottom bar. Groups that do not fit are dropped from the end. */
+export function keyBar(groups: KeyGroup[], columns: number, p: Palette, hover: string | undefined): { row: Row; items: Array<{ from: number; to: number; key: string }> } {
   const spans: Span[] = [{ text: " " }];
   const items: Array<{ from: number; to: number; key: string }> = [];
   let used = 1;
-  for (const group of BAR) {
+  for (const group of groups) {
     const label = group.label;
     const cells = group.keys.reduce((sum, [glyph]) => sum + width(glyph) + 2, 0) + width(label) + 2;
-    if (used + cells > view.columns) break;
+    if (used + cells > columns) break;
     for (const [glyph, key] of group.keys) {
-      const hovered = view.hover?.area === "key" && view.hover.key === key;
+      const hovered = hover === key;
       const text = ` ${glyph} `;
       spans.push({ text, style: { fg: hovered ? p.text : p.accent, bg: hovered ? p.selectedBg : undefined, bold: hovered } });
       items.push({ from: used, to: used + width(text), key });
       used += width(text);
     }
-    const accent = group.label === "follow" && !view.follow;
-    spans.push({ text: `${label}  `, style: { fg: accent ? p.warning : p.dim } });
+    spans.push({ text: `${label}  `, style: { fg: group.warn ? p.warning : p.dim } });
     used += width(label) + 2;
   }
   return { row: { spans }, items };
 }
 
+/** A scrollbar for `height` rows showing `total` rows from `scroll`, or undefined when everything fits. */
+export function scrollbar(total: number, height: number, scroll: number, active: boolean, p: Palette): Span[] | undefined {
+  if (total <= height || height < 3) return undefined;
+  const size = Math.max(1, Math.round(height * height / (total + height - 2)));
+  const limit = maxScroll(total, height);
+  const start = limit ? Math.round((height - size) * Math.min(1, scroll / limit)) : 0;
+  return Array.from({ length: height }, (_, i) => i >= start && i < start + size
+    ? { text: "┃", style: { fg: active ? p.text : p.dim } }
+    : { text: "│", style: { fg: mix(p.border, p.bg, 0.5) } });
+}
+
 /** Body rows cut to leave the last column for a scrollbar. */
-function withBar(rows: Row[], columns: number, bar: Span[] | undefined): Row[] {
+export function withBar(rows: Row[], columns: number, bar: Span[] | undefined): Row[] {
   const room = Math.max(0, columns - 1);
   return rows.map((row, i) => {
     const spans = clipSpans(row.spans, room);
@@ -419,19 +433,10 @@ export function layout(view: View): Layout {
     total = all.length;
     content = all.slice(view.scroll, view.scroll + bodyHeight);
   }
-  let scrollbar: Layout["scrollbar"];
+  let bars: Layout["scrollbar"];
   if (full) {
-    let bar: Span[] | undefined;
-    if (total > bodyHeight && bodyHeight >= 3) {
-      scrollbar = { column: columns - 1, top, height: bodyHeight };
-      const size = Math.max(1, Math.round(bodyHeight * bodyHeight / (total + bodyHeight - 2)));
-      const limit = maxScroll(total, bodyHeight);
-      const start = limit ? Math.round((bodyHeight - size) * Math.min(1, view.scroll / limit)) : 0;
-      const active = view.hover?.area === "scrollbar";
-      bar = Array.from({ length: bodyHeight }, (_, i) => i >= start && i < start + size
-        ? { text: "┃", style: { fg: active ? p.text : p.dim } }
-        : { text: "│", style: { fg: mix(p.border, p.bg, 0.5) } });
-    }
+    const bar = scrollbar(total, bodyHeight, view.scroll, view.hover?.area === "scrollbar", p);
+    if (bar) bars = { column: columns - 1, top, height: bodyHeight };
     while (content.length < bodyHeight) content.push({ spans: [] });
     content = withBar(content, columns, bar);
   }
@@ -439,10 +444,11 @@ export function layout(view: View): Layout {
   while (rows.length < top + bodyHeight) rows.push({ spans: [] });
   let keys: Layout["keys"];
   if (showKeys) {
-    const bar = keyBar(view, rows.length);
+    const groups = BAR.map((group) => group.label === "follow" ? { ...group, warn: !view.follow } : group);
+    const bar = keyBar(groups, columns, p, view.hover?.area === "key" ? view.hover.key : undefined);
     keys = { row: rows.length, items: bar.items };
     rows.push(bar.row);
   }
   while (rows.length < height) rows.push({ spans: [] });
-  return { rows: rows.slice(0, height), list, body: { top, height: bodyHeight, total }, source, keys, scrollbar };
+  return { rows: rows.slice(0, height), list, body: { top, height: bodyHeight, total }, source, keys, scrollbar: bars };
 }
