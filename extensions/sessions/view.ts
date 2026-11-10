@@ -4,7 +4,7 @@ import { safeText, termsOf, type SearchOptions, type ReadOptions } from "./store
 
 type Palette = Pick<Theme, "fg" | "bold">;
 interface Options { expanded?: boolean; isPartial?: boolean; isError?: boolean; hint?: string }
-interface Result { content?: Array<{ type: string; text?: string }> }
+interface Result { content?: Array<{ type: string; text?: string }>; details?: { full?: unknown } }
 const line = (text: unknown, bytes = 180) => excerpt(safeText(typeof text === "string" ? text : "").replace(/\s+/gu, " ").trim(), [], bytes).excerpt;
 const number = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : word === "match" || word === "branch" ? "es" : "s"}`;
@@ -16,6 +16,8 @@ function preview(text: string, query: unknown): string {
 const label = (value: any, expanded = false) => line(value.name || value.session_id, expanded ? 1200 : 120);
 function raw(result: Result): string { return (result.content ?? []).filter(c => c.type === "text" && typeof c.text === "string").map(c => c.text).join("\n"); }
 function decode(text: string): any { try { return JSON.parse(text); } catch { return undefined; } }
+// The model-facing text is pruned; details carry the full result. Results saved before that split hold it as text.
+function full(result: Result, text: string): any { return result.details?.full ?? decode(text); }
 function isSearch(data: any): boolean {
   return !!data && Array.isArray(data.hits) && typeof data.matching_entries === "number" && data.hits.every((hit: any) => hit && typeof hit.session_id === "string" && typeof hit.entry_id === "string" && typeof hit.excerpt === "string");
 }
@@ -56,7 +58,7 @@ export function searchView(result: Result, theme: Palette, options: Options = {}
   const text = raw(result);
   if (options.isError) return fallback(text, theme, options);
   if (options.isPartial) return theme.fg("muted", "Searching saved sessions…");
-  const data = decode(text);
+  const data = full(result, text);
   if (!isSearch(data)) return fallback(text, theme, options);
   const matches = plural(number(data.matching_entries), "match");
   const summary = data.matching_entries ? `${matches}${data.hits.length < data.matching_entries ? ` (${data.hits.length} returned)` : ""}` : "No matches in scanned history";
@@ -82,7 +84,7 @@ export function readView(result: Result, theme: Palette, options: Options = {}):
   const text = raw(result);
   if (options.isError) return fallback(text, theme, options);
   if (options.isPartial) return theme.fg("muted", "Reading saved history…");
-  const data = decode(text);
+  const data = full(result, text);
   if (!data || typeof data.session_id !== "string" || typeof data.text !== "string" && !Array.isArray(data.branches)) return fallback(text, theme, options);
   const lines = [theme.fg("accent", label(data, options.expanded))];
   if (options.expanded) lines.push(...provenance(data, theme));

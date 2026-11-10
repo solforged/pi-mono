@@ -3,6 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { readSession, safeText, searchSessions, storageRoots, type Context } from "./store.ts";
+import { readPayload, searchPayload } from "./payload.ts";
 import { readCall, readView, reportView, searchCall, searchView } from "./view.ts";
 
 function row(previous: unknown, text: string): Text {
@@ -13,6 +14,7 @@ function row(previous: unknown, text: string): Text {
 
 // Declarations are sent with every request: keep them short. The store
 // validates every argument and explains limits in its errors and results.
+// The model gets a pruned result; the full one rides in details for the TUI.
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const scope = Type.Optional(StringEnum(["project", "all"] as const));
 const include_tools = Type.Optional(Type.Boolean());
@@ -32,7 +34,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({ query: Type.String(), scope, include_tools, limit: int() }),
     async execute(_id, params, signal, _update, ctx) {
       const result = await searchSessions(context(ctx, signal), params);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: { coverage: result.coverage, hits: result.hits.length } };
+      return { content: [{ type: "text", text: searchPayload(result) }], details: { coverage: result.coverage, hits: result.hits.length, full: result } };
     },
     renderCall(args, theme, context) {
       return row(context.lastComponent, searchCall(args, theme));
@@ -52,7 +54,7 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_id, params, signal, _update, ctx) {
       const result = await readSession(context(ctx, signal), params);
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: { sessionId: params.session_id } };
+      return { content: [{ type: "text", text: readPayload(result) }], details: { sessionId: params.session_id, full: result } };
     },
     renderCall(args, theme, context) {
       return row(context.lastComponent, readCall(args, theme));

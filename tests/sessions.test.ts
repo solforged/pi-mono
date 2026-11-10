@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { appendFile, mkdir, readFile, stat, symlink, truncate, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { readPayload, searchPayload } from "../extensions/sessions/payload.ts";
 import { LIMITS, newCoverage, parseDocument, readSession, searchSessions, storageRoots, type Context } from "../extensions/sessions/store.ts";
 import { root, temporary } from "./helpers.ts";
 
@@ -52,6 +53,22 @@ test("terms found in a session name count for its entries; a name holding every 
   assert.deepEqual(found.hits.map(hit => `${hit.session_id}/${hit.entry_id}`).sort(), ["own/b", "partial/a", "whole/a"]);
   assert.equal(found.matching_entries, 3);
   assert.equal(found.hits.find(hit => hit.session_id === "whole")!.excerpt, "First message.");
+});
+
+test("the model receives a pruned, minified result that still addresses hits and continues reads", async t => {
+  const { ctx, save } = await setup(t);
+  await save("past", Array.from({ length: 25 }, (_, i) => entry(`e${i}`, i ? `e${i - 1}` : null, `alpha line ${i}`)));
+  const found = await searchSessions(ctx, { query: "alpha", limit: 3 }), lean = searchPayload(found);
+  assert.deepEqual(Object.keys(JSON.parse(lean).hits[0]), ["session_id", "entry_id", "role", "date", "excerpt"]);
+  assert.ok(lean.length < JSON.stringify(found, null, 2).length / 2, "less than half the full result");
+  assert.ok(!lean.includes("\n "), "minified");
+  const page = await readSession(ctx, { session_id: "past" }), sent = JSON.parse(readPayload(page));
+  assert.deepEqual(Object.keys(sent.next), ["session_id", "leaf_id", "revision", "offset"]);
+  const rest = await readSession(ctx, sent.next);
+  assert.equal(rest.offset, page.next!.offset);
+  assert.equal(JSON.parse(readPayload(rest)).next, null);
+  const everywhere = JSON.parse(searchPayload(await searchSessions(ctx, { query: "alpha", scope: "all", limit: 1 })));
+  assert.equal(everywhere.hits[0].cwd, ctx.cwd);
 });
 
 test("all scope discovers other default projects; active custom directory stays flat", async t => {

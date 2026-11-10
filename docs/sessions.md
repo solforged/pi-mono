@@ -25,10 +25,10 @@ A term found in the session name counts for every entry of that session, so
 own text as usual, and a session with no such entry is returned once, at its
 first entry.
 
-Each hit carries a session ID, entry ID, parent ID, working directory, date,
-revision, and bounded excerpt. Excerpts prefer whole-word boundaries, preserve
-Unicode graphemes when clipping long tokens, and mark omitted text with `…`.
-Verify an excerpt with `session_read`:
+Each hit carries a session ID, name, entry ID, role, date, and bounded excerpt,
+plus the working directory under `scope: "all"`. Excerpts prefer whole-word
+boundaries, preserve Unicode graphemes when clipping long tokens, and mark
+omitted text with `…`. Verify an excerpt with `session_read`:
 
 ```json
 { "session_id": "SESSION_ID", "entry_id": "ENTRY_ID" }
@@ -47,17 +47,23 @@ Despite its name, `leaf_id` may identify any entry. Retrieval follows only
 to twenty branch choices. Offline files do not establish which branch a live
 UI has selected. Search hits can address endpoints absent from a clipped list.
 
-Both tools cap the entire JSON response at 12,000 bytes. Reads default to sixty
+Both tools cap the entire response at 12,000 bytes. Reads default to sixty
 lines, at most one hundred, and return `next` arguments for continuation. Pass
 those arguments unchanged: they pin the endpoint, tool-text policy, and file
-revision. Offsets are 1-based rendered-text lines; columns count Unicode code
+revision; arguments left out of `next` are the defaults. Offsets are 1-based rendered-text lines; columns count Unicode code
 points. If the file changed, restart without `revision`. Terminal control
 characters are escaped visibly rather than executed.
+
+The model receives minified JSON holding only what it can act on. Parent IDs,
+revisions, scan statistics and default values stay in the full result, which
+is stored in the tool result's `details` for the TUI; in practice
+that made search results about 40% smaller. Coverage warnings are still sent
+whenever a scan was incomplete.
 
 In the TUI, tool results and `/sessions` searches show compact summaries and
 previews. The expansion binding shown on each result reveals provenance,
 coverage warnings, full returned excerpts or page text, and continuation
-arguments. Print/JSON output and model-facing payloads retain their JSON format.
+arguments. `/sessions <query>` prints the full result as JSON.
 
 ## Scope and storage
 
