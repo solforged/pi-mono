@@ -254,8 +254,25 @@ test("releasing during a start waits for it, then removes the container", async 
   };
   const plan = livePlan(stateRoot);
   const box = new Sandbox(plan, { cli, stateRoot, pid: 5, alive: () => true });
+  const timers = () => process.getActiveResourcesInfo().filter((name) => name === "Timeout").length;
+  const before = timers();
   box.ensure().catch(() => {});
   await new Promise((resolve) => setTimeout(resolve, 10));
   await box.release();
   assert(!running.has(plan.name));
+  // A leftover timer would keep a print-mode process alive after its last tool call.
+  assert.equal(timers(), before);
+});
+
+test("a sandbox kept across a session switch fits only the same plan while healthy", async (t) => {
+  const stateRoot = await temporary(t);
+  const { cli } = fakeCli();
+  const plan = livePlan(stateRoot);
+  const box = new Sandbox(plan, { cli, stateRoot, pid: 6, alive: () => true });
+  await box.ensure();
+  assert(box.fits(livePlan(stateRoot)));
+  assert(!box.fits(buildPlan(probe({}, { root: join(stateRoot, "app"), home: "/nonexistent", commonDir: undefined, wikiDir: undefined, contextDirs: [], cacheRoot: join(stateRoot, "cache") }), { ...DEFAULTS, memory: "16G" }, "img")));
+  assert(!box.fits(livePlan(join(stateRoot, "other"))));
+  box.phase = "error";
+  assert(!box.fits(plan));
 });

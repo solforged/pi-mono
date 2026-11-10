@@ -168,7 +168,12 @@ export class Sandbox {
     // A start still in flight would otherwise create the container after we leave.
     const pending = this.starting;
     this.starting = undefined;
-    if (pending) await Promise.race([pending.catch(() => {}), sleep(20000)]);
+    if (pending) {
+      // Cleared afterwards: a pending timer would hold a print-mode process open.
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([pending.catch(() => {}), new Promise((resolve) => { timer = setTimeout(resolve, 20000); })]);
+      clearTimeout(timer);
+    }
     this.set("idle");
     let last = false;
     await withLock(join(this.dir(), "lock"), async () => {
@@ -176,6 +181,11 @@ export class Sandbox {
       last = !(await this.liveLeases(this.plan.name)).filter((pid) => pid !== this.pid).length;
     }, this.alive, 10000).catch(() => {});
     if (last) this.options.cli.removeDetached(this.plan.name);
+  }
+
+  // Whether this sandbox, kept from the previous session in this process, fits a new plan.
+  fits(plan: Plan) {
+    return this.phase !== "error" && this.plan.labels["pi.sandbox.config"] === plan.labels["pi.sandbox.config"];
   }
 
   async restart() {

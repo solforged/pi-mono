@@ -36,6 +36,12 @@ const resolvePath = (path: string | undefined, cwd: string) => {
   return resolve(cwd, raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw);
 };
 
+// A session switch, fork, or reload replaces the extension instance inside one
+// process. The running sandbox waits here for the next instance, so the
+// container and anything running in it survive.
+const handoff = globalThis as { __piSolSandbox?: Sandbox };
+const REPLACED = new Set(["reload", "new", "resume", "fork"]);
+
 export default function sandboxExtension(pi: ExtensionAPI) {
   pi.registerFlag("sandbox", { description: "Run tools in the Linux sandbox: on or off (default from settings)", type: "string" });
 
@@ -43,6 +49,7 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   let source = "settings";
   let plan: Plan | undefined;
   let box: Sandbox | undefined;
+  let inherited: Sandbox | undefined;
   let failure: Error | undefined;
   let commitAllowed: boolean | undefined;
   let ui: ExtensionContext | undefined;
@@ -80,31 +87,44 @@ export default function sandboxExtension(pi: ExtensionAPI) {
       const settings = resolveSettings(globalSandboxSettings(agentDir), facts.root);
       const image = settings.image ?? await imageTag(IMAGE_DIR);
       if (mine !== generation) return;
-      plan = buildPlan(facts, settings, image);
-      box = new Sandbox(plan, {
-        cli: new ContainerCli(), stateRoot: join(cacheRoot(), "state"), imageDir: settings.image ? undefined : IMAGE_DIR,
-        onPhase: (phase, detail) => {
-          if (phase === "error" && ui?.hasUI) ui.ui.notify(`Sandbox unavailable: ${detail}`, "error");
-          render(phase);
-        },
-      });
-      render("starting");
+      const next = buildPlan(facts, settings, image);
+      const onPhase = (phase: Phase, detail?: string) => {
+        if (phase === "error" && ui?.hasUI) ui.ui.notify(`Sandbox unavailable: ${detail}`, "error");
+        render(phase);
+      };
+      const kept = inherited;
+      inherited = undefined;
+      if (kept?.fits(next)) {
+        kept.options.onPhase = onPhase;
+        plan = next; box = kept;
+      } else {
+        await kept?.release();
+        if (mine !== generation) return;
+        plan = next;
+        box = new Sandbox(plan, { cli: new ContainerCli(), stateRoot: join(cacheRoot(), "state"), imageDir: settings.image ? undefined : IMAGE_DIR, onPhase });
+      }
+      render(box.phase === "idle" ? "starting" : box.phase);
       // Interactive sessions start at once so failures show early; print-mode
       // runs and child agents start on their first tool call.
       if (ctx.hasUI) box.ensure().catch(() => {});
     } catch (error) {
       if (mine !== generation) return;
       failure = error instanceof Error ? error : new Error(String(error));
+      const kept = inherited;
+      inherited = undefined;
+      await kept?.release();
       render();
       if (ctx.hasUI) ctx.ui.notify(`Sandbox unavailable: ${failure.message}`, "error");
     }
   }
 
-  async function turnOff() {
+  async function turnOff(handOver = false) {
     generation++;
-    const old = box;
-    box = undefined; plan = undefined; failure = undefined; opening = undefined;
-    await old?.release();
+    const old = box ?? inherited;
+    box = undefined; inherited = undefined; plan = undefined; failure = undefined; opening = undefined;
+    if (!old) return;
+    if (handOver) { old.options.onPhase = undefined; handoff.__piSolSandbox = old; }
+    else await old.release();
   }
 
   async function setEnabled(next: boolean, ctx: ExtensionContext, why: string) {
@@ -130,6 +150,8 @@ export default function sandboxExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     ui = ctx;
+    inherited = handoff.__piSolSandbox;
+    handoff.__piSolSandbox = undefined;
     // Checked once: later sessions in this process see our own changes. Children
     // started with --tools never get git_commit.
     commitAllowed ??= pi.getActiveTools().includes("git_commit");
@@ -139,6 +161,7 @@ export default function sandboxExtension(pi: ExtensionAPI) {
       choice = chooseEnabled(pi.getFlag("sandbox"), process.env.PI_SANDBOX, settings);
     } catch (error) {
       // An invalid configuration keeps the sandbox on and failing, never silently off.
+      await turnOff();
       enabled = true; failure = error as Error; process.env.PI_SANDBOX = "on";
       syncCommitTool(); render();
       if (ctx.hasUI) ctx.ui.notify(`Sandbox unavailable: ${failure.message}`, "error");
@@ -147,8 +170,8 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     await apply(choice.enabled, ctx, choice.source);
   });
 
-  pi.on("session_shutdown", async () => {
-    await turnOff();
+  pi.on("session_shutdown", async (event) => {
+    await turnOff(REPLACED.has(event.reason));
     ui = undefined;
   });
 

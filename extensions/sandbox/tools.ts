@@ -5,6 +5,7 @@ import {
   DEFAULT_MAX_BYTES, formatSize, truncateHead, truncateLine,
 } from "@earendil-works/pi-coding-agent";
 import { posix } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type { Sandbox } from "./sandbox.ts";
 import { commandEnv, fdArgs, GREP_SCRIPT, GrepCollector, type GrepParams, guestError, LS_SCRIPT, parseListing, rgArgs, sniffImage, type Listing } from "./guest.ts";
 
@@ -97,6 +98,7 @@ export async function grep(sandbox: Sandbox, params: GrepParams, searchPath: str
   const onAbort = () => stop.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
   let kind = "", pending = "", stderr = "", stopped = false;
+  const decoder = new StringDecoder("utf8"); // Chunks can end inside a multibyte character.
   const consume = (line: string) => {
     if (!kind) { kind = line.trim(); return; }
     if (!stopped && !collector.push(line)) { stopped = true; stop.abort(); }
@@ -106,7 +108,7 @@ export async function grep(sandbox: Sandbox, params: GrepParams, searchPath: str
       signal: stop.signal,
       onData: (chunk) => {
         // stdout and stderr share the stream; rg's JSON lines are recognizable.
-        pending += chunk.toString("utf8");
+        pending += decoder.write(chunk);
         const lines = pending.split("\n");
         pending = lines.pop() ?? "";
         for (const line of lines) {

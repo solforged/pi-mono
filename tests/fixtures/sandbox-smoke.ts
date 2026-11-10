@@ -19,7 +19,7 @@ const running = (name: string) => {
 export default function (pi: ExtensionAPI) {
   const tools: Record<string, any> = {}, events: Record<string, any> = {}, commands: Record<string, any> = {};
   let active = ["read", "write", "edit", "bash", "ls", "find", "grep", "git_commit"];
-  install({
+  const load = () => install({
     on: (event: string, fn: any) => { events[event] = fn; },
     registerTool: (definition: any) => { tools[definition.name] = definition; },
     registerCommand: (name: string, options: any) => { commands[name] = options; },
@@ -29,6 +29,7 @@ export default function (pi: ExtensionAPI) {
     getActiveTools: () => active,
     setActiveTools: (names: string[]) => { active = names; },
   } as any);
+  load();
 
   pi.registerCommand("sandbox-smoke", {
     description: "Exercise the sandbox extension against a live container",
@@ -113,7 +114,16 @@ export default function (pi: ExtensionAPI) {
           assert.match(execFileSync("file", ["-b", join(process.env.LLM_WIKI_DIR, "bin/wiki")], { encoding: "utf8" }), /Mach-O/);
         }
 
-        await events.session_shutdown({}, fake);
+        // A session switch replaces the extension instance; the container and
+        // what runs in it carry over to the next one.
+        await call("bash", { command: "setsid nohup sleep 700 >/dev/null 2>&1 & echo started" });
+        await events.session_shutdown({ reason: "new" }, fake);
+        load();
+        await events.session_start({ reason: "new" }, fake);
+        assert(running(name), "the container did not survive a session switch");
+        assert.match(text(await call("bash", { command: "pgrep -f 'sleep 700' >/dev/null && echo survived || echo restarted" })), /survived/);
+
+        await events.session_shutdown({ reason: "quit" }, fake);
         for (let i = 0; i < 30 && running(name); i++) await sleep(500);
         assert(!running(name), "the container outlived its last session");
         assert.deepEqual(notes.filter((note) => /unavailable/i.test(note)), []);
@@ -121,7 +131,7 @@ export default function (pi: ExtensionAPI) {
       } catch (error) {
         console.error(error);
         process.exitCode = 1;
-        await events.session_shutdown?.({}, fake);
+        await events.session_shutdown?.({ reason: "quit" }, fake);
       } finally {
         rmSync(repo, { recursive: true, force: true });
       }
