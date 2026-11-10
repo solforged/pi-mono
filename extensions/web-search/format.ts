@@ -135,6 +135,15 @@ export function formatFailures(errors: Array<{ provider: ProviderId; message: st
   return `Error: All web search providers failed: ${errors.map((error) => `${error.provider}: ${error.message}`).join("; ")}`;
 }
 
+export const RECENCIES = ["day", "week", "month", "year"] as const;
+// Models that must fill every field send "null" or "" for no recency; search without one.
+export function dropBlankRecency(args: unknown): unknown {
+  const input = (args ?? {}) as { recency?: unknown };
+  if (input.recency === undefined || RECENCIES.includes(input.recency as any)) return args;
+  const { recency: _blank, ...rest } = input;
+  return rest;
+}
+
 export function withRecencyHint(query: string, recency?: string): string {
   return recency ? `${query} (focus on the past ${recency})` : query;
 }

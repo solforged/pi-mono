@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { codexModels, consumeCodexEvents, extractTextSources, resolveCodexUrl, shouldRetryCodexModel } from "../extensions/web-search/codex.ts";
 import { buildExaBody, parseExaResponse, recencyStartDate, synthesizeAnswer } from "../extensions/web-search/exa.ts";
-import { attemptSummary, errorDetail, formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, withRecencyHint } from "../extensions/web-search/format.ts";
+import { attemptSummary, dropBlankRecency, errorDetail, formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, withRecencyHint } from "../extensions/web-search/format.ts";
 import { executeSearch, orderByHealth, registryAuth, type SearchAuth } from "../extensions/web-search/search.ts";
 import { sseText } from "../extensions/web-search/sse.ts";
 import { searchCall, searchView } from "../extensions/web-search/view.ts";
@@ -357,4 +357,13 @@ test("a backend that timed out is tried last until it answers or its cooldown en
   const until = new Map([["codex", 1000]]) as Map<any, number>;
   assert.deepEqual(orderByHealth(["codex", "xai", "exa"], until, 999), ["xai", "exa", "codex"]);
   assert.deepEqual(orderByHealth(["codex", "xai", "exa"], until, 1000), ["codex", "xai", "exa"]);
+});
+
+test("a blank recency is dropped before validation, a real one is kept", () => {
+  assert.deepEqual(dropBlankRecency({ query: "q", recency: "null", limit: null }), { query: "q", limit: null });
+  assert.deepEqual(dropBlankRecency({ query: "q", recency: "" }), { query: "q" });
+  assert.deepEqual(dropBlankRecency({ query: "q", recency: null }), { query: "q" });
+  const kept = { query: "q", recency: "week" };
+  assert.equal(dropBlankRecency(kept), kept);
+  assert.equal(dropBlankRecency(undefined), undefined);
 });

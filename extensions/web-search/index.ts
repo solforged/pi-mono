@@ -3,11 +3,11 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { loadPage, pageView } from "./fetch.ts";
-import { attemptSummary, searchOrder } from "./format.ts";
+import { attemptSummary, dropBlankRecency, RECENCIES, searchOrder } from "./format.ts";
 import { availableProviders, executeSearch, orderByHealth, registryAuth, timedOutRecently, type SearchAuth, type SearchQuery } from "./search.ts";
 import { fetchCall, fetchView, searchCall, searchView } from "./view.ts";
 
-const Recency = StringEnum(["day", "week", "month", "year"] as const);
+const Recency = StringEnum(RECENCIES);
 
 function row(previous: unknown, text: string): Text {
   const component = previous instanceof Text ? previous : new Text("", 0, 0);
@@ -78,6 +78,7 @@ export default function (pi: ExtensionAPI) {
     // Sent with every request: keep it short. Backend order is in docs/providers.md.
     description: "Search the web for current events, docs and facts beyond your knowledge. site:, after: and quotes work. Prefer primary sources; cite their URLs.",
     parameters: Type.Object({ query: Type.String(), recency: Type.Optional(Recency), limit: Type.Optional(Type.Number()) }),
+    prepareArguments: (args) => dropBlankRecency(args) as any,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       onUpdate?.({ content: [{ type: "text", text: "Searching..." }] });
       const query = sessionQuery(ctx, {
