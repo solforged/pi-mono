@@ -24,7 +24,7 @@ repository root:
 mise run test
 mise run computer:test
 # Or directly:
-node --test tests/*.test.ts
+node --test --import ./tests/git-env.ts tests/*.test.ts
 node --test computer/tests/*.test.mjs
 ```
 
@@ -32,7 +32,9 @@ The suites make no model calls. `mise run profile` and `mise run faults` are
 the offline [measuring](measuring.md) tools; the second runs the installed Pi
 against a scripted provider. `mise run sandbox:smoke` is a separate live
 check of the [sandbox](sandbox.md) that needs Apple container services. Git hooks are isolated only in throwaway test
-repositories; production hooks remain active. When Pi is installed, the
+repositories; production hooks remain active. `tests/git-env.ts` clears
+`GIT_DIR` and the other variables that would point those repositories at
+the one running the tests, as they are set inside a hook. When Pi is installed, the
 Anthropic integration test exercises its bundled SDK and stream parser with
 intercepted HTTP requests. The computer suite includes an encrypted backup
 round trip when age and qemu-img are installed; otherwise that test is skipped.

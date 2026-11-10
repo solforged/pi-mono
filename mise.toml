@@ -4,7 +4,7 @@ run = "node scripts/install.ts"
 
 [tasks.test]
 description = "Test locally owned pi extensions without model calls"
-run = "node --test tests/*.test.ts"
+run = "node --test --import ./tests/git-env.ts tests/*.test.ts"
 
 [tasks.profile]
 description = "Profile saved Pi sessions: cost, carried context, cache rewrites, candidate sizing"
