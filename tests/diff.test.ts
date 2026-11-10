@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { changedHunks, collect, parseDiff, unquote } from "../extensions/diff/git.ts";
-import { bundledHighlighter, DEFAULT_SETTINGS, readSettings, registerDiff, tick, which } from "../extensions/diff/pane.ts";
+import { bundledHighlighter, DEFAULT_SETTINGS, readPanes, readSettings, registerDiff, tick, which } from "../extensions/diff/pane.ts";
 import { body, DEFAULT_PALETTE, emphasis, layout, type View } from "../extensions/diff/render.ts";
 import { createHighlighter, loadHighlighter, piecesFromHtml, tokenFor } from "../extensions/diff/syntax.ts";
 import { paint, sanitize, width, wrapSpans } from "../extensions/diff/text.ts";
@@ -167,7 +167,7 @@ test("lays out the summary, a scrolling file list and the selected diff", () => 
   assert.ok(help.some((line) => line.includes("follow Pi's edits")));
 });
 
-function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean; columns?: number } = {}) {
+function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean; reopen?: boolean; columns?: number; pid?: number } = {}) {
   const commands = new Map<string, any>(), handlers = new Map<string, Function>();
   const calls: Array<[string, string[]]> = [], notes: string[] = [];
   const state = { status: "", columns: options.columns ?? 200 };
@@ -181,8 +181,9 @@ function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean;
     return "{}";
   };
   registerDiff(pi as any, {
-    palette: () => ({ accent: "#ff00ff" }), run, dir, env, pid: 4242, isViewer: () => true,
-    settings: () => ({ autoOpen: options.auto ?? false, minColumns: 150 }), columns: () => state.columns,
+    palette: () => ({ accent: "#ff00ff" }), run, dir, env, pid: options.pid ?? 4242, isViewer: () => true,
+    settings: () => ({ autoOpen: options.auto ?? false, reopen: options.reopen ?? false, minColumns: 150 }), columns: () => state.columns,
+    panes: join(dir, "panes.json"),
   });
   const ctx = { mode: "tui", cwd: "/repo/sub", ui: { notify: (m: string) => notes.push(m) } };
   const splits = () => calls.filter(([, args]) => args[0] === "split");
@@ -338,7 +339,7 @@ test("reads diff settings with defaults", async (t) => {
   t.after(() => rm(agent, { recursive: true, force: true }));
   assert.deepEqual(readSettings(agent), DEFAULT_SETTINGS);
   await writeFile(join(agent, "settings.json"), JSON.stringify({ diff: { autoOpen: false, minColumns: 180 } }));
-  assert.deepEqual(readSettings(agent), { autoOpen: false, minColumns: 180 });
+  assert.deepEqual(readSettings(agent), { autoOpen: false, reopen: true, minColumns: 180 });
   await writeFile(join(agent, "settings.json"), JSON.stringify({ diff: { autoOpen: "yes", minColumns: -1 } }));
   assert.deepEqual(readSettings(agent), DEFAULT_SETTINGS);
 });
@@ -384,4 +385,60 @@ test("loads the highlight.js build bundled with the installed Pi", { skip: !piBi
   const [line] = highlighter.highlight(["fn main() { let x = 1; }"], "rust");
   assert.ok(line.some((piece) => piece.token === "keyword" && piece.text === "fn"));
   assert.equal(line.map((piece) => piece.text).join(""), "fn main() { let x = 1; }");
+});
+
+test("reopens the pane Pi quit with when changes remain", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "diff-ipc-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const bin = await mkdtemp(join(tmpdir(), "diff-bin-"));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  for (const name of ["rex", "node"]) await writeFile(join(bin, name), "", { mode: 0o755 });
+  const env = { PATH: bin, REX_SESSION: "session:s", REX_BLOCK: "block:b" };
+  const { spawn } = await import("node:child_process");
+  const start = async (pid: number, dirty: boolean, reason = "startup") => {
+    const h = harness(env, dir, { reopen: true, pid });
+    h.state.status = dirty ? " M a.ts\0" : "";
+    h.handlers.get("session_start")!({ reason }, h.ctx);
+    await settle();
+    return h;
+  };
+  /** Opens the pane in a Pi with `pid`, then quits with the viewer alive or closed. */
+  const quit = async (h: ReturnType<typeof harness>, pid: number, open: boolean) => {
+    if (open) {
+      const viewer = spawn("sleep", ["30"]);
+      t.after(() => viewer.kill());
+      await writeFile(join(dir, `${pid}.viewer`), String(viewer.pid));
+      h.handlers.get("session_shutdown")!({ reason: "quit" });
+      viewer.kill();
+      await new Promise((resolve) => viewer.on("exit", resolve));
+    } else h.handlers.get("session_shutdown")!({ reason: "quit" });
+  };
+
+  // Nothing remembered: a fresh Pi does not open the pane.
+  assert.equal((await start(1, true)).splits().length, 0);
+
+  // Opened with /diff and still open at quit: the next Pi reopens it.
+  const first = await start(2, true);
+  await first.command.handler("", first.ctx);
+  await quit(first, 2, true);
+  const second = await start(3, true);
+  assert.equal(second.splits().length, 1);
+  assert.equal(readPanes(join(dir, "panes.json"))["/repo"].pid, 3);
+
+  // Not on /new, /resume or /reload in a running Pi, nor with a clean tree.
+  assert.equal((await start(4, true, "new")).splits().length, 0);
+  assert.equal((await start(5, false)).splits().length, 0);
+
+  // Closed before quitting: forgotten.
+  await quit(second, 3, false);
+  assert.deepEqual(readPanes(join(dir, "panes.json")), {});
+  assert.equal((await start(6, true)).splits().length, 0);
+
+  // Another Pi that never opened a pane leaves the memory alone.
+  const owner = await start(7, true);
+  await owner.command.handler("", owner.ctx);
+  await quit(owner, 7, true);
+  const bystander = harness(env, dir, { pid: 8 });
+  bystander.handlers.get("session_shutdown")!({ reason: "quit" });
+  assert.equal(readPanes(join(dir, "panes.json"))["/repo"].pid, 7);
 });

@@ -18,12 +18,19 @@ opens in child agents, outside the interactive TUI, or while Pi's terminal is
 narrower than `minColumns`; in that last case it waits until the window is wide
 enough.
 
+If the pane was still open when you quit Pi, the next Pi started in the same
+worktree reopens it straight away, provided there are still uncommitted
+changes. This covers `pi`, `pi -c` and `pi -r`, but not `/new`, `/resume` or
+`/reload`, which keep the pane they had. Closing the pane before quitting
+forgets it. Open panes are remembered by worktree in
+`~/.pi/agent/diff-panes.json` for up to 30 days.
+
 Each check runs `git status` without optional locks after a tool that can
 change files, and stops once the pane is open. Configure it in
 `~/.pi/agent/settings.json`:
 
 ```json
-{ "diff": { "autoOpen": true, "minColumns": 150 } }
+{ "diff": { "autoOpen": true, "reopen": true, "minColumns": 150 } }
 ```
 
 `/diff staged` and `/diff branch` open the pane on another source. Press `s` in

@@ -21,17 +21,22 @@ const MAX_STATS = 2_000;
 export interface Settings {
   /** Open the pane once Pi first changes the working tree in a session. */
   autoOpen: boolean;
+  /** Reopen it when Pi starts in a worktree where it was open at the last quit, if changes remain. */
+  reopen: boolean;
   /** Pi's narrowest terminal width, in columns, for opening it automatically. */
   minColumns: number;
 }
-export const DEFAULT_SETTINGS: Settings = { autoOpen: true, minColumns: 150 };
+export const DEFAULT_SETTINGS: Settings = { autoOpen: true, reopen: true, minColumns: 150 };
+
+const agentDir = () => process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 
 /** The `diff` object in the agent directory's settings.json. */
-export function readSettings(agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent")): Settings {
+export function readSettings(dir = agentDir()): Settings {
   try {
-    const value = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8")).diff ?? {};
+    const value = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).diff ?? {};
     return {
       autoOpen: typeof value.autoOpen === "boolean" ? value.autoOpen : DEFAULT_SETTINGS.autoOpen,
+      reopen: typeof value.reopen === "boolean" ? value.reopen : DEFAULT_SETTINGS.reopen,
       minColumns: Number.isInteger(value.minColumns) && value.minColumns > 0 ? value.minColumns : DEFAULT_SETTINGS.minColumns,
     };
   } catch {
@@ -40,6 +45,35 @@ export function readSettings(agentDir = process.env.PI_CODING_AGENT_DIR || join(
 }
 
 export const ipcDir = () => join(tmpdir(), `pi-diff-${userInfo().uid}`);
+
+/**
+ * Worktrees, by Git root, whose pane was open when Pi last quit there. Only a
+ * Pi that opened a pane in a worktree updates that worktree's entry.
+ */
+type Panes = Record<string, { pid: number; at: number }>;
+const KEEP_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function readPanes(file: string): Panes {
+  try {
+    const value = JSON.parse(readFileSync(file, "utf8"));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePane(file: string, root: string, pid: number | undefined) {
+  const panes = readPanes(file);
+  if (pid === undefined) delete panes[root];
+  else panes[root] = { pid, at: Date.now() };
+  for (const [key, value] of Object.entries(panes)) if (!(Date.now() - value.at < KEEP_MS)) delete panes[key];
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    const temporary = `${file}.${process.pid}.tmp`;
+    writeFileSync(temporary, `${JSON.stringify(panes, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temporary, file);
+  } catch {}
+}
 
 /** highlight.js as shipped with Pi for HTML export, beside the running binary. */
 export function bundledHighlighter(execPath = process.execPath): string | undefined {
@@ -112,6 +146,8 @@ export interface Options {
   isViewer?: (pid: number) => boolean;
   settings?: () => Settings;
   columns?: () => number;
+  /** Where open panes are remembered across restarts. */
+  panes?: string;
 }
 
 export function registerDiff(pi: ExtensionAPI, options: Options) {
@@ -122,6 +158,9 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
   const settings = options.settings ?? (() => readSettings());
   const columns = options.columns ?? (() => process.stdout.columns ?? 0);
   const paths = new Map<string, string>();
+  const panes = options.panes ?? join(agentDir(), "diff-panes.json");
+  /** The worktree of the last pane this Pi opened. */
+  let opened: string | undefined;
   const gitRoot = (cwd: string) => exec("git", ["rev-parse", "--show-toplevel"], cwd).then((out) => out.trim(), () => "");
 
   async function open(ctx: ExtensionContext, source: Source, focus?: string) {
@@ -145,6 +184,8 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
       ...(options.highlighter ? ["--highlighter", options.highlighter] : []),
       ...(focus ? ["--focus", focus] : []),
     ], ctx.cwd);
+    opened = root;
+    writePane(panes, root, pid);
     // Rex splits evenly whatever --ratio says, so move the border afterwards.
     // The pane is already open, so a failure here only leaves it wider.
     let pane: unknown;
@@ -170,18 +211,24 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
     if (baseline !== undefined && session === auto.session) auto.baseline = baseline;
   }
 
-  async function arm(ctx: ExtensionContext) {
+  async function arm(ctx: ExtensionContext, reason: string) {
     const session = ++auto.session;
     auto.armed = false;
     auto.focus = undefined;
-    if (!settings().autoOpen || ctx.mode !== "tui") return;
+    const { autoOpen, reopen, minColumns } = settings();
+    if ((!autoOpen && !reopen) || ctx.mode !== "tui") return;
     if (!env.REX_SESSION || !env.REX_BLOCK || env.PI_REX_CHILD || env.PI_WORKFLOW_CHILD_CONFIG) return;
     if (viewerPid(dir, pid) !== undefined) return;
     const root = await gitRoot(ctx.cwd);
     if (!root || session !== auto.session) return;
     const baseline = await treeState(exec, root).catch(() => undefined);
     if (baseline === undefined || session !== auto.session) return;
-    Object.assign(auto, { armed: true, root, baseline });
+    // A fresh Pi reopens the pane it quit with, while there is still something to show.
+    if (reopen && reason === "startup" && baseline && readPanes(panes)[root] && columns() >= minColumns) {
+      try { await open(ctx, "uncommitted"); return; }
+      catch (error) { ctx.ui.notify(`Could not reopen the diff pane: ${(error as Error).message}`, "warning"); }
+    }
+    if (autoOpen) Object.assign(auto, { armed: true, root, baseline });
   }
 
   async function check(ctx: ExtensionContext, focus?: string) {
@@ -234,7 +281,15 @@ export function registerDiff(pi: ExtensionAPI, options: Options) {
     },
   });
 
-  pi.on("session_start", (_event, ctx) => { void arm(ctx); });
+  pi.on("session_start", (event, ctx) => { void arm(ctx, event.reason); });
+
+  // On quit, remember whether this Pi's pane is still open. The viewer outlives
+  // Pi by up to a second, so it is still running here.
+  pi.on("session_shutdown", (event) => {
+    if (event.reason !== "quit" || !opened) return;
+    if (viewerPid(dir, pid) !== undefined) writePane(panes, opened, pid);
+    else if (readPanes(panes)[opened]?.pid === pid) writePane(panes, opened, undefined);
+  });
 
   pi.on("tool_execution_start", (event, ctx) => {
     const path = (event.args as { path?: unknown; file_path?: unknown } | undefined);
