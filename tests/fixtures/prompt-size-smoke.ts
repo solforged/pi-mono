@@ -8,6 +8,8 @@ import { declarationSize, measure, owner, REPEATED_RULES } from "../../extension
 export const BUDGETS: Record<string, number> = {
   artifact_read: 500, ask_user_question: 960, intercom: 480, rex_agent: 640, rex_result: 440, rex_send: 560, session_read: 620,
   session_search: 520, subagent: 560, todo: 420, web_fetch: 380, web_search: 400,
+  // figure registers only on macOS, where it can draw.
+  ...(process.platform === "darwin" ? { figure: 500 } : {}),
 };
 // Tools whose prompt guidelines are deliberate (see docs/ask.md); others put guidance in the description.
 const GUIDED = new Set(["ask_user_question"]);
