@@ -23,8 +23,9 @@ function probe(files: Record<string, "file" | "dir"> = {}, patch: Partial<Probe>
 
 test("settings come from defaults, then globals, then the closest project entry", () => {
   assert.deepEqual(resolveSettings(undefined, "/x", home), DEFAULTS);
+  assert.equal(DEFAULTS.enabled, false);
   const raw = {
-    cpus: 4, mounts: ["~/src/shared"],
+    enabled: true, cpus: 4, mounts: ["~/src/shared"],
     projects: { "~/src": { memory: "4G" }, "~/src/app": { enabled: false, mounts: [{ path: "/opt/data", readonly: false }] } },
   };
   const app = resolveSettings(raw, "/Users/me/src/app", home);

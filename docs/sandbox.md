@@ -2,7 +2,9 @@
 
 `extensions/sandbox` runs Pi's file and shell tools (`read`, `write`, `edit`,
 `bash`, `grep`, `find`, `ls`) and your `!` commands in a Debian arm64 container
-using Apple's `container` CLI. It is on by default. Pi itself, other extension
+using Apple's `container` CLI. It is off by default while it is being tested;
+turn it on with `/sandbox on`, `pi --sandbox on`, or `"enabled": true` in
+settings. Pi itself, other extension
 tools, and provider credentials stay on the host.
 
 While the sandbox is on, a green cube follows the cost on the status line, with
@@ -16,13 +18,13 @@ there is no marker.
 - The first use builds the image from [extensions/sandbox/image](../extensions/sandbox/image)
   (about a minute). Editing those files triggers a rebuild on the next start.
 
-## Turning it off
+## Turning it on or off
 
 | How | Scope |
 |---|---|
 | Ctrl+Shift+S, or `/sandbox off`, `/sandbox on`, `/sandbox toggle` | This project, remembered across launches |
 | `pi --sandbox off` | This process |
-| `"enabled": false` in settings | Globally or per project |
+| `"enabled"` in settings | Globally or per project |
 
 The flag wins, then a parent Pi's state for child agents, then the project's
 last toggle, then settings. Toggles are kept per project root in

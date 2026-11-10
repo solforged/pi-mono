@@ -13,7 +13,9 @@ export interface Settings {
   mounts: ExtraMount[];
   image?: string;
 }
-export const DEFAULTS: Settings = { enabled: true, cpus: 6, memory: "8G", wiki: "rw", mounts: [] };
+// Off by default while sandboxing is still being tested; opt in with
+// `"enabled": true`, `--sandbox on`, or `/sandbox on`.
+export const DEFAULTS: Settings = { enabled: false, cpus: 6, memory: "8G", wiki: "rw", mounts: [] };
 
 export const expandHome = (path: string, home = homedir()) =>
   path === "~" ? home : path.startsWith("~/") ? join(home, path.slice(2)) : path;
