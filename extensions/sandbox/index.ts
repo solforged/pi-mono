@@ -19,10 +19,8 @@ import { chooseEnabled, resolveSettings } from "./settings.ts";
 import { bashOps, editOps, findOps, grep, lsOps, readOps, writeOps } from "./tools.ts";
 
 const STATUS = "sandbox";
-// Nerd Font md-cube while tools run in the container, md-cube_off_outline
-// (struck through) while they run on the host.
+// Nerd Font md-cube; shown only while the sandbox is on.
 const ON = "\u{F01A6}";
-const OFF = "\u{F141D}";
 export const SHORTCUT = "ctrl+shift+s";
 const IMAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), "image");
 
@@ -60,18 +58,22 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   let generation = 0;
   let opening: Promise<void> | undefined;
 
-  // The status line extension shows the marker first on the line; Pi's own
-  // footer shows the same marker as an extension status.
+  // The status line extension shows the marker after the cost; Pi's own footer
+  // shows the same marker as an extension status. Off shows nothing.
   const render = (phase?: Phase) => {
     if (!ui?.hasUI) return;
     const state = !enabled ? "off" : failure ? "error" : phase ?? box?.phase ?? "starting";
-    const [text, color] = state === "off" ? [`${OFF} off`, "warning"]
-      : state === "error" ? [`${ON}!`, "error"]
+    if (state === "off") {
+      ui.ui.setStatus(STATUS, undefined);
+      pi.events.emit("statusline:segment", { key: STATUS });
+      return;
+    }
+    const [text, color] = state === "error" ? [`${ON}!`, "error"]
       : state === "building" ? [`${ON} building`, "muted"]
       : state === "ready" ? [ON, "success"]
       : [`${ON}…`, "muted"];
     ui.ui.setStatus(STATUS, ui.ui.theme.fg(color as any, text));
-    pi.events.emit("statusline:segment", { key: STATUS, text, color, priority: 8, position: "start" });
+    pi.events.emit("statusline:segment", { key: STATUS, text, color, priority: 8 });
   };
 
   const syncCommitTool = () => {

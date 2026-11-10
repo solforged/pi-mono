@@ -24,8 +24,8 @@ From left to right:
 - Session cost from every billed entry, as in Pi's footer. On a subscription,
   a crossed-out dollar replaces `$`: the amount is what API billing would have
   charged.
-- Segments other extensions contribute, ordered by key. The
-  [sandbox](sandbox.md) marker leads the line instead.
+- Segments other extensions contribute, ordered by key, such as the
+  [sandbox](sandbox.md) marker.
 
 An extension adds or replaces a segment with
 

@@ -5,9 +5,9 @@
 using Apple's `container` CLI. It is on by default. Pi itself, other extension
 tools, and provider credentials stay on the host.
 
-The marker leads the status line: a green filled cube while the sandbox is on,
-`…` while it starts, a red `!` when it is unavailable, and a yellow struck-through
-cube with `off` when tools run on the host.
+While the sandbox is on, a green cube follows the cost on the status line, with
+`…` while it starts and a red `!` when it is unavailable. With the sandbox off,
+there is no marker.
 
 ## Requirements
 
