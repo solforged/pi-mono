@@ -27,6 +27,8 @@ export type LlmMessage = {
 
 export type Archive = {
   frames: RenderedFrame[];
+  /** Older pages kept in `text` but not rendered: they would not fit a request. */
+  omittedFrames?: number;
   totalChars: number;
   truncatedChars: number;
   text?: string;
@@ -212,6 +214,7 @@ export function getArchive(details: unknown): Archive | undefined {
     frames,
     totalChars: typeof archive.totalChars === "number" ? archive.totalChars : 0,
     truncatedChars: typeof archive.truncatedChars === "number" ? archive.truncatedChars : 0,
+    ...(typeof archive.omittedFrames === "number" && archive.omittedFrames > 0 ? { omittedFrames: archive.omittedFrames } : {}),
     ...(text ? { text } : {}),
     ...(textHead ? { textHead } : {}),
     ...(textTail ? { textTail } : {}),
@@ -226,7 +229,7 @@ export function historyBlocks(archive: Archive, maxFrameDataBytes = FRAME_DATA_B
   const blocks: HistoryBlock[] = [];
   let used = 0;
   const kept: RenderedFrame[] = [];
-  let omitted = 0;
+  let omitted = archive.omittedFrames ?? 0;
   for (let i = archive.frames.length - 1; i >= 0; i--) {
     const frame = archive.frames[i]!;
     if (used + frame.data.length > maxFrameDataBytes) { omitted++; continue; }
@@ -297,7 +300,7 @@ export function fileOpsLists(fileOps: unknown, previous?: unknown) {
   };
 }
 
-export function compactText(text: string, shape: Shape, extras?: { previousText?: string; previousSummary?: string; maxFrames?: number }) {
+export function compactText(text: string, shape: Shape, extras?: { previousText?: string; previousSummary?: string; maxFrames?: number; maxFrameDataBytes?: number }) {
   let archiveText = normalize(text);
   if (extras?.previousText) archiveText = archiveText ? `${extras.previousText}${NEWLINE_GLYPH}${archiveText}` : extras.previousText;
   else if (extras?.previousSummary) {
@@ -306,13 +309,25 @@ export function compactText(text: string, shape: Shape, extras?: { previousText?
   }
   const layout = planArchive(archiveText, shape, extras?.maxFrames ?? MAX_FRAMES);
   const geo = geometry(shape);
-  const frames = layout.frames.map((page) => renderFrame(page, shape));
+  // Newest pages first, stopping at the request budget: older frames could
+  // never be sent, and each costs render time and session-file space. Their
+  // text stays in the archive for later compactions.
+  const budget = extras?.maxFrameDataBytes ?? FRAME_DATA_BYTES_BUDGET;
+  const frames: RenderedFrame[] = [];
+  for (let i = layout.frames.length - 1, used = 0; i >= 0; i--) {
+    const frame = renderFrame(layout.frames[i]!, shape);
+    if (used + frame.data.length > budget) break;
+    used += frame.data.length;
+    frames.unshift(frame);
+  }
+  const omittedFrames = layout.frames.length - frames.length;
   const textChars = layout.textHead.length + layout.textTail.length;
   const totalChars = frames.reduce((sum, frame) => sum + frame.chars, 0) + textChars;
   const archive: Archive = {
     frames,
     totalChars,
     truncatedChars: layout.truncatedChars,
+    ...(omittedFrames ? { omittedFrames } : {}),
     ...(layout.keptText ? { text: layout.keptText } : {}),
     ...(layout.textHead ? { textHead: layout.textHead } : {}),
     ...(layout.textTail ? { textTail: layout.textTail } : {}),
@@ -371,7 +386,7 @@ export function injectHistory<T extends { role: string; summary?: string; timest
   vision: boolean,
 ) {
   if (!archive) return messages;
-  const blocks = vision ? historyBlocks(archive) : historyBlocks({ ...archive, frames: [] }, 0);
+  const blocks = vision ? historyBlocks(archive) : historyBlocks({ ...archive, frames: [], omittedFrames: 0 }, 0);
   if (!blocks.length) return messages;
   return messages.map((message) => {
     if (message.role !== "compactionSummary") return message;

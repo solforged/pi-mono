@@ -37,7 +37,7 @@ export default function (pi: ExtensionAPI) {
         `Vision: ${vision ? "yes" : "no"}`,
         `Auto: ${vision ? "snapcompact on compact" : "default LLM summary"}`,
         archive
-          ? `Last archive: ${archive.frames.length} frames, ${archive.totalChars.toLocaleString()} chars${archive.truncatedChars ? `, dropped ${archive.truncatedChars.toLocaleString()}` : ""}`
+          ? `Last archive: ${archive.frames.length} frames, ${archive.totalChars.toLocaleString()} chars${archive.omittedFrames ? `, ${archive.omittedFrames} older pages not imaged` : ""}${archive.truncatedChars ? `, dropped ${archive.truncatedChars.toLocaleString()}` : ""}`
           : "Last archive: none",
       ];
       report(ctx, lines.join("\n"));

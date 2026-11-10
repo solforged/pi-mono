@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   compactMessages,
   compactText,
+  getArchive,
   historyBlocks,
   injectHistory,
   isVision,
@@ -113,6 +114,25 @@ test("historyBlocks keep newest frames when the byte budget is tight", () => {
   const images = tiny.filter((block) => block.type === "image");
   assert.ok(images.length < packed.archive.frames.length);
   assert.ok(tiny.some((block) => block.type === "text" && /omitted/.test(block.text)));
+});
+
+test("compaction renders only the newest frames that fit a request and keeps the text of the rest", () => {
+  const shape = { cellWidth: 8, cellHeight: 22, frameSize: 160 };
+  const text = "Hello world. ".repeat(800);
+  const full = compactText(text, shape, { maxFrames: 8 });
+  assert.equal(full.archive.frames.length, 8);
+  assert.equal(full.archive.omittedFrames, undefined);
+  const newestThree = full.archive.frames.slice(-3).reduce((sum, frame) => sum + frame.data.length, 0);
+  const capped = compactText(text, shape, { maxFrames: 8, maxFrameDataBytes: newestThree });
+  assert.equal(capped.archive.frames.length, 3);
+  assert.equal(capped.archive.omittedFrames, 5);
+  assert.deepEqual(capped.archive.frames, full.archive.frames.slice(-3));
+  assert.equal(capped.archive.text, full.archive.text);
+  // A later compaction rebuilds from the text, so unrendered pages are not lost.
+  assert.equal(getArchive({ snapcompact: capped.archive })?.omittedFrames, 5);
+  const blocks = historyBlocks(capped.archive);
+  assert.equal(blocks.filter((block) => block.type === "image").length, 3);
+  assert.ok(blocks.some((block) => block.type === "text" && /5 older snapcompact frames omitted/.test(block.text)));
 });
 
 test("previousSnapcompact reads the latest compaction archive", () => {

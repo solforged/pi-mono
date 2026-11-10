@@ -11,7 +11,8 @@ keeps the default summarizer.
 
 `/snapcompact` shows whether this model will use it and the size of the last
 archive on this branch. Frames are stored on the compaction entry and
-re-attached on every LLM request.
+re-attached on every LLM request. Only the newest pages that fit one request
+(3 MB of image data) are rendered; older pages stay in the archive as text.
 
 ## Output artifacts
 
