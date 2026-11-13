@@ -18,7 +18,7 @@ import { entries as hubEntries, short, type Entry, type HubAction, type Peer } f
 import { openHub, widget, type HubHost } from "./hub.ts";
 import { installLeftArrow } from "./left-editor.ts";
 import { completionRenderer, toolRenderers } from "./render.ts";
-import { switchTools, TOOLS_ENTRY } from "./tools.ts";
+import { canUseRex, switchTools, TOOLS_ENTRY } from "./tools.ts";
 import { registerRexTitle, setTitlePrefix } from "./title.ts";
 import { agentsTabLabel, MARKS, pickMark } from "./tabs.ts";
 import { REX_WORKERS, type RexWorkersRequest } from "./workers.ts";
@@ -176,7 +176,7 @@ export default async function (pi: ExtensionAPI) {
     mark = MARKS.includes(savedMark) ? savedMark : undefined;
     // Tool sets are restored with the session, so decide again at every start.
     const removedBefore = ((ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === TOOLS_ENTRY).at(-1) as any)?.data?.removed ?? []) as string[];
-    const tools = switchTools(pi.getActiveTools(), pi.getAllTools().map(t => t.name), !!(process.env.REX_SESSION && process.env.REX_BLOCK), removedBefore);
+    const tools = switchTools(pi.getActiveTools(), pi.getAllTools().map(t => t.name), canUseRex(process.env, ctx.mode), removedBefore);
     if (tools.changed) pi.setActiveTools(tools.active);
     if (tools.recordChanged) pi.appendEntry(TOOLS_ENTRY, { removed: tools.removed });
     const config = await loadConfig(root, runner.agentDir);

@@ -15,3 +15,6 @@ export function switchTools(active: string[], registered: string[], inRex: boole
   const changed = next.size !== active.length || [...next].some(n => !active.includes(n));
   return { active: [...next], removed, changed, recordChanged: removed.join() !== [...removedBefore].sort().join() };
 }
+
+/** Rex children open only from an interactive Pi in a Rex pane; print, JSON and RPC runs there keep `subagent`. */
+export const canUseRex = (env: Record<string, string | undefined>, mode: string) => !!(env.REX_SESSION && env.REX_BLOCK) && mode === "tui";

@@ -6,8 +6,9 @@ receive parent messages, and become a human-controlled session. No dependencies
 are added; `mise run install` links it with the other extensions.
 
 Each session gets one delegation tool. Inside Rex, the Rex tools replace the
-headless `subagent` tool, which stays available as `/subagent`. Outside Rex the
-Rex tools are hidden, because children need a Rex pane. This is decided again
+headless `subagent` tool, which stays available as `/subagent`. Outside Rex,
+and in print, JSON or RPC runs started from a Rex pane, the Rex tools are
+hidden, because children need a pane and an interactive parent. This is decided again
 at every session start. Only tools the switch itself removed are restored, so
 choices made with `--tools`, `/tools` or settings are kept.
 

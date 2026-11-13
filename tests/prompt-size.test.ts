@@ -51,8 +51,13 @@ test("installed Pi keeps every repo tool declaration within budget", t => {
   const env = { ...process.env };
   for (const key of ["PI_REX_CHILD", "PI_WORKFLOW_CHILD_CONFIG", "REX_SESSION", "REX_BLOCK"]) delete env[key];
   const extensions = ["artifacts", "ask", "figure", "goal", "intercom", "memory", "rex", "sessions", "todo", "web-search", "workflows", "workflowz", "worktree"].flatMap(name => ["-e", join(root, "extensions", name, "index.ts")]);
-  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", ...extensions, "-e", join(root, "tests/fixtures/prompt-size-smoke.ts"), ...noModel, "-p", "/prompt-size-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
+  const smoke = (extra: NodeJS.ProcessEnv = {}) => spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", ...extensions, "-e", join(root, "tests/fixtures/prompt-size-smoke.ts"), ...noModel, "-p", "/prompt-size-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env: { ...env, ...extra } });
+  const check = smoke();
   if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
   assert.equal(check.status, 0, check.stderr || check.stdout);
   assert.match(check.stdout, /Prompt size:.*passed/);
+  // Print mode in a Rex pane cannot open children either, so it keeps subagent too.
+  const inPane = smoke({ REX_SESSION: "session:test", REX_BLOCK: "block:test" });
+  assert.equal(inPane.status, 0, inPane.stderr || inPane.stdout);
+  assert.match(inPane.stdout, /Prompt size:.*passed/);
 });
