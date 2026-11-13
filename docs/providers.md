@@ -110,14 +110,15 @@ retained in [NOTICE](../extensions/anthropic/NOTICE).
 
 ## Anthropic subprocesses
 
-Subprocesses disable extension discovery. If you choose the Anthropic profile
-for subscription-backed advisor or worker calls, explicitly load this wrapper
-there too. For this checkout location, merge this into `roles.local.json`:
+Subprocesses disable extension discovery. If you use the `anthropic` preset, or
+any Anthropic role, for subscription-backed advisor or worker calls, explicitly
+load this wrapper there too. For this checkout location, merge this into
+`roles.local.json`:
 
 ```json
 {
   "profiles": {
-    "anthropic": {
+    "personal": {
       "subagents": {
         "childExtensions": ["~/src/pi-mono/extensions/anthropic/index.ts"]
       }
@@ -126,7 +127,8 @@ there too. For this checkout location, merge this into `roles.local.json`:
 }
 ```
 
-Adjust that path if the checkout is elsewhere. This does not copy credentials;
-children use Pi's existing auth storage. In-process titles, commits, and learning
-already use the parent provider wrapper. See [model roles](roles.md) for profile
-selection and local overrides.
+`subagents` belongs to a profile, or to the top level for every profile; presets
+cannot set it. Adjust that path if the checkout is elsewhere. This does not copy
+credentials; children use Pi's existing auth storage. In-process titles,
+commits, and learning already use the parent provider wrapper. See
+[model roles](roles.md) for profile selection and local overrides.
