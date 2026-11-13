@@ -14,7 +14,7 @@ export const OUTPUT_MAX = 30_000;
 
 export const DESCRIPTION = [
   "The user's memory wiki: their own vocabulary, systems, current work and past decisions.",
-  "Read: search (words), read (paths from search or an index, such as work/notes/deploy.md), define (term; none lists all), recent (journal lines).",
+  "Read: search (words, all must appear), read (paths from search or an index, such as work/notes/deploy.md), define (term; none lists all), recent (journal lines).",
   "Write only when the user asks or accepts your offer; each write shows the user the change to confirm.",
   "jot (text): one line learned, not done. term (term, text as the definition, optional aliases; replace to change one).",
   "now (text): the complete new current context, the stack and a few dated focus bullets under 2,000 bytes, which every session loads.",

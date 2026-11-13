@@ -26,12 +26,12 @@ export default function (pi: ExtensionAPI) {
     description: DESCRIPTION,
     parameters: Type.Object({
       action: StringEnum(ACTIONS),
-      words: Type.Optional(Type.String({ description: "search: words that must all appear" })),
-      paths: Type.Optional(Type.Array(Type.String(), { description: "read: wiki paths, such as work/now.md" })),
-      term: Type.Optional(Type.String({ description: "define: the term to look up; term: the term to add or change" })),
-      aliases: Type.Optional(Type.Array(Type.String(), { description: "term: other names for it" })),
-      replace: Type.Optional(Type.Boolean({ description: "term: change the existing entry" })),
-      text: Type.Optional(Type.String({ description: "jot: the learning; term: the definition; now: the complete new text" })),
+      words: Type.Optional(Type.String()),
+      paths: Type.Optional(Type.Array(Type.String())),
+      term: Type.Optional(Type.String()),
+      aliases: Type.Optional(Type.Array(Type.String())),
+      replace: Type.Optional(Type.Boolean()),
+      text: Type.Optional(Type.String()),
     }),
     executionMode: "sequential",
     async execute(_id, params, signal, _onUpdate, ctx) {
