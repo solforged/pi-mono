@@ -326,7 +326,7 @@ function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean;
     if (args[4] === "session.resize_pane" && options.resizeError) throw new Error(options.resizeError);
     return "{}";
   };
-  registerDiff(pi as any, {
+  const diff = registerDiff(pi as any, {
     palette: () => ({ accent: "#ff00ff" }), run, dir, env, pid: options.pid ?? 4242, isViewer: () => true,
     settings: () => ({ autoOpen: options.auto ?? false, reopen: options.reopen ?? false, minColumns: 150 }), columns: () => state.columns,
     panes: join(dir, "panes.json"),
@@ -335,7 +335,7 @@ function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean;
   /** Each new_split call as the rex binary and the viewer's command line. */
   const splits = () => calls.filter(([, args]) => args[4] === "session.new_split")
     .map(([rex, args]): [string, string[]] => [rex, JSON.parse(args[5]).layout.block.options.command]);
-  return { command: commands.get("diff"), handlers, calls, notes, ctx, state, splits };
+  return { command: commands.get("diff"), handlers, calls, notes, ctx, state, splits, diff };
 }
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
@@ -629,6 +629,36 @@ test("reopens the pane Pi quit with when changes remain", async (t) => {
   const bystander = harness(env, dir, { pid: 8 });
   bystander.handlers.get("session_shutdown")!({ reason: "quit" });
   assert.equal(readPanes(join(dir, "panes.json"))["/repo"].pid, 7);
+
+  // Opened, closed, then /new before quitting: the instance that quits never saw the pane, and still forgets it.
+  const earlier = await start(9, true);
+  await earlier.command.handler("", earlier.ctx);
+  assert.equal(readPanes(join(dir, "panes.json"))["/repo"].pid, 9);
+  await quit(await start(9, true, "new"), 9, false);
+  assert.deepEqual(readPanes(join(dir, "panes.json")), {});
+});
+
+test("the pane's block outlives the session that opened it, for a document to take its place", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "diff-ipc-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const bin = await mkdtemp(join(tmpdir(), "diff-bin-"));
+  t.after(() => rm(bin, { recursive: true, force: true }));
+  for (const name of ["rex", "node"]) await writeFile(join(bin, name), "", { mode: 0o755 });
+  const env = { PATH: bin, REX_SESSION: "session:s", REX_BLOCK: "block:b" };
+  const h = harness(env, dir);
+  await h.command.handler("", h.ctx);
+  assert.equal(h.diff.block(), undefined, "no block while the viewer is not running");
+  const viewer = spawn("sleep", ["30"]);
+  t.after(() => viewer.kill());
+  await writeFile(join(dir, "4242.viewer"), String(viewer.pid));
+  assert.equal(h.diff.block(), "block:pane");
+  // /new, /resume, /fork and /reload build a new instance of the extension in the same Pi.
+  const next = harness(env, dir);
+  next.handlers.get("session_start")!({ reason: "new" }, next.ctx);
+  await settle();
+  assert.equal(next.diff.block(), "block:pane");
+  next.handlers.get("session_shutdown")!({ reason: "quit" });
+  await assert.rejects(readFile(join(dir, "4242.block")));
 });
 
 test("an open pane follows the session into another worktree", async (t) => {

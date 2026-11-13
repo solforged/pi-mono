@@ -104,11 +104,12 @@ test("frames the document with a title, position, scrollbar and key bar", () => 
   assert.ok(layout.keys!.items.some((item) => item.key === "backspace"));
 });
 
-function harness(dir: string, options: { diff?: string; placed?: boolean; handler?: boolean } = {}) {
+type DocState = { blocks: Set<string>; waits: Array<() => void> };
+function harness(dir: string, options: { diff?: string; placed?: boolean; handler?: boolean; state?: DocState } = {}) {
   const commands = new Map<string, any>(), handlers = new Map<string, Function>();
   let transformer: ((markdown: string, context: object) => string) | undefined;
   const calls: Array<[string, string, any]> = [], notes: string[] = [];
-  const state = { blocks: new Set<string>(options.placed === false ? [] : [options.diff ?? ""]), waits: [] as Array<() => void> };
+  const state: DocState = options.state ?? { blocks: new Set<string>(options.placed === false ? [] : [options.diff ?? ""]), waits: [] };
   const run = async (command: string, args: string[]) => {
     if (args[0] === "--version") return "v26.1.0\n";
     if (args[0] === "block") { calls.push([command, "size", args]); return JSON.stringify({ columns: 70, rows: 50 }); }
@@ -173,6 +174,27 @@ test("a document takes the diff pane's place, and closing it brings the diff bac
   assert.deepEqual(h.calls.find(([, method]) => method === "session.move_block")![2], {
     session_id: "session:s", block_id: "block:diff", anchor_block_id: "block:pi", direction: "horizontal", side: "after", ratio: 0.6667,
   });
+});
+
+test("a document left open across a session switch still gives the diff its place back", async (t) => {
+  const dir = await setup(t);
+  const h = harness(dir, { diff: "block:diff" });
+  h.handlers.get("session_start")!({ reason: "startup" }, h.ctx);
+  await h.command.handler("guide.md", h.ctx);
+  // /new: Pi shuts this instance down and builds another in the same process, with a new context.
+  h.handlers.get("session_shutdown")!({ reason: "new" });
+  const next = harness(dir, { diff: "block:diff", state: h.state });
+  next.handlers.get("session_start")!({ reason: "new" }, next.ctx);
+  assert.equal(h.state.waits.length, 2, "the new instance follows the open document");
+
+  h.state.blocks.delete("block:doc");
+  h.calls.length = 0;
+  h.state.waits[0]();
+  h.state.waits[1]();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(methods(h.calls), [], "the replaced instance does nothing with its stale context");
+  assert.deepEqual(methods(next.calls), ["session.move_block", "session.resize_pane"]);
+  assert.deepEqual([h.notes, next.notes], [[], []]);
 });
 
 test("without a diff pane, a document opens beside Pi and leaves nothing to restore", async (t) => {

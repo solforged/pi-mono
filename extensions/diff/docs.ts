@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { docUrl, isMarkdown, linkDocs, parseDocUrl, resolveTarget } from "./links.ts";
-import { agentDir, ipcDir, keepShare, RATIO, readSettings, rexCall, rexSetup, run as defaultRun, splitBeside, viewerPid, type DiffPane, type Run, type Settings } from "./pane.ts";
+import { agentDir, ipcDir, keepShare, RATIO, readSettings, rexCall, rexSetup, run as defaultRun, splitBeside, viewerPid, type DiffPane, type RexSetup, type Run, type Settings } from "./pane.ts";
 import type { Palette } from "./render.ts";
 
 const DOC_VIEWER = join(import.meta.dirname, "doc.ts");
@@ -16,6 +16,11 @@ const DOC_VIEWER = join(import.meta.dirname, "doc.ts");
 export const handlerApp = (dir = agentDir()) => join(dir, "apps", "Pi Open.app");
 /** How long to wait for Rex to drop the closed document before giving the diff its place back. */
 const SETTLE_MS = 2_000;
+
+// The document pane belongs to the Pi process, but /new, /resume, /fork and
+// /reload replace this extension with a new instance. The old one hands the
+// open pane over here, so the new one can still give the diff its place back.
+const HANDOFF: Map<string, { block: string; swapped?: string; setup: RexSetup }> = ((globalThis as any)[Symbol.for("pi-mono.diff.docs")] ??= new Map());
 
 export interface DocOptions {
   palette: (ctx: ExtensionContext) => Partial<Palette>;
@@ -64,6 +69,7 @@ export function registerDocs(pi: ExtensionAPI, options: DocOptions): Docs {
   const live = () => viewerPid(dir, pid, "doc-viewer") !== undefined;
   /** In a Rex pane of a top-level Pi, where a pane can open beside it. */
   const inRex = () => !!env.REX_SESSION && !!env.REX_BLOCK && !env.PI_REX_CHILD && !env.PI_WORKFLOW_CHILD_CONFIG;
+  const handoff = `${dir}:${pid}`;
 
   let ctx: ExtensionContext | undefined;
   let cwd = process.cwd();
@@ -99,7 +105,14 @@ export function registerDocs(pi: ExtensionAPI, options: DocOptions): Docs {
     }
   }
 
-  let setup: Awaited<ReturnType<typeof rexSetup>> | undefined;
+  let setup: RexSetup | undefined;
+  /** Follows an open document's block until it closes, on behalf of `context`'s session. */
+  function track(context: ExtensionContext, block: string, swapped?: string) {
+    const waiting = wait(setup!.rex, setup!.session, block);
+    const current = { block, swapped, stop: waiting.stop };
+    pane = current;
+    void waiting.done.then(() => closed(current, context));
+  }
   const label = (block: string, path: string): [string, string[]] => [setup!.rex, [
     "api", "call", "--session", setup!.session, "session.set_block_label", JSON.stringify({ session_id: setup!.session, block_id: block, label: basename(path) }),
   ]];
@@ -145,10 +158,7 @@ export function registerDocs(pi: ExtensionAPI, options: DocOptions): Docs {
         (why) => context.ui.notify(`The Markdown pane opened at Rex's default width: ${why}`, "warning"));
       if (!block) return;
     }
-    const waiting = wait(setup.rex, setup.session, block);
-    const current = { block, swapped, stop: waiting.stop };
-    pane = current;
-    void waiting.done.then(() => closed(current, context));
+    track(context, block, swapped);
   }
 
   /** The document closed: give its place back to the diff it replaced, if both are still around. */
@@ -241,14 +251,24 @@ export function registerDocs(pi: ExtensionAPI, options: DocOptions): Docs {
     const usable = context.mode === "tui" && inRex();
     linking = usable && settings().links && hyperlinks(env) && handler();
     if (usable) listen();
+    const kept = HANDOFF.get(handoff);
+    HANDOFF.delete(handoff);
+    if (kept && usable) { setup = kept.setup; track(context, kept.block, kept.swapped); }
   });
 
+  // Every shutdown stops this instance: its context goes stale, and a watcher
+  // left behind would race the next instance's for each request.
   pi.on("session_shutdown", (event) => {
-    if (event.reason !== "quit") return;
     requests?.close();
     requests = undefined;
+    const open = pane;
     pane?.stop();
     pane = undefined;
+    if (event.reason !== "quit") {
+      if (open && setup) HANDOFF.set(handoff, { block: open.block, swapped: open.swapped, setup });
+      return;
+    }
+    HANDOFF.delete(handoff);
     if (live()) send({ event: "quit" });
   });
 

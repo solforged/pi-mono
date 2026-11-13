@@ -2,7 +2,7 @@
 // own once Pi starts changing files, and writes refresh hints into a private
 // IPC directory. No runtime Pi imports, so tests can drive it with a fake API.
 import { execFile, execFileSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -73,6 +73,19 @@ function writePane(file: string, root: string, pid: number | undefined, moved?: 
   if (moved !== undefined) for (const [key, value] of Object.entries(panes)) if (key !== root && value.pid === moved) delete panes[key];
   if (pid === undefined) delete panes[root];
   else panes[root] = { pid, at: Date.now() };
+  savePanes(file, panes);
+}
+
+/** Forgets every pane `pid` recorded, whichever session of that Pi opened it. */
+function forgetPanes(file: string, pid: number) {
+  const panes = readPanes(file);
+  const mine = Object.keys(panes).filter((key) => panes[key].pid === pid);
+  if (!mine.length) return;
+  for (const key of mine) delete panes[key];
+  savePanes(file, panes);
+}
+
+function savePanes(file: string, panes: Panes) {
   for (const [key, value] of Object.entries(panes)) if (!(Date.now() - value.at < KEEP_MS)) delete panes[key];
   try {
     mkdirSync(dirname(file), { recursive: true });
@@ -233,8 +246,14 @@ export function registerDiff(pi: ExtensionAPI, options: Options): DiffPane {
   const panes = options.panes ?? join(agentDir(), "diff-panes.json");
   /** The worktree of the last pane this Pi opened. */
   let opened: string | undefined;
-  /** The block of the pane this Pi opened last. */
-  let diffBlock: string | undefined;
+  // The pane belongs to the Pi process, but /new, /resume, /fork and /reload
+  // build a new instance of this extension, so its block is kept beside the
+  // viewer's PID file rather than in a variable.
+  const blockFile = join(dir, `${pid}.block`);
+  const recordBlock = (block: string | undefined) => {
+    try { if (block) writeFileSync(blockFile, block, { mode: 0o600 }); else rmSync(blockFile, { force: true }); } catch {}
+  };
+  const recordedBlock = () => { try { return readFileSync(blockFile, "utf8").trim() || undefined; } catch { return undefined; } };
   const gitRoot = (cwd: string) => exec("git", ["rev-parse", "--show-toplevel"], cwd).then((out) => out.trim(), () => "");
 
   async function open(ctx: ExtensionContext, source: Source, focus?: string) {
@@ -251,11 +270,11 @@ export function registerDiff(pi: ExtensionAPI, options: Options): DiffPane {
     // The pane is open before its border moves, so a failure there only leaves
     // it wider; say so rather than leaving an even split unexplained.
     const widened = (why: string) => ctx.ui.notify(`The diff pane opened at Rex's default width: ${why}`, "warning");
-    diffBlock = undefined;
-    diffBlock = await splitBeside(exec, setup, root, "Diff", command, widened, () => {
+    recordBlock(undefined);
+    recordBlock(await splitBeside(exec, setup, root, "Diff", command, widened, () => {
       opened = root;
       writePane(panes, root, pid);
-    });
+    }));
   }
 
   // Automatic opening: armed per session, with a baseline of the tree's state
@@ -367,11 +386,12 @@ export function registerDiff(pi: ExtensionAPI, options: Options): DiffPane {
   // viewer to close now rather than wait for its poll to notice Pi has gone.
   pi.on("session_shutdown", (event) => {
     if (event.reason !== "quit") return;
-    if (opened) {
-      if (viewerPid(dir, pid) !== undefined) writePane(panes, opened, pid);
-      else if (readPanes(panes)[opened]?.pid === pid) writePane(panes, opened, undefined);
-    }
+    // By process ID, not by what this instance opened: an earlier session of
+    // this Pi may have opened a pane that was closed before this one started.
+    if (viewerPid(dir, pid) === undefined) forgetPanes(panes, pid);
+    else if (opened) writePane(panes, opened, pid);
     tick(dir, pid, { event: "quit" });
+    recordBlock(undefined);
   });
 
   pi.on("tool_execution_start", (event, ctx) => {
@@ -393,5 +413,5 @@ export function registerDiff(pi: ExtensionAPI, options: Options): DiffPane {
     if (auto.armed) auto.ready = rebaseline();
   });
 
-  return { block: () => viewerPid(dir, pid) !== undefined ? diffBlock : undefined };
+  return { block: () => viewerPid(dir, pid) !== undefined ? recordedBlock() : undefined };
 }
