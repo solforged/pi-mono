@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { codexModels, consumeCodexEvents, extractTextSources, resolveCodexUrl, shouldRetryCodexModel } from "../extensions/web-search/codex.ts";
 import { buildExaBody, parseExaResponse, recencyStartDate, synthesizeAnswer } from "../extensions/web-search/exa.ts";
-import { attemptSummary, dropBlankRecency, errorDetail, formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, withRecencyHint } from "../extensions/web-search/format.ts";
+import { ANSWER_MAX, attemptSummary, dropBlankRecency, errorDetail, formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, sourceLimit, withRecencyHint } from "../extensions/web-search/format.ts";
 import { executeSearch, orderByHealth, registryAuth, type SearchAuth } from "../extensions/web-search/search.ts";
 import { sseText } from "../extensions/web-search/sse.ts";
 import { searchCall, searchView } from "../extensions/web-search/view.ts";
@@ -69,6 +69,23 @@ test("search text repeats nothing: cited sources merge, and snippets already in 
   });
   assert.equal(text, `**First**: ${summary}\n\nSources:\n[1] First (2026-03-04) https://a.example/\n[2] https://b.example/\n  Quoted from the second page.\n[3] Third https://c.example/`);
   assert.equal(formatForLLM({ provider: "exa", sources: [{ title: "Only", url: "https://a.example/" }] }), "[1] Only https://a.example/");
+});
+
+test("search text is bounded: a source cap that keeps cited pages, and a cut for a runaway answer", () => {
+  const sources = Array.from({ length: 30 }, (_, i) => ({ title: `Page ${i}`, url: `https://s.example/${i}` }));
+  const response = { provider: "codex" as const, answer: "See https://s.example/27.", sources, citations: [{ title: "Page 29", url: "https://s.example/29" }] };
+  const lines = formatForLLM(response).split("\n");
+  // Page 2's URL starts Page 27's, and is not what the answer cites.
+  assert.deepEqual(lines.slice(0, 6), ["See https://s.example/27.", "", "Sources:", "[1] Page 27 https://s.example/27", "[2] Page 29 https://s.example/29", "[3] Page 0 https://s.example/0"]);
+  assert.equal(lines.length, 3 + 10 + 1);
+  assert.equal(lines.at(-1), "(20 more sources not listed)");
+  assert.equal(formatForLLM(response, 3).split("\n").at(-1), "(27 more sources not listed)");
+  assert.doesNotMatch(formatForLLM({ ...response, sources: sources.slice(0, 10), citations: [] }), /not listed/);
+
+  const long = formatForLLM({ provider: "codex", answer: "a".repeat(ANSWER_MAX + 500), sources: [] });
+  assert.equal(long, `${"a".repeat(ANSWER_MAX)}\n[Answer cut at 12,000 characters.]`);
+
+  assert.deepEqual([0, -4, 2.9, 5, 500, Infinity, Number.NaN, "7", undefined].map(sourceLimit), [1, 1, 2, 5, 20, undefined, undefined, undefined, undefined]);
 });
 
 test("a search result records each backend tried, and the views show what went wrong", async () => {

@@ -96,17 +96,40 @@ export function cleanSourceUrl(rawUrl: string): string {
   }
 }
 
+/** Sources listed when the model asks for no particular number. */
+export const DEFAULT_SOURCES = 10;
+export const MAX_SOURCES = 20;
+/** The longest answer passed on; it stays in the conversation for every later request. */
+export const ANSWER_MAX = 12_000;
+
+/** The model's `limit`, as a whole number of sources within bounds. */
+export function sourceLimit(limit: unknown): number | undefined {
+  return typeof limit === "number" && Number.isFinite(limit) ? Math.min(MAX_SOURCES, Math.max(1, Math.trunc(limit))) : undefined;
+}
+
+// Whether `text` holds `url` itself, not a longer URL that starts with it.
+function mentions(text: string, url: string): boolean {
+  for (let at = text.indexOf(url); at >= 0; at = text.indexOf(url, at + 1)) {
+    if (!/^(?:[\w/%?#&=~+@-]|\.\w)/u.test(text.slice(at + url.length, at + url.length + 2))) return true;
+  }
+  return false;
+}
+
 // One numbered list after the answer. Nothing is repeated: a citation whose
 // page is already a source adds only its quote, and a snippet the answer
-// already contains is left out.
-export function formatForLLM(response: SearchResponse): string {
-  const answer = response.answer?.trim() ?? "";
-  const items = response.sources.map((source) => ({ ...source }));
+// already contains is left out. A backend may return every page it read, so
+// the list stops at `limit`, keeping first the pages the answer cites.
+export function formatForLLM(response: SearchResponse, limit = DEFAULT_SOURCES): string {
+  const full = response.answer?.trim() ?? "";
+  const answer = full.length > ANSWER_MAX ? `${full.slice(0, ANSWER_MAX)}\n[Answer cut at ${ANSWER_MAX.toLocaleString("en-US")} characters.]` : full;
+  const all = response.sources.map((source) => ({ ...source }));
   for (const citation of response.citations ?? []) {
-    const listed = items.find((item) => item.url === citation.url);
-    if (!listed) items.push({ title: citation.title || citation.url, url: citation.url, snippet: citation.citedText });
+    const listed = all.find((item) => item.url === citation.url);
+    if (!listed) all.push({ title: citation.title || citation.url, url: citation.url, snippet: citation.citedText });
     else if (!listed.snippet && citation.citedText) listed.snippet = citation.citedText;
   }
+  const cited = (url: string) => mentions(answer, url) || (response.citations ?? []).some((citation) => citation.url === url);
+  const items = all.length > limit ? [...all.filter((item) => cited(item.url)), ...all.filter((item) => !cited(item.url))].slice(0, limit) : all;
   const parts: string[] = answer ? [answer] : [];
   if (answer && items.length > 0) parts.push("\nSources:");
   for (const [i, item] of items.entries()) {
@@ -116,6 +139,7 @@ export function formatForLLM(response: SearchResponse): string {
     const snippet = item.snippet?.trim();
     if (snippet && !answer.includes(snippet.slice(0, 80))) parts.push(`  ${truncateText(snippet, 240)}`);
   }
+  if (all.length > items.length) parts.push(`(${all.length - items.length} more sources not listed)`);
   return parts.join("\n");
 }
 

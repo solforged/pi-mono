@@ -25,7 +25,9 @@ live in [codex.ts](../extensions/web-search/codex.ts) and
 
 The model receives the answer and one numbered source list, with nothing said
 twice: a citation of a listed page adds only its quote, and a snippet that the
-answer already contains is dropped. Backends that failed first are not part of
+answer already contains is dropped. The list holds 10 sources unless the model
+asks for another number, up to 20, with the pages the answer cites first and a
+count of the rest; an answer over 12,000 characters is cut. Backends that failed first are not part of
 that text. They are recorded in the result's `details`, and the TUI row shows
 them beside the backend that answered, for example `exa · 8 sources · after
 codex timed out after 60 s`; expanding the row also lists unconfigured ones.

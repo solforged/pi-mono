@@ -3,7 +3,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { loadPage, pageView } from "./fetch.ts";
-import { attemptSummary, dropBlankRecency, RECENCIES, searchOrder } from "./format.ts";
+import { attemptSummary, dropBlankRecency, RECENCIES, searchOrder, sourceLimit } from "./format.ts";
 import { availableProviders, executeSearch, orderByHealth, registryAuth, timedOutRecently, type SearchAuth, type SearchQuery } from "./search.ts";
 import { fetchCall, fetchView, searchCall, searchView } from "./view.ts";
 
@@ -32,7 +32,7 @@ export default function (pi: ExtensionAPI) {
     return {
       query: extra.query ?? "",
       recency: extra.recency,
-      limit: extra.limit,
+      limit: sourceLimit(extra.limit),
       provider: extra.provider,
       sessionProvider: ctx.model?.provider,
       sessionModel: ctx.model?.id,

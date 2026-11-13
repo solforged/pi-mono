@@ -137,7 +137,7 @@ export async function executeSearch(query: SearchQuery, options: {
       }
       cooldowns.delete(provider);
       attempts.push({ provider, outcome: "answered" });
-      return { text: formatForLLM(response), response, attempts };
+      return { text: formatForLLM(response, query.limit), response, attempts };
     } catch (error) {
       if (options.signal?.aborted) throw error;
       if (timeout.aborted) cooldowns.set(provider, Date.now() + COOLDOWN_MS);
