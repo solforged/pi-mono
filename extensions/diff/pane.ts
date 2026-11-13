@@ -229,6 +229,8 @@ export interface Options {
   highlighter?: string;
   run?: Run; dir?: string; env?: NodeJS.ProcessEnv; pid?: number;
   isViewer?: (pid: number) => boolean;
+  /** Whether a process is still running, for the Pi that recorded a pane. */
+  alive?: (pid: number) => boolean;
   settings?: () => Settings;
   columns?: () => number;
   /** Where open panes are remembered across restarts. */
@@ -244,6 +246,10 @@ export function registerDiff(pi: ExtensionAPI, options: Options): DiffPane {
   const pid = options.pid ?? process.pid;
   const settings = options.settings ?? (() => readSettings());
   const columns = options.columns ?? (() => process.stdout.columns ?? 0);
+  const alive = options.alive ?? ((other: number) => {
+    try { process.kill(other, 0); return true; }
+    catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+  });
   const paths = new Map<string, string>();
   const panes = options.panes ?? join(agentDir(), "diff-panes.json");
   /** The worktree of the last pane this Pi opened. */
@@ -307,7 +313,10 @@ export function registerDiff(pi: ExtensionAPI, options: Options): DiffPane {
     const baseline = await treeState(exec, root).catch(() => undefined);
     if (baseline === undefined || session !== auto.session) return;
     // A fresh Pi reopens the pane it quit with, while there is still something to show.
-    if (reopen && reason === "startup" && baseline && readPanes(panes)[root] && columns() >= minColumns) {
+    // The entry is written when a pane opens, so one whose Pi still runs is that
+    // Pi's open pane, not one left at a quit.
+    const last = readPanes(panes)[root];
+    if (reopen && reason === "startup" && baseline && last && (last.pid === pid || !alive(last.pid)) && columns() >= minColumns) {
       try { await open(ctx, "uncommitted"); return; }
       catch (error) { ctx.ui.notify(`Could not reopen the diff pane: ${(error as Error).message}`, "warning"); }
     }

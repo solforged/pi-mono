@@ -21,8 +21,8 @@ enough.
 
 If the pane was still open when you quit Pi, the next Pi started in the same
 worktree reopens it straight away, provided there are still uncommitted
-changes. This covers `pi`, `pi -c` and `pi -r`, but not `/new`, `/resume` or
-`/reload`, which keep the pane they had. Closing the pane before quitting
+changes and the Pi that had it is no longer running. This covers `pi`, `pi -c`
+and `pi -r`, but not `/new`, `/resume` or `/reload`, which keep the pane they had. Closing the pane before quitting
 forgets it. Open panes are remembered by worktree in
 `~/.pi/agent/diff-panes.json` for up to 30 days.
 

@@ -371,7 +371,7 @@ test("the viewer moves to the worktree Pi's session moved to", async (t) => {
   assert.equal(await new Promise((resolve) => viewer.on("exit", resolve)), 0);
 });
 
-function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean; reopen?: boolean; columns?: number; pid?: number; sizeError?: boolean; resizeError?: string } = {}) {
+function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean; reopen?: boolean; columns?: number; pid?: number; sizeError?: boolean; resizeError?: string; alive?: number[] } = {}) {
   const commands = new Map<string, any>(), handlers = new Map<string, Function>();
   const calls: Array<[string, string[]]> = [], notes: string[] = [];
   const state = { status: "", columns: options.columns ?? 200, root: "/repo" };
@@ -392,7 +392,7 @@ function harness(env: NodeJS.ProcessEnv, dir: string, options: { auto?: boolean;
   const diff = registerDiff(pi as any, {
     palette: () => ({ accent: "#ff00ff" }), run, dir, env, pid: options.pid ?? 4242, isViewer: () => true,
     settings: () => ({ autoOpen: options.auto ?? false, reopen: options.reopen ?? false, minColumns: 150 }), columns: () => state.columns,
-    panes: join(dir, "panes.json"),
+    panes: join(dir, "panes.json"), alive: (other) => options.alive?.includes(other) ?? false,
   });
   const ctx = { mode: "tui", cwd: "/repo/sub", ui: { notify: (m: string) => notes.push(m) } };
   /** Each new_split call as the rex binary and the viewer's command line. */
@@ -660,8 +660,8 @@ test("reopens the pane Pi quit with when changes remain", async (t) => {
   for (const name of ["rex", "node"]) await writeFile(join(bin, name), "", { mode: 0o755 });
   const env = { PATH: bin, REX_SESSION: "session:s", REX_BLOCK: "block:b" };
   const { spawn } = await import("node:child_process");
-  const start = async (pid: number, dirty: boolean, reason = "startup") => {
-    const h = harness(env, dir, { reopen: true, pid });
+  const start = async (pid: number, dirty: boolean, reason = "startup", alive: number[] = []) => {
+    const h = harness(env, dir, { reopen: true, pid, alive });
     h.state.status = dirty ? " M a.ts\0" : "";
     h.handlers.get("session_start")!({ reason }, h.ctx);
     await settle();
@@ -715,6 +715,13 @@ test("reopens the pane Pi quit with when changes remain", async (t) => {
   assert.equal(readPanes(join(dir, "panes.json"))["/repo"].pid, 9);
   await quit(await start(9, true, "new"), 9, false);
   assert.deepEqual(readPanes(join(dir, "panes.json")), {});
+
+  // A second Pi in the worktree leaves the pane to the Pi that has it open, until that Pi is gone.
+  const holder = await start(10, true);
+  await holder.command.handler("", holder.ctx);
+  assert.equal((await start(11, true, "startup", [10])).splits().length, 0);
+  assert.equal(readPanes(join(dir, "panes.json"))["/repo"].pid, 10);
+  assert.equal((await start(11, true)).splits().length, 1);
 });
 
 test("the pane's block outlives the session that opened it, for a document to take its place", async (t) => {
