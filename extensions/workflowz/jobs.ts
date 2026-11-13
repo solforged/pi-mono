@@ -2,9 +2,10 @@
 // and completion handles, and judge batches. Finished results queue for
 // delivery to the parent model unless kernel code consumed them first.
 
+import { randomUUID } from "node:crypto";
 import { inspect } from "node:util";
 import { addUsage, bounded, emptyUsage, type Usage } from "../workflows/process.ts";
-import type { AgentName, ChildResult } from "../workflows/subagents.ts";
+import type { AgentName, ChildExtras, ChildResult, ChildSession } from "../workflows/subagents.ts";
 
 export type Tier = "smol" | "default" | "slow";
 export type ItemStatus = "queued" | "running" | "done" | "failed" | "cancelled";
@@ -12,15 +13,30 @@ export interface Item {
   id: string; job: string; kind: "pool" | "agent" | "completion"; label: string; agent?: AgentName;
   status: ItemStatus; text: string; data?: unknown; error?: string; schema?: unknown;
   started?: number; elapsedMs?: number; transcript?: string; worktree?: string; model?: string;
+  /** The child's saved conversation, which send() continues. */
+  session?: ChildSession;
   consumed: boolean; delivered: boolean;
+  /** Kernel tools the child was given. */
+  tools?: string[];
   /** Kernel waits in progress; while any, the result is held back from delivery. */
   holds: number;
 }
-export interface AgentTask { agent: AgentName; task: string; context?: string }
+export interface AgentTask { agent: AgentName; task: string; context?: string; extras?: ChildExtras }
 export interface Backend {
   /** Runs one child to completion; never called while the budget is spent. */
   runAgent(task: AgentTask, signal: AbortSignal): Promise<ChildResult>;
   complete(tier: Tier, system: string, prompt: string, signal: AbortSignal): Promise<{ text: string; usage?: Partial<Usage>; provider: string; model: string }>;
+  /** Rex children for watched pools, when Pi runs interactively in Rex. */
+  watch?(): WatchBackend | undefined;
+  /** A configured classifier model for judges; without one they use the smol tier. */
+  classify?(state: Record<string, unknown>, questions: Record<string, Question>, signal: AbortSignal): Promise<{ answers: Record<string, any>; usage?: Partial<Usage> }> | undefined;
+}
+export interface WatchBackend {
+  /** Live Rex children allowed at once (subagents.rexConcurrency). */
+  limit: number;
+  open(agent: AgentName, title: string, signal: AbortSignal): Promise<string>;
+  run(child: string, task: AgentTask, signal: AbortSignal, title: string): Promise<ChildResult>;
+  close(child: string): Promise<void>;
 }
 export interface Limits { concurrency: number; outputBytes: number }
 
@@ -42,6 +58,7 @@ export class Semaphore {
   release() { const next = this.queue.shift(); if (next) next(); else this.running--; }
 }
 
+const newSession = () => `wfz-${randomUUID()}`;
 const AGENTS = new Set<string>(["advisor", "scout", "worker", "researcher"]);
 const TIERS = new Set<string>(["smol", "default", "slow"]);
 const oneLine = (text: string, max = 70) => { const line = text.replace(/\s+/g, " ").trim(); return line.length > max ? `${line.slice(0, max - 1)}…` : line; };
@@ -111,6 +128,16 @@ const unit = (value: unknown, label: string) => {
   if (!Number.isFinite(n) || n < 0 || n > 1) throw new Error(`${label}: expected a probability`);
   return n;
 };
+/** Classifier answers in the judge's shape; a bool also gets `value`. */
+export function classifierAnswers(raw: Record<string, any>, questions: Record<string, Question>): Record<string, Answer> {
+  const answers: Record<string, Answer> = {};
+  for (const [id, q] of Object.entries(questions)) {
+    const a = raw[id];
+    if (!a || a.type !== q.type) throw new Error(`Classifier gave no ${q.type} answer for ${id}`);
+    answers[id] = q.type === "bool" ? { type: "bool", value: a.probability >= 0.5, probability: a.probability } : a;
+  }
+  return answers;
+}
 export function parseJudgment(text: string, questions: Record<string, Question>): Record<string, Answer> {
   const raw = parseStructured(text, { type: "object", required: Object.keys(questions) }) as Record<string, any>;
   const answers: Record<string, Answer> = {};
@@ -139,7 +166,14 @@ export function parseJudgment(text: string, questions: Record<string, Question>)
 // ---------- Jobs ----------
 
 export interface Budget { total?: number; hard: boolean }
-interface Pool { name: string; agent: AgentName; context: string; items: Item[]; closed: boolean; settled: boolean; abort: AbortController; holds: number }
+/** A long-lived pool worker: one conversation that takes the pool's items in turn. */
+interface Slot { session: string; worktree?: string; busy: boolean; items: number; child?: string; closed?: boolean }
+interface Pool {
+  name: string; agent: AgentName; context: string; items: Item[]; closed: boolean; settled: boolean; abort: AbortController; holds: number;
+  /** Set for pools of long-lived workers; fresh pools start a new child per item. */
+  workers?: { limit: Semaphore; slots: Slot[]; watch?: WatchBackend };
+  tools: string[];
+}
 export interface BatchItem { key: number; ok: boolean; answers?: Record<string, Answer>; error?: string; attempts: number }
 interface Batch { id: string; intent: string; total: number; items: BatchItem[]; drained: number; closed: boolean; abort: AbortController; minOk: number; done: boolean }
 
@@ -170,13 +204,37 @@ export class Jobs {
   dispose(reason = "Workflow kernel stopped") {
     if (this.lifetime.signal.aborted) return;
     this.lifetime.abort(new Error(reason));
-    for (const pool of this.pools.values()) pool.abort.abort(new Error(reason));
+    for (const pool of this.pools.values()) { pool.abort.abort(new Error(reason)); this.closeIdleWorkers(pool); }
     for (const batch of this.batches.values()) batch.abort.abort(new Error(reason));
     this.notify();
+  }
+  private closeIdleWorkers(pool: Pool) {
+    const watch = pool.workers?.watch;
+    if (watch) for (const slot of pool.workers!.slots) if (!slot.busy) void this.closeWatched(watch, slot);
   }
   get disposed() { return this.lifetime.signal.aborted; }
   private live() { if (this.disposed) throw new Error("This workflow kernel was reset or closed; its jobs are cancelled"); }
   private next(prefix: string) { const n = (this.counters.get(prefix) ?? 0) + 1; this.counters.set(prefix, n); return `${prefix}-${n}`; }
+  /** Uses an id the kernel picked (`agent-7`), or the next one; keeps counters ahead of both. */
+  private claim(prefix: string, id: unknown, taken: (id: string) => boolean) {
+    if (id === undefined || id === null) return this.next(prefix);
+    const value = String(id);
+    if (taken(value)) throw new Error(`Job name ${value} is taken; name the new phase's pool differently`);
+    const n = new RegExp(`^${prefix}-(\\d+)$`).exec(value)?.[1];
+    if (n) this.counters.set(prefix, Math.max(this.counters.get(prefix) ?? 0, Number(n)));
+    return value;
+  }
+  counterSnapshot() { return Object.fromEntries(this.counters); }
+  /** Kernel functions children may call (see tool()); index.ts supplies how children reach them. */
+  kernelTools: { has(name: string): boolean; extras(names: string[]): ChildExtras } = { has: () => false, extras: () => ({}) };
+  private toolNames(value: unknown): string[] {
+    if (value === undefined || value === null) return [];
+    if (!Array.isArray(value) || !value.every((n) => typeof n === "string")) throw new Error("tools is a list of names registered with tool()");
+    const missing = value.filter((n) => !this.kernelTools.has(n));
+    if (missing.length) throw new Error(`Define these with tool() first: ${missing.join(", ")}`);
+    return [...new Set(value as string[])];
+  }
+  private toolExtras(names: string[]): ChildExtras { return names.length ? this.kernelTools.extras(names) : {}; }
   private notify() { for (const wake of [...this.waiters]) wake(); this.onChange(); }
   /** Tokens spent since the budget was set. */
   spent() { return this.usage.totalTokens - this.budgetBase; }
@@ -197,13 +255,23 @@ export class Jobs {
   }
 
   // ----- pools -----
-  createPool(agent: unknown = "scout", options: { name?: unknown; context?: unknown } = {}) {
+  createPool(agent: unknown = "scout", options: { name?: unknown; context?: unknown; workers?: unknown; tools?: unknown; watch?: unknown } = {}) {
     if (typeof agent !== "string" || !AGENTS.has(agent)) throw new Error(`Unknown agent ${String(agent)}; use advisor, scout, researcher or worker`);
-    const name = options.name === undefined ? this.next("pool") : String(options.name);
-    if (!/^[\w.-]{1,40}$/.test(name)) throw new Error("Pool names are 1-40 letters, digits, dots, dashes or underscores");
-    if (this.pools.has(name) || this.batches.has(name)) throw new Error(`Job name ${name} is taken; name the new phase's pool differently`);
+    if (options.name !== undefined && !/^[\w.-]{1,40}$/.test(String(options.name))) throw new Error("Pool names are 1-40 letters, digits, dots, dashes or underscores");
+    const name = this.claim("pool", options.name, (n) => this.pools.has(n) || this.batches.has(n));
     this.live();
-    const pool: Pool = { name, agent: agent as AgentName, context: options.context === undefined ? "" : String(options.context), items: [], closed: false, settled: false, abort: new AbortController(), holds: 0 };
+    let workers = options.workers === undefined || options.workers === null ? undefined : Number(options.workers);
+    if (workers !== undefined && !(Number.isInteger(workers) && workers >= 1 && workers <= 16)) throw new Error("workers is a whole number from 1 to 16");
+    const tools = this.toolNames(options.tools);
+    let watch: WatchBackend | undefined;
+    if (options.watch) {
+      watch = this.backend.watch?.();
+      if (!watch) throw new Error("watch: true needs interactive Pi running in Rex; drop it to run the pool headless");
+      if (tools.length) throw new Error("Watched pools cannot use kernel tools yet; drop watch or tools");
+      workers = Math.min(workers ?? 3, watch.limit);
+    }
+    const pool: Pool = { name, agent: agent as AgentName, context: options.context === undefined ? "" : String(options.context), items: [], closed: false, settled: false, abort: new AbortController(), holds: 0,
+      ...(workers ? { workers: { limit: new Semaphore(workers), slots: [], ...(watch ? { watch } : {}) } } : {}), tools };
     this.pools.set(name, pool);
     this.onChange();
     return pool;
@@ -217,6 +285,7 @@ export class Jobs {
       const e: any = typeof entry === "string" ? { task: entry } : entry;
       if (!e || typeof e.task !== "string" || !e.task.trim()) throw new Error("Pool items are strings or { task, context?, agent?, label? }");
       if (e.agent !== undefined && !AGENTS.has(e.agent)) throw new Error(`Unknown agent ${e.agent}`);
+      if (pool.workers && e.agent !== undefined && e.agent !== pool.agent) throw new Error(`Pool ${pool.name} has ${pool.agent} workers; items cannot pick another agent`);
       return e as { task: string; context?: string; agent?: AgentName; label?: string };
     });
     return tasks.map((e) => {
@@ -224,7 +293,8 @@ export class Jobs {
       const item = this.item(id, pool.name, "pool", e.label ?? e.task, e.agent ?? pool.agent);
       pool.items.push(item);
       const context = [pool.context, e.context].filter(Boolean).join("\n\n");
-      void this.runAgentItem(item, { agent: item.agent!, task: e.task, context: context || undefined }, pool.abort.signal);
+      const run = { agent: item.agent!, task: e.task, context: context || undefined, extras: this.toolExtras(pool.tools) };
+      void (pool.workers ? this.runOnWorker(pool, item, run) : this.runAgentItem(item, run, pool.abort.signal));
       return id;
     });
   }
@@ -234,12 +304,14 @@ export class Jobs {
     pool.closed = true;
     for (const item of pool.items) if (item.status === "queued") { item.status = "cancelled"; item.text = "Dropped by close()"; item.delivered = true; }
     pool.abort.abort(new Error("Pool closed"));
+    this.closeIdleWorkers(pool);
     this.settle(pool);
     this.notify();
   }
   private settle(pool: Pool) {
     if (!pool.settled && pool.items.length && pool.items.every((i) => !["queued", "running"].includes(i.status))) {
       pool.settled = true;
+      this.closeIdleWorkers(pool);
       const counts = this.counts(pool.items);
       this.receipts.push(`Pool ${pool.name} settled: ${counts.done} done, ${counts.failed} failed${counts.cancelled ? `, ${counts.cancelled} cancelled` : ""}.`);
     }
@@ -270,23 +342,48 @@ export class Jobs {
   }
 
   // ----- single handles -----
-  agent(prompt: unknown, options: { agent?: unknown; label?: unknown; schema?: unknown; context?: unknown } = {}) {
+  agent(prompt: unknown, options: { agent?: unknown; label?: unknown; schema?: unknown; context?: unknown; id?: unknown; tools?: unknown } = {}) {
     if (typeof prompt !== "string" || !prompt.trim()) throw new Error("agent() needs a prompt");
     const agent = options.agent ?? "scout";
     if (typeof agent !== "string" || !AGENTS.has(agent)) throw new Error(`Unknown agent ${String(agent)}`);
     this.checkBudget();
-    const item = this.item(this.next("agent"), "agents", "agent", options.label === undefined ? prompt : String(options.label), agent as AgentName);
+    // Validated before the item exists, so a bad option never leaves it queued.
+    const tools = this.toolNames(options.tools);
+    const item = this.item(this.claim("agent", options.id, (n) => this.items.has(n)), "agents", "agent", options.label === undefined ? prompt : String(options.label), agent as AgentName);
     item.schema = options.schema;
     const task = options.schema === undefined ? prompt : prompt + schemaInstruction(options.schema);
-    void this.runAgentItem(item, { agent: item.agent!, task, context: options.context === undefined ? undefined : String(options.context) }, this.lifetime.signal);
+    // Agents keep their conversation so send() can continue it.
+    item.tools = tools;
+    void this.runAgentItem(item, { agent: item.agent!, task, context: options.context === undefined ? undefined : String(options.context),
+      extras: { ...this.toolExtras(tools), session: newSession() } }, this.lifetime.signal);
     return item;
   }
-  completion(prompt: unknown, options: { model?: unknown; system?: unknown; schema?: unknown } = {}) {
+  /** Continues a finished agent's conversation (and worker worktree) with a new message, as a new item. */
+  followUp(id: string, message: unknown, options: { schema?: unknown; label?: unknown; id?: unknown } = {}) {
+    const from = this.items.get(id);
+    if (!from || from.kind === "completion") throw new Error(`No agent ${id}`);
+    if (typeof message !== "string" || !message.trim()) throw new Error("send() needs a message");
+    if (["queued", "running"].includes(from.status)) throw new Error(`${id} is still running; wait for it before sending a follow-up`);
+    if (!from.session) throw new Error(`${id} has no saved conversation to continue`);
+    // A pool worker's conversation takes the pool's next items; continue it only after the pool settles.
+    const pool = from.kind === "pool" ? this.pools.get(from.job) : undefined;
+    if (pool && !pool.settled) throw new Error(`${id}'s worker is still taking items from pool ${pool.name}; send() once the pool has settled`);
+    if ([...this.items.values()].some((i) => i.session?.id === from.session!.id && ["queued", "running"].includes(i.status))) throw new Error(`A follow-up to ${id}'s conversation is still running`);
+    this.checkBudget();
+    const item = this.item(this.claim("agent", options.id, (n) => this.items.has(n)), "agents", "agent", options.label === undefined ? `↳ ${message}` : String(options.label), from.agent);
+    item.schema = options.schema;
+    item.tools = from.tools;
+    item.session = from.session;
+    const task = options.schema === undefined ? message : message + schemaInstruction(options.schema);
+    void this.runAgentItem(item, { agent: item.agent!, task, extras: { ...this.toolExtras(from.tools ?? []), session: from.session.id, worktree: from.worktree, followUp: true } }, this.lifetime.signal);
+    return item;
+  }
+  completion(prompt: unknown, options: { model?: unknown; system?: unknown; schema?: unknown; id?: unknown } = {}) {
     if (typeof prompt !== "string" || !prompt.trim()) throw new Error("completion() needs a prompt");
     const tier = options.model ?? "default";
     if (typeof tier !== "string" || !TIERS.has(tier)) throw new Error("completion model is smol, default or slow");
     this.checkBudget();
-    const item = this.item(this.next("completion"), "completions", "completion", prompt);
+    const item = this.item(this.claim("completion", options.id, (n) => this.items.has(n)), "completions", "completion", prompt);
     item.schema = options.schema;
     const system = (options.system === undefined ? "Answer the request directly and concisely." : String(options.system))
       + (options.schema === undefined ? "" : schemaInstruction(options.schema));
@@ -312,20 +409,31 @@ export class Jobs {
   async judge(state: unknown, questions: unknown, signal?: AbortSignal) {
     const checked = checkQuestions(questions);
     this.checkBudget();
-    let run;
-    try { run = await this.backend.complete("smol", JUDGE_SYSTEM, judgePrompt(state, checked), AbortSignal.any([this.lifetime.signal, ...(signal ? [signal] : [])])); }
-    catch (error) { this.record((error as { usage?: Partial<Usage> })?.usage); throw error; }
-    this.record(run.usage);
+    const answers = await this.judgeOnce(state, checked, AbortSignal.any([this.lifetime.signal, ...(signal ? [signal] : [])]));
     this.onChange();
-    return parseJudgment(run.text, checked);
+    return answers;
   }
-  judgeBatch(states: unknown, questions: unknown, options: { concurrency?: unknown; retries?: unknown; minOk?: unknown; intent?: unknown } = {}) {
+  /** One judgment on the configured classifier, or the smol tier as structured JSON. Records usage either way. */
+  private async judgeOnce(state: unknown, checked: Record<string, Question>, signal: AbortSignal): Promise<Record<string, Answer>> {
+    try {
+      const classified = this.backend.classify?.(state && typeof state === "object" && !Array.isArray(state) ? state as Record<string, unknown> : { value: state }, checked, signal);
+      if (classified) {
+        const run = await classified;
+        this.record(run.usage);
+        return classifierAnswers(run.answers, checked);
+      }
+      const run = await this.backend.complete("smol", JUDGE_SYSTEM, judgePrompt(state, checked), signal);
+      this.record(run.usage);
+      return parseJudgment(run.text, checked);
+    } catch (error) { this.record((error as { usage?: Partial<Usage> })?.usage); throw error; }
+  }
+  judgeBatch(states: unknown, questions: unknown, options: { concurrency?: unknown; retries?: unknown; minOk?: unknown; intent?: unknown; id?: unknown } = {}) {
     if (!Array.isArray(states) || !states.length) throw new Error("judgeBatch needs a non-empty array of states");
     const checked = checkQuestions(questions);
     const concurrency = Math.min(32, Math.max(1, Number(options.concurrency ?? 8) || 8));
     const retries = Math.min(3, Math.max(0, Number(options.retries ?? 1) || 0));
     this.checkBudget();
-    const batch: Batch = { id: this.next("judge"), intent: options.intent ? String(options.intent) : "Judging", total: states.length, items: [], drained: 0, closed: false,
+    const batch: Batch = { id: this.claim("judge", options.id, (n) => this.batches.has(n) || this.pools.has(n)), intent: options.intent ? String(options.intent) : "Judging", total: states.length, items: [], drained: 0, closed: false,
       abort: new AbortController(), minOk: Math.max(0, Number(options.minOk ?? 1) || 0), done: false };
     this.batches.set(batch.id, batch);
     const signal = AbortSignal.any([batch.abort.signal, this.lifetime.signal]);
@@ -337,12 +445,10 @@ export class Jobs {
         for (; attempts <= retries; attempts++) {
           try {
             if (this.budget.hard && this.budget.total !== undefined && this.spent() >= this.budget.total) throw new Error("Hard budget spent");
-            const run = await this.backend.complete("smol", JUDGE_SYSTEM, judgePrompt(states[key], checked), signal);
-            this.record(run.usage);
-            batch.items.push({ key, ok: true, answers: parseJudgment(run.text, checked), attempts: attempts + 1 });
+            batch.items.push({ key, ok: true, answers: await this.judgeOnce(states[key], checked, signal), attempts: attempts + 1 });
             last = undefined;
             break;
-          } catch (error) { this.record((error as { usage?: Partial<Usage> })?.usage); last = error; if (signal.aborted) break; }
+          } catch (error) { last = error; if (signal.aborted) break; }
         }
         if (last !== undefined) batch.items.push({ key, ok: false, error: String((last as Error)?.message ?? last), attempts });
         this.notify();
@@ -374,7 +480,44 @@ export class Jobs {
     this.onChange();
     return item;
   }
-  private async runAgentItem(item: Item, task: AgentTask, poolSignal: AbortSignal) {
+  /** Runs a pool item on a free long-lived worker, which keeps its conversation for the next item. */
+  private async runOnWorker(pool: Pool, item: Item, task: AgentTask) {
+    const workers = pool.workers!;
+    const signal = AbortSignal.any([pool.abort.signal, this.lifetime.signal]);
+    try { await workers.limit.acquire(signal); }
+    catch { if (item.status === "queued") this.finish(item, "cancelled", "Cancelled before starting"); return; }
+    let slot = workers.slots.find((s) => !s.busy);
+    if (!slot) { slot = { session: newSession(), busy: false, items: 0 }; workers.slots.push(slot); }
+    slot.busy = true;
+    const watch = workers.watch;
+    try {
+      if (watch) {
+        // The slot's Rex child takes the pool's items in turn, in its own pane.
+        await this.runAgentItem(item, task, pool.abort.signal, async (s) => {
+          slot.child ??= await watch.open(pool.agent, `${pool.name} ${workers.slots.indexOf(slot) + 1}`, s);
+          return watch.run(slot.child, task, s, item.label);
+        });
+      } else {
+        item.session = { dir: "", id: slot.session };
+        await this.runAgentItem(item, { ...task, extras: { ...task.extras, session: slot.session, worktree: slot.worktree, followUp: slot.items > 0 } }, pool.abort.signal);
+        slot.worktree ??= item.worktree;
+      }
+      if (item.status === "done") slot.items++;
+    } finally {
+      slot.busy = false; workers.limit.release();
+      if (watch && (pool.settled || pool.closed)) void this.closeWatched(watch, slot);
+    }
+  }
+  /** Closes a finished pool's Rex child; a cancelled task may still be wrapping up, so retry briefly. */
+  private async closeWatched(watch: WatchBackend, slot: Slot) {
+    if (!slot.child || slot.closed) return;
+    slot.closed = true;
+    for (let attempt = 0; attempt < 15; attempt++) {
+      try { await watch.close(slot.child); return; }
+      catch { await new Promise((resolve) => setTimeout(resolve, 2000)); }
+    }
+  }
+  private async runAgentItem(item: Item, task: AgentTask, poolSignal: AbortSignal, run = (signal: AbortSignal) => this.backend.runAgent(task, signal)) {
     const signal = AbortSignal.any([poolSignal, this.lifetime.signal]);
     try {
       await this.semaphore.acquire(signal);
@@ -383,12 +526,14 @@ export class Jobs {
       if (item.status !== "queued") return;
       try { this.checkBudget(); } catch (error) { this.finish(item, "failed", String((error as Error).message)); return; }
       item.status = "running"; item.started = Date.now(); this.onChange();
-      const result = await this.backend.runAgent(task, signal);
+      const result = await run(signal);
       this.record(result.usage);
-      Object.assign(item, { transcript: result.transcript, worktree: result.worktree, model: `${result.provider}/${result.model}` });
+      Object.assign(item, { transcript: result.transcript, worktree: result.worktree, model: `${result.provider}/${result.model}`, ...(result.session ? { session: result.session } : {}) });
       if (result.status !== "done") { this.finish(item, signal.aborted ? "cancelled" : "failed", result.text); return; }
       this.complete(item, result.text);
     } catch (error) {
+      // A cancelled Rex task reports what it spent with its receipt.
+      this.record((error as { usage?: Partial<Usage> })?.usage);
       this.finish(item, signal.aborted ? "cancelled" : "failed", String((error as Error)?.message ?? error));
     } finally { this.semaphore.release(); }
   }

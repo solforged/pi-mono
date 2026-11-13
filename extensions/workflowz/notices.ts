@@ -31,6 +31,8 @@ export async function loadNotices(dir: string): Promise<Record<Keyword, string>>
 export interface NoticeState {
   active: string[]; concurrency: number; subagentConcurrency: number; maxTasks: number;
   budget?: { total: number; hard: boolean };
+  /** provider/model of a configured classifier judge. */
+  judge?: string;
 }
 
 export function dispatchLine(state: NoticeState): string {
@@ -50,5 +52,6 @@ export function renderNotice(template: string, state: NoticeState): string {
   return template
     .replaceAll("{{concurrency}}", String(state.concurrency))
     .replaceAll("{{budget}}", budget)
+    .replaceAll("{{judge}}", state.judge ? `classifier ${state.judge}` : "estimated by a small chat model")
     .replaceAll("{{dispatch}}", dispatchLine(state));
 }

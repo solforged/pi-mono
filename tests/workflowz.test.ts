@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { after } from "node:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import vm from "node:vm";
-import { Jobs, parseJudgment, parseStructured, type Backend, type Item } from "../extensions/workflowz/jobs.ts";
-import { Kernel } from "../extensions/workflowz/kernel.ts";
+import { Jobs, parseJudgment, parseStructured, type AgentTask, type Backend, type Item, type WatchBackend } from "../extensions/workflowz/jobs.ts";
+import { callKernel, ToolServer } from "../extensions/workflowz/tool-server.ts";
+import { childArgs } from "../extensions/workflows/subagents.ts";
+import { Kernel, type KernelHooks } from "../extensions/workflowz/kernel.ts";
 import { budgetIn, keywordsIn, loadNotices, renderNotice } from "../extensions/workflowz/notices.ts";
 import { tokenize, transformCell, wrapCell } from "../extensions/workflowz/transform.ts";
 import { emptyUsage } from "../extensions/workflows/process.ts";
@@ -12,18 +14,24 @@ import { root } from "./helpers.ts";
 
 const usage = (tokens: number) => ({ ...emptyUsage(), totalTokens: tokens, cost: { ...emptyUsage().cost, total: tokens / 1e6 } });
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
+// Each kernel is a child process; close them so the test process can exit.
+const kernels: Kernel[] = [];
+after(() => { for (const k of kernels) k.dispose(); });
+const newKernel = (jobs: Jobs, hooks?: KernelHooks) => { const k = new Kernel(jobs, hooks); kernels.push(k); return k; };
 const tick = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** A backend whose children answer from `answer` after `delay` ms, recording peak concurrency. */
 function fake(answer: (task: string) => string = (task) => `answer: ${task}`, delay = 5) {
-  const state = { running: 0, peak: 0, tasks: [] as string[], prompts: [] as string[] };
+  const state = { running: 0, peak: 0, tasks: [] as string[], prompts: [] as string[], extras: [] as Array<AgentTask["extras"]> };
   const backend: Backend = {
     async runAgent(task, signal) {
-      state.running++; state.peak = Math.max(state.peak, state.running); state.tasks.push(task.task);
+      state.running++; state.peak = Math.max(state.peak, state.running); state.tasks.push(task.task); state.extras.push(task.extras);
       try {
         await new Promise((resolve, reject) => { const t = setTimeout(resolve, delay); signal.addEventListener("abort", () => { clearTimeout(t); reject(signal.reason); }, { once: true }); });
         const text = answer(task.task);
-        return { id: "x", agent: task.agent, provider: "p", model: "m", status: text.startsWith("FAIL") ? "failed" : "done", text, transcript: "/t/events.jsonl", cwd: "/", elapsedMs: delay, usage: usage(100) };
+        const worktree = task.agent === "worker" ? task.extras?.worktree ?? `/wt/${state.tasks.length}` : undefined;
+        return { id: "x", agent: task.agent, provider: "p", model: "m", status: text.startsWith("FAIL") ? "failed" : "done", text, transcript: "/t/events.jsonl", cwd: "/", elapsedMs: delay, usage: usage(100),
+          ...(worktree ? { worktree } : {}), ...(task.extras?.session ? { session: { dir: "/s", id: task.extras.session } } : {}) };
       } finally { state.running--; }
     },
     async complete(_tier, system, prompt) {
@@ -81,7 +89,7 @@ test("the tokenizer tells regex from division and skips nested templates", () =>
 });
 
 test("the kernel prints, reports errors with cell frames and survives syntax errors", async () => {
-  const kernel = new Kernel(new Jobs(fake().backend, { concurrency: 2, outputBytes: 4000 }));
+  const kernel = newKernel(new Jobs(fake().backend, { concurrency: 2, outputBytes: 4000 }));
   const out = await cell(kernel, "print('hi', { a: 1 }); console.log('there'); const x = 2\nx * 21");
   assert.equal(out.output, "hi { a: 1 }\nthere");
   assert.equal(out.value, "42");
@@ -95,7 +103,7 @@ test("the kernel prints, reports errors with cell frames and survives syntax err
 });
 
 test("a cell that outlives its wait keeps running and reports in the next cell", async () => {
-  const kernel = new Kernel(new Jobs(fake().backend, { concurrency: 2, outputBytes: 4000 }));
+  const kernel = newKernel(new Jobs(fake().backend, { concurrency: 2, outputBytes: 4000 }));
   const slow = await kernel.run("await sleep(60); print('late'); 7", { timeoutMs: 10 });
   assert.equal(slow.detached, "timeout");
   await tick(100);
@@ -107,7 +115,7 @@ test("a cell that outlives its wait keeps running and reports in the next cell",
 });
 
 test("tools.* bridges to Pi tools only while a cell is awaited", async () => {
-  const kernel = new Kernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }));
+  const kernel = newKernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }));
   const calls: unknown[] = [];
   const result = await kernel.run("await tools.read({ path: 'a.txt' })", { timeoutMs: 1000, tools: { call: async (name, args) => { calls.push([name, args]); return "file text"; } } });
   assert.equal(result.value, "file text");
@@ -121,7 +129,7 @@ test("pools run items within the concurrency limit, settle once, and queue resul
   const jobs = new Jobs(backend, { concurrency: 2, outputBytes: 4000 });
   let ready = 0;
   jobs.onReady = () => { ready++; };
-  const kernel = new Kernel(jobs);
+  const kernel = newKernel(jobs);
   await cell(kernel, "const review = workpool('scout', { name: 'review', context: 'shared' }); await review.push('a', 'b', { task: 'c', label: 'third' }, 'd')");
   assert.deepEqual(jobs.poolStatus("review"), { name: "review", agent: "scout", queued: 2, running: 2, done: 0, failed: 0, cancelled: 0, total: 4, settled: false, closed: false });
   await jobs.until(() => jobs.poolStatus("review").settled, 2000);
@@ -140,7 +148,7 @@ test("pools run items within the concurrency limit, settle once, and queue resul
 
 test("pool.wait and handle.wait consume results so they are not delivered twice", async () => {
   const jobs = new Jobs(fake((t) => t === "bad" ? "FAIL nope" : t.startsWith("json") ? 'Here:\n```json\n{"n": 3}\n```' : `ok ${t}`).backend, { concurrency: 4, outputBytes: 4000 });
-  const kernel = new Kernel(jobs);
+  const kernel = newKernel(jobs);
   const pooled = await cell(kernel, "const p = workpool({ name: 'p' }); await p.push(['x', 'bad']); (await p.wait()).map(r => r.status)");
   assert.equal(pooled.value, "[ 'done', 'failed' ]");
   const handled = await cell(kernel, "const h = agent('json', { schema: { type: 'object', required: ['n'], properties: { n: { type: 'integer' } } } }); (await h.wait()).n");
@@ -158,7 +166,7 @@ test("pool.wait and handle.wait consume results so they are not delivered twice"
 
 test("closing a pool drops queued items and cancels running ones", async () => {
   const jobs = new Jobs(fake(undefined, 200).backend, { concurrency: 1, outputBytes: 4000 });
-  const kernel = new Kernel(jobs);
+  const kernel = newKernel(jobs);
   await cell(kernel, "const c = workpool({ name: 'c' }); await c.push('a', 'b'); await sleep(10); await c.close(); await c.status()");
   await jobs.until(() => jobs.poolStatus("c").running === 0, 1000);
   assert.deepEqual(jobs.poolItems("c").map((i) => i.status), ["cancelled", "cancelled"]);
@@ -167,7 +175,7 @@ test("closing a pool drops queued items and cancels running ones", async () => {
 
 test("a hard budget refuses new work once spent; an advisory one only reports", async () => {
   const jobs = new Jobs(fake().backend, { concurrency: 2, outputBytes: 4000 });
-  const kernel = new Kernel(jobs);
+  const kernel = newKernel(jobs);
   jobs.setBudget({ total: 150, hard: true });
   await cell(kernel, "await agent('a').wait()");
   assert.equal((await cell(kernel, "[await budget.total(), await budget.spent(), await budget.remaining()]")).value, "[ 150, 100, 50 ]");
@@ -200,7 +208,7 @@ test("judge and judgeBatch run on the smol tier and drain incrementally", async 
   const answer = (prompt: string) => prompt.includes('"n": 2') ? "not json" : '{"good": {"probability": 0.9}}';
   const { backend, state } = fake(answer);
   const jobs = new Jobs(backend, { concurrency: 2, outputBytes: 4000 });
-  const kernel = new Kernel(jobs);
+  const kernel = newKernel(jobs);
   await cell(kernel, "const Q = { good: { type: 'bool', instructions: 'Is it good?', criteria: { true: 'good', false: 'bad' } } }");
   assert.equal((await cell(kernel, "(await judge({ n: 1 }, Q)).good.probability")).value, "0.9");
   assert.match(state.prompts[0]!, /typed questions about a JSON state/);
@@ -245,7 +253,7 @@ test("notices render without placeholders and describe the tools that are active
 
 test("review fixes: timeouts keep results, waits hold delivery, reset stops everything", async () => {
   const jobs = new Jobs(fake(undefined, 60).backend, { concurrency: 2, outputBytes: 4000 });
-  const kernel = new Kernel(jobs, { syncTimeoutMs: 100 });
+  const kernel = newKernel(jobs, { syncTimeoutMs: 100 });
   // A timed-out handle wait leaves the result for delivery.
   const timedOut = await kernel.run("const slow = agent('slow'); await slow.wait({ timeout: 0.01 })", { timeoutMs: 1000 });
   assert.match(timedOut.error!, /Timed out waiting for agent-1/);
@@ -253,7 +261,7 @@ test("review fixes: timeouts keep results, waits hold delivery, reset stops ever
   assert.equal(jobs.take(10_000).items[0]!.id, "agent-1");
   // While pool.wait() runs, finished items are held back from delivery.
   const waiting = kernel.run("const held = workpool({ name: 'held' }); await held.push('a'); await sleep(0); (await held.wait()).length", { timeoutMs: 2000 });
-  await jobs.until(() => jobs.poolItems("held")[0]?.status === "done", 1000);
+  await jobs.until(() => jobs.pools.get("held")?.items[0]?.status === "done", 1000);
   assert.equal(jobs.ready().length, 0);
   assert.equal((await waiting).value, "1");
   assert.equal(jobs.ready().length, 0);
@@ -261,13 +269,37 @@ test("review fixes: timeouts keep results, waits hold delivery, reset stops ever
   assert.match((await kernel.run("while (true) {}", { timeoutMs: 5000 })).error!, /timed out/i);
   // Redeclaring a var without a value keeps it.
   assert.equal((await cell(kernel, "var kept = 1; var kept; kept")).value, "1");
-  // Reset: timers stop and the old Jobs refuses new work.
+  // Reset: the kernel process and its timers are gone, and the old Jobs refuses new work.
   await cell(kernel, "globalThis.fired = 0; setTimeout(() => { fired = 1 }, 30)");
-  jobs.dispose("reset"); kernel.dispose();
+  jobs.dispose("reset"); kernel.reset();
   await tick(60);
-  assert.equal((await cell(kernel, "fired")).value, "0");
+  assert.match((await kernel.run("fired", { timeoutMs: 1000 })).error!, /fired is not defined/);
   assert.match((await kernel.run("agent('more')", { timeoutMs: 1000 })).error!, /reset or closed/);
   await assert.rejects(jobs.until(() => false, 1000), /reset/);
+});
+
+test("a kernel stuck after an await is restarted while its jobs keep running", async () => {
+  const jobs = new Jobs(fake(undefined, 300).backend, { concurrency: 2, outputBytes: 4000 });
+  const kernel = newKernel(jobs, { syncTimeoutMs: 200, hangMs: 1000 });
+  await cell(kernel, "const p = workpool({ name: 'survives' }); await p.push('a'); const kept = 1");
+  const stuck = await kernel.run("await sleep(5); for (;;) {}", { timeoutMs: 10_000 });
+  assert.match(stuck.error!, /stopped responding/);
+  assert.match(stuck.note!, /^Variables from earlier cells are gone; jobs keep running/);
+  assert.match((await kernel.run("kept", { timeoutMs: 1000 })).error!, /kept is not defined/);
+  // Ids continue after the restart, and pool() reattaches.
+  assert.equal((await cell(kernel, "agent('x').id")).value, "agent-1");
+  assert.deepEqual(JSON.parse((await cell(kernel, "JSON.stringify((await pool('survives').wait()).map(r => r.text))")).value!), ["answer: a"]);
+  assert.equal((await cell(kernel, "workpool().name")).value, "pool-1");
+  assert.match((await kernel.run("workpool({ name: 'survives' })", { timeoutMs: 1000 })).error!, /taken/);
+});
+
+test("kernel functions registered with tool() can be invoked from outside", async () => {
+  const kernel = newKernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }));
+  await cell(kernel, "const seen = []; await tool('record', (args) => { seen.push(args.finding); return `noted ${seen.length}`; }, { description: 'Record a finding', parameters: { type: 'object', properties: { finding: { type: 'string' } }, required: ['finding'] } })");
+  assert.equal(kernel.tools.get("record")?.description, "Record a finding");
+  assert.deepEqual(await kernel.invoke("record", { finding: "a" }), { t: "invoked", id: 1, ok: true, value: "noted 1" });
+  assert.equal((await kernel.invoke("missing", {})).ok, false);
+  assert.equal((await cell(kernel, "seen")).value, "[ 'a' ]");
 });
 
 test("failed completions still count toward the budget", async () => {
@@ -276,7 +308,110 @@ test("failed completions still count toward the budget", async () => {
     complete: async () => { throw Object.assign(new Error("tiny: length"), { usage: usage(70) }); },
   };
   const jobs = new Jobs(backend, { concurrency: 1, outputBytes: 4000 });
-  const kernel = new Kernel(jobs);
+  const kernel = newKernel(jobs);
   assert.match((await kernel.run("await completion('x').wait()", { timeoutMs: 1000 })).error!, /tiny: length/);
   assert.equal(jobs.spent(), 70);
+});
+
+test("pools with workers keep one conversation per worker; agents continue with send()", async () => {
+  const { backend, state } = fake(undefined, 20);
+  const jobs = new Jobs(backend, { concurrency: 6, outputBytes: 4000 });
+  const kernel = newKernel(jobs);
+  await cell(kernel, "const team = workpool('worker', { name: 'team', workers: 2 }); await team.push('a', 'b', 'c', 'd'); await team.wait()");
+  assert.equal(state.peak, 2);
+  const sessions = state.extras.map((e) => e!.session!);
+  assert.equal(new Set(sessions).size, 2);
+  // Each worker's later items continue its conversation and its worktree.
+  for (const session of new Set(sessions)) {
+    const mine = state.extras.filter((e) => e!.session === session);
+    assert.deepEqual(mine.map((e) => !!e!.followUp), [false, ...mine.slice(1).map(() => true)]);
+    assert.equal(new Set(mine.slice(1).map((e) => e!.worktree)).size, 1);
+  }
+  assert.match((await kernel.run("workpool({ workers: 0 })", { timeoutMs: 1000 })).error!, /whole number/);
+  // send() continues a finished agent's conversation as a new item.
+  state.extras.length = 0;
+  const first = await cell(kernel, "const a = agent('first'); await a.wait(); const b = await a.send('second'); [b.id, await b.wait()]");
+  assert.equal(first.value, "[ 'agent-2', 'answer: second' ]");
+  const [opening, followUp] = state.extras;
+  assert.ok(opening!.session && !opening!.followUp);
+  assert.equal(followUp!.session, opening!.session);
+  assert.equal(followUp!.followUp, true);
+  assert.match((await kernel.run("const busy = agent('slow'); await busy.send('too soon')", { timeoutMs: 1000 })).error!, /still running/);
+});
+
+test("watched pools run items on a few Rex children and close them when the pool settles", async () => {
+  const events: string[] = [];
+  const watch: WatchBackend = {
+    limit: 2,
+    open: async (agent, title) => { events.push(`open ${agent} ${title}`); return `child-${events.filter((e) => e.startsWith("open")).length}`; },
+    run: async (child, task) => { events.push(`run ${child} ${task.task}`); await tick(10); return { id: child, agent: task.agent, provider: "p", model: "m", status: "done", text: `${child}: ${task.task}`, transcript: "/s.jsonl", cwd: "/", elapsedMs: 10, usage: usage(5) }; },
+    close: async (child) => { events.push(`close ${child}`); },
+  };
+  const { backend } = fake();
+  const jobs = new Jobs({ ...backend, watch: () => watch }, { concurrency: 6, outputBytes: 4000 });
+  const kernel = newKernel(jobs);
+  const texts = await cell(kernel, "const w = workpool('scout', { name: 'w', watch: true, workers: 5 }); await w.push('a', 'b', 'c'); (await w.wait()).map((r) => r.text)");
+  assert.match(texts.value!, /child-1: a/);
+  await tick(20);
+  assert.equal(events.filter((e) => e.startsWith("open")).length, 2);
+  assert.equal(events.filter((e) => e.startsWith("run")).length, 3);
+  assert.deepEqual(events.filter((e) => e.startsWith("close")).sort(), ["close child-1", "close child-2"]);
+  const headless = new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 });
+  assert.throws(() => headless.createPool("scout", { watch: true }), /needs interactive Pi running in Rex/);
+});
+
+test("a configured classifier judges instead of the smol tier", async () => {
+  const { backend, state } = fake();
+  const seen: unknown[] = [];
+  const jobs = new Jobs({ ...backend, classify: (s, _q) => { seen.push(s); return Promise.resolve({ answers: { ok: { type: "bool", probability: 0.8 } }, usage: usage(3) }); } }, { concurrency: 1, outputBytes: 4000 });
+  const answers = await jobs.judge("plain text", { ok: { type: "bool", instructions: "ok?", criteria: { true: "yes", false: "no" } } });
+  assert.deepEqual(answers, { ok: { type: "bool", value: true, probability: 0.8 } });
+  assert.deepEqual(seen, [{ value: "plain text" }]);
+  assert.equal(state.prompts.length, 0);
+  assert.equal(jobs.spent(), 3);
+});
+
+test("kernel tools reach the kernel through a private socket, and children get their schemas", async () => {
+  const kernel = newKernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }));
+  await cell(kernel, "const notes = []; await tool('note', ({ text }) => { notes.push(text); return notes.length; }, { description: 'Keep a note' })");
+  const server = new ToolServer((name, args, signal) => kernel.invoke(name, args, signal));
+  try {
+    assert.deepEqual(await callKernel(server, "note", { text: "hi" }), { t: "invoked", id: 1, ok: true, value: "1" });
+    assert.match((await callKernel({ socket: server.socket, token: "nope" }, "note", {})).error!, /token/);
+    assert.equal((await cell(kernel, "notes")).value, "[ 'hi' ]");
+  } finally { server.close(); }
+  // Pools and agents pass only tools defined with tool().
+  const jobs = new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 });
+  jobs.kernelTools = { has: (n) => n === "note", extras: (names) => ({ tools: names, extensions: ["/x/child-tools.ts"], env: { PI_WORKFLOWZ_TOOLS: "{}" } }) };
+  assert.throws(() => jobs.createPool("scout", { tools: ["other"] }), /Define these with tool\(\) first: other/);
+  jobs.createPool("scout", { name: "p", tools: ["note"] });
+  assert.deepEqual(childArgs("p", "m", "low", ["read"], [], "g.ts", "i.md", { dir: "/s", id: "wfz-12345678" }).slice(3, 8), ["-p", "--session-dir", "/s", "--session-id", "wfz-12345678"]);
+});
+
+test("second review: startup, placement, cell attribution and option checks", async () => {
+  // A child that never says ready is killed by the monitor rather than leaked.
+  const silent = newKernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }),
+    { hangMs: 500, launch: () => ({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], where: "host" }) });
+  assert.match((await silent.run("1", { timeoutMs: 10_000 })).error!, /could not start|stopped/);
+  // A kernel running where it no longer may restarts before the next cell.
+  let where = "host";
+  const jobs = new Jobs(fake(undefined, 20).backend, { concurrency: 4, outputBytes: 4000 });
+  const kernel = newKernel(jobs, { placement: () => where, launch: async (source) => ({ ...(await import("../extensions/workflowz/kernel.ts")).localLaunch(source), where }) });
+  await cell(kernel, "const before = 1");
+  where = "sandbox";
+  const moved = await kernel.run("typeof before", { timeoutMs: 5000 });
+  assert.equal(moved.value, "undefined");
+  assert.match(moved.note!, /sandbox was turned on or off/);
+  assert.equal(kernel.where, "sandbox");
+  // Output and failures of a detached cell stay labelled with that cell.
+  assert.equal((await kernel.run("await sleep(80); print('from one')", { timeoutMs: 10 })).detached, "timeout");
+  assert.match((await cell(kernel, "await sleep(200); 'two'")).output, /\[cell 3\] from one/);
+  // Bad options never leave an item behind.
+  const count = jobs.items.size;
+  assert.match((await kernel.run("agent('x', { tools: ['nope'] })", { timeoutMs: 2000 })).error!, /Define these with tool\(\) first/);
+  assert.equal(jobs.items.size, count);
+  // Worker pools keep one agent kind, and their items take follow-ups only once settled.
+  assert.match((await kernel.run("const wp = workpool('scout', { name: 'wp', workers: 1 }); await wp.push({ task: 'a', agent: 'worker' })", { timeoutMs: 2000 })).error!, /cannot pick another agent/);
+  assert.match((await kernel.run("const busy = workpool('scout', { name: 'busy', workers: 1 }); await busy.push('a', 'b'); await sleep(30); await handle('busy#1').send('more')", { timeoutMs: 2000 })).error!, /send\(\) once the pool has settled/);
+  assert.equal((await cell(kernel, "await busy.wait(); await (await handle('busy#1').send('more')).wait()")).value, "answer: more");
 });

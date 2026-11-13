@@ -10,8 +10,11 @@ import { loadConfig, type Config, type RoleName } from "../workflows/roles.ts";
 import { createRunner } from "../workflows/subagents.ts";
 import { recordUsage } from "../workflows/usage.ts";
 import { Jobs, type Backend, type Tier } from "./jobs.ts";
-import { Kernel, type CellResult } from "./kernel.ts";
+import { GUEST_COMMAND, SANDBOX_CHANGED, type GuestCommandRequest } from "../sandbox/guest.ts";
+import { REX_WORKERS, type RexWorkersRequest } from "../rex/workers.ts";
+import { Kernel, localLaunch, type CellResult, type Launch } from "./kernel.ts";
 import { budgetIn, keywordsIn, loadNotices, renderNotice } from "./notices.ts";
+import { ToolServer } from "./tool-server.ts";
 
 const TOOLS = ["eval", "wait"];
 const TIER_ROLE: Record<Tier, RoleName> = { smol: "tiny", default: "task", slow: "advisor" };
@@ -42,14 +45,60 @@ export default async function (pi: ExtensionAPI) {
   const backend: Backend = {
     async runAgent(task, signal) {
       if (!ctxNow) throw new Error("No active session");
-      const [result] = await runner([task], ctxNow, instructions, signal);
+      const [result] = await runner([{ agent: task.agent, task: task.task, context: task.context }], ctxNow, instructions, signal, undefined, [task.extras ?? {}]);
       return result!;
     },
     async complete(tier, system, prompt, signal) {
       if (!ctxNow || !config) throw new Error("No active session");
       return completeRole(ctxNow, config, TIER_ROLE[tier], system, prompt, AbortSignal.any([signal, lifetime.signal]));
     },
+    // A configured classifier judges; unset, the judge uses the tiny role. Never a fallback.
+    classify(state, questions, signal) {
+      const judge = config?.subagents.judge, ctx = ctxNow;
+      if (!judge) return undefined;
+      return (async () => {
+        if (!ctx) throw new Error("No active session");
+        const registry = ctx.modelRegistry as any;
+        const model = registry.findOfType?.("classifier", judge.provider, judge.model);
+        if (!model) throw new Error(`Judge classifier ${judge.provider}/${judge.model} (subagents.judge) is not in this Pi's model list`);
+        const result = await registry.classify(model, { state, questions }, { signal: AbortSignal.any([signal, lifetime.signal]) });
+        if (result.stopReason !== "stop") throw Object.assign(new Error(`judge ${judge.provider}/${judge.model}: ${result.errorMessage ?? result.stopReason}`), { usage: result.usage });
+        return { answers: result.answers, usage: result.usage };
+      })();
+    },
+    // Watched pools: the Rex extension serves them while Pi runs interactively in Rex.
+    watch() {
+      const request: RexWorkersRequest = {};
+      pi.events.emit(REX_WORKERS, request);
+      const rex = request.answer, ctx = ctxNow;
+      if (!rex || !ctx || !config) return undefined;
+      return {
+        limit: config.subagents.rexConcurrency,
+        open: (agent, title, signal) => rex.open(agent, title, ctx, signal),
+        async run(child, task, signal, title) {
+          const r = await rex.run(child, task.task, task.context ?? "", signal, title);
+          return { id: child, agent: task.agent, provider: r.provider, model: r.model, status: r.status === "succeeded" ? "done" : "failed", text: r.text,
+            transcript: r.sessionFile, cwd: ctx.cwd, worktree: r.worktree, elapsedMs: r.elapsedMs, usage: r.usage ?? emptyUsage() };
+        },
+        close: (child) => rex.close(child),
+      };
+    },
   };
+
+  // With the sandbox on, the kernel runs in the guest like bash does; asking
+  // fails closed when the sandbox is on but unavailable.
+  const sandboxOn = () => process.env.PI_SANDBOX === "on";
+  async function launch(source: string): Promise<Launch> {
+    const request: GuestCommandRequest = { argv: ["/usr/bin/node", "-e", source], cwd: ctxNow?.cwd };
+    pi.events.emit(GUEST_COMMAND, request);
+    const guest = await request.answer;
+    if (guest) return { ...guest, where: "sandbox" };
+    if (sandboxOn()) throw new Error("The sandbox is on, but the sandbox extension did not provide a guest for the kernel");
+    return localLaunch(source);
+  }
+
+  // A kernel never keeps running on the host once the sandbox is on, or the reverse.
+  pi.events.on(SANDBOX_CHANGED, () => { kernel?.relocate("the sandbox was turned on or off"); });
 
   function ensure(): { jobs: Jobs; kernel: Kernel } {
     if (!config) throw new Error("Workflow config not loaded");
@@ -58,10 +107,20 @@ export default async function (pi: ExtensionAPI) {
       jobs.setBudget(budget);
       jobs.onChange = scheduleWidget;
       jobs.onReady = scheduleFlush;
-      kernel = new Kernel(jobs);
+      const k = kernel = new Kernel(jobs, { launch, placement: () => sandboxOn() ? "sandbox" : "host" });
+      // tool(): children call kernel functions through a private socket.
+      jobs.kernelTools = {
+        has: (name) => k.tools.has(name),
+        extras: (names) => {
+          toolServer ??= new ToolServer((name, args, signal) => kernel ? kernel.invoke(name, args, signal) : Promise.resolve({ ok: false, error: "The workflow kernel was reset" }));
+          return { tools: names, extensions: [join(here, "child-tools.ts")],
+            env: { PI_WORKFLOWZ_TOOLS: JSON.stringify({ socket: toolServer.socket, token: toolServer.token, tools: names.map((n) => k.tools.get(n)!) }) } };
+        },
+      };
     }
     return { jobs, kernel };
   }
+  let toolServer: ToolServer | undefined;
 
   // ----- status widget -----
   function scheduleWidget() { widgetTimer ??= setTimeout(() => { widgetTimer = undefined; renderWidget(); }, 300); }
@@ -103,6 +162,7 @@ export default async function (pi: ExtensionAPI) {
     if (widgetTimer) clearTimeout(widgetTimer);
     jobs?.dispose("Session closed");
     kernel?.dispose();
+    toolServer?.close(); toolServer = undefined;
     const usage = jobs?.takeUsage();
     if (usage) recordUsage(pi, undefined, { role: "eval", usage });
     if (ctxNow?.mode === "tui") ctxNow.ui.setWidget("workflowz", undefined);
@@ -125,7 +185,8 @@ export default async function (pi: ExtensionAPI) {
       event.systemPromptOptions.selectedTools = active;
     }
     const state = { active: event.systemPromptOptions.selectedTools ?? pi.getActiveTools(), concurrency: current.subagents.evalConcurrency,
-      subagentConcurrency: current.subagents.concurrency, maxTasks: current.subagents.maxTasks, budget };
+      subagentConcurrency: current.subagents.concurrency, maxTasks: current.subagents.maxTasks, budget,
+      judge: current.subagents.judge ? `${current.subagents.judge.provider}/${current.subagents.judge.model}` : undefined };
     const content = words.map((word) => renderNotice(notices[word], state)).join("\n\n");
     return { message: { customType: "workflowz-notice", content, display: true, details: { keywords: words, budget } } };
   });
@@ -204,7 +265,7 @@ export default async function (pi: ExtensionAPI) {
 
   pi.registerTool({
     name: "eval", label: "Eval", executionMode: "sequential", exposure: "deferred", namespace,
-    description: "Run JavaScript in the persistent workflow kernel (state and top-level declarations persist; top-level await; last expression is the result). Globals: workpool(agent, {name, context}) with push/status/peek/wait/close; agent(prompt, {agent, schema}); completion(prompt, {model: smol|default|slow, schema}); judge(state, questions); judgeBatch(states, questions, opts); wait(handles); log; phase; budget; tools.<name>(args). Agents: scout, researcher, advisor, worker. Results auto-deliver; use the wait tool when blocked.",
+    description: "Run JavaScript in the persistent workflow kernel (declarations persist; top-level await; the last expression is the result). Globals: workpool(agent, {name, context, workers, tools, watch}) with push/status/peek/wait/close; pool(name); agent(prompt, {agent, schema, tools}) with wait/send; completion(prompt, {model, schema}); tool(name, fn, spec); judge; judgeBatch; wait(handles); log; phase; budget; tools.<name>(args). Agents: scout, researcher, advisor, worker. Results arrive as messages; call the wait tool when blocked.",
     parameters: Type.Object({
       code: Type.String({ description: "JavaScript cell" }),
       timeout: Type.Optional(Type.Number({ description: "Seconds to wait for the cell (default 300, max 3600); it keeps running after" })),
@@ -223,7 +284,6 @@ export default async function (pi: ExtensionAPI) {
       return new Text(`${lines.slice(0, 6).join("\n")}\n${theme.fg("dim", `… ${lines.length - 6} more lines${hint ? ` (${hint})` : ""}`)}`, 0, 0);
     },
     async execute(_id, params, signal, onUpdate, ctx) {
-      if (process.env.PI_SANDBOX === "on") throw new Error("eval runs model-written JavaScript in the Pi host process, so it is off while the sandbox is on. Use the subagent or rex_agent tools, or turn the sandbox off.");
       ctxNow = ctx;
       await refreshConfig(ctx);
       if (params.reset && jobs) { jobs.dispose("Kernel reset"); kernel?.dispose(); jobs = undefined; kernel = undefined; }
@@ -304,7 +364,7 @@ export default async function (pi: ExtensionAPI) {
       if (args.trim()) throw new Error("Usage: /workflowz [reset]");
       const lines = jobs?.statusLines() ?? [];
       const usage = jobs ? addUsage(emptyUsage(), jobs.usage) : emptyUsage();
-      const text = [`Kernel: ${kernel ? "running" : "not started"}${jobs?.phase ? ` · phase ${jobs.phase}` : ""}`,
+      const text = [`Kernel: ${kernel?.where ? `running on the ${kernel.where === "sandbox" ? "sandbox guest" : "host"}` : "not started"}${jobs?.phase ? ` · phase ${jobs.phase}` : ""}`,
         `Kernel work: ${usage.totalTokens} tokens, $${usage.cost.total.toFixed(4)}${budget ? ` · budget ${budget.total}${budget.hard ? " (hard)" : ""}` : ""}`,
         ...(lines.length ? lines : ["No running jobs."])].join("\n");
       if (ctx.hasUI) ctx.ui.notify(text, "info"); else console.log(text);

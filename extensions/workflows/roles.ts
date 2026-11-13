@@ -39,6 +39,8 @@ export interface Config {
     outputBytes: number;
     sandbox: "inherit" | "required";
     childExtensions: string[];
+    /** Classifier model for workflowz judges; null judges with the tiny role. */
+    judge: { provider: string; model: string } | null;
   };
   learning: {
     maxInputChars: number; maxChunks: number; maxCandidates: number;
@@ -118,6 +120,8 @@ export function resolveConfig(base: unknown, local: unknown, profile: string, so
   }
   const s = { ...b.subagents, ...l.subagents, ...bp?.subagents, ...lp?.subagents };
   if (!["inherit", "required"].includes(s.sandbox)) throw new Error("Invalid subagents.sandbox");
+  const judge = s.judge ?? null;
+  if (judge !== null && !(typeof judge.provider === "string" && judge.provider && typeof judge.model === "string" && judge.model)) throw new Error("subagents.judge must be null or { provider, model }");
   if (!Array.isArray(s.childExtensions) || !s.childExtensions.every((x: unknown) => typeof x === "string" && (x.startsWith("/") || x.startsWith("~/")))) {
     throw new Error("childExtensions must contain explicit absolute local paths");
   }
@@ -135,6 +139,7 @@ export function resolveConfig(base: unknown, local: unknown, profile: string, so
       maxTurns: integer(s.maxTurns, 1, 64, "maxTurns"),
       outputBytes: integer(s.outputBytes, 1024, 50000, "outputBytes"),
       sandbox: s.sandbox, childExtensions: s.childExtensions.map(expandHome),
+      judge: judge && { provider: judge.provider, model: judge.model },
     },
     learning: {
       maxInputChars: integer(learning.maxInputChars, 8000, 200000, "maxInputChars"),

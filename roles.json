@@ -158,7 +158,8 @@
     "maxTurns": 16,
     "outputBytes": 16000,
     "sandbox": "inherit",
-    "childExtensions": []
+    "childExtensions": [],
+    "judge": null
   },
   "learning": {
     "maxInputChars": 48000,
