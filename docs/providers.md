@@ -59,7 +59,8 @@ reader service. `/web-fetch <url> [term]` runs the same code for a manual check.
   case-insensitive term, each marked with the offset to read on from, so one
   section of a long reference costs one small call.
 - Link targets are left out unless `links` is true.
-- Pages are kept in memory for five minutes, so paging does not fetch again.
+- Pages are kept in memory for five minutes, so paging does not fetch again,
+  and calls made at once for one page share a single download.
   Limits are 5 MiB per page, 30 seconds and five redirects.
 - Pages that are drawn entirely by scripts have no text to return, and say so.
 

@@ -172,6 +172,63 @@ test("cancellation and a stalled server end the fetch", async () => {
   await assert.rejects(loadPage("https://example.com/", { fetchImpl: stalled, resolve: () => new Promise(() => {}), cache: new Map(), signal: AbortSignal.timeout(20) }), /Timeout|aborted/i);
 });
 
+test("calls for a page that is still downloading share the download, which stops when all of them have", async () => {
+  let requests = 0, aborted = 0;
+  let answer!: (response: Response) => void;
+  const slow = ((_input: any, init: any) => new Promise<Response>((resolve, reject) => {
+    requests++;
+    answer = resolve;
+    init.signal.addEventListener("abort", () => { aborted++; reject(init.signal.reason); });
+  })) as typeof fetch;
+  const shared: FetchOptions = { fetchImpl: slow, resolve: publicHost, cache: new Map() };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+  // Three find terms at once: one request, and one of them cancelled does not fail the others.
+  const first = new AbortController();
+  const calls = [loadPage("https://example.com/doc", { ...shared, signal: first.signal }), loadPage("https://example.com/doc#part", shared), loadPage("https://example.com/doc", { ...shared, signal: new AbortController().signal })];
+  await settle();
+  assert.equal(requests, 1);
+  first.abort(new Error("first cancelled"));
+  await assert.rejects(calls[0], /first cancelled/);
+  assert.equal(aborted, 0);
+  answer(html("<p>Shared text</p>"));
+  assert.deepEqual((await Promise.all(calls.slice(1))).map((page) => page.text), ["Shared text", "Shared text"]);
+  assert.equal((await loadPage("https://example.com/doc", shared)).text, "Shared text");
+  assert.equal(requests, 1);
+  // With links the text differs, so that is a download of its own.
+  const linked = loadPage("https://example.com/doc", { ...shared, links: true });
+  await settle();
+  answer(html('<p><a href="/x">Linked</a> text</p>'));
+  assert.match((await linked).text, /\[Linked\]\(https:\/\/example\.com\/x\)/);
+  assert.equal(requests, 2);
+
+  // Every caller gone: the request is aborted, and the next call starts afresh.
+  const a = new AbortController(), b = new AbortController();
+  const gone = [loadPage("https://example.com/other", { ...shared, signal: a.signal }), loadPage("https://example.com/other", { ...shared, signal: b.signal })];
+  await settle();
+  a.abort(new Error("a cancelled"));
+  b.abort(new Error("b cancelled"));
+  await assert.rejects(gone[0], /a cancelled/);
+  await assert.rejects(gone[1], /b cancelled/);
+  assert.deepEqual([requests, aborted], [3, 1]);
+  const again = loadPage("https://example.com/other", shared);
+  await settle();
+  answer(html("<p>Fresh</p>"));
+  assert.equal((await again).text, "Fresh");
+  assert.equal(requests, 4);
+
+  // A failed download is not kept.
+  const failing = [loadPage("https://example.com/down", shared), loadPage("https://example.com/down", shared)];
+  await settle();
+  answer(new Response("no", { status: 503 }));
+  for (const call of failing) await assert.rejects(call, /HTTP 503/);
+  const retried = loadPage("https://example.com/down", shared);
+  await settle();
+  answer(html("<p>Back</p>"));
+  assert.equal((await retried).text, "Back");
+  assert.equal(requests, 6);
+});
+
 test("fetch views summarize the page and escape its text", () => {
   const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text } as any;
   const result = { content: [{ type: "text", text: "One\n\nTwo\nThree\nFour\u001b[2J" }], details: { url: "https://example.com/", title: "A page", chars: 48211 } };

@@ -13,7 +13,9 @@ const HEADERS = { accept: "text/markdown, text/html;q=0.9, text/plain;q=0.8, */*
 const TEXTUAL = /^text\/|^application\/(?:json|xml|javascript|yaml|x-yaml|toml|x-ndjson)$|\+(?:json|xml)$/;
 
 export type Page = { url: string; title?: string; text: string; clipped: boolean };
-export type PageCache = Map<string, { page: Page; until: number }>;
+/** A page, or the download that will give it: `until` is Infinity while it runs, for `waiting` calls. */
+type Kept = { page: Promise<Page>; until: number; waiting: number; stop: AbortController };
+export type PageCache = Map<string, Kept>;
 export type FetchOptions = {
   links?: boolean;
   signal?: AbortSignal;
@@ -79,14 +81,44 @@ async function read(response: Response, url: URL, links: boolean): Promise<Page>
 }
 
 export async function loadPage(input: string, options: FetchOptions = {}): Promise<Page> {
-  let url = target(input);
-  const cache = options.cache ?? pages, key = `${options.links ? "links" : "text"} ${url.href}`, kept = cache.get(key);
+  const url = target(input), { signal } = options;
+  signal?.throwIfAborted();
+  const cache = options.cache ?? pages, key = `${options.links ? "links" : "text"} ${url.href}`;
+  let kept = cache.get(key);
   cache.delete(key);
-  if (kept && kept.until > Date.now()) { cache.set(key, kept); return kept.page; }
+  if (!kept || kept.until <= Date.now()) {
+    // Kept from the start, so calls made while a page downloads share that
+    // download: a model often asks for several find terms at once.
+    const stop = new AbortController(), started: Kept = { page: download(url, input, options, stop.signal), until: Infinity, waiting: 0, stop };
+    started.page.then(() => { started.until = Date.now() + CACHE_MS; }, () => { if (cache.get(key) === started) cache.delete(key); });
+    kept = started;
+  }
+  const entry = kept;
+  cache.set(key, entry);
+  while (cache.size > CACHE_PAGES) cache.delete(cache.keys().next().value!);
+  entry.waiting++;
+  if (!signal) return entry.page;
+  let leave!: () => void;
+  const left = new Promise<never>((_, reject) => {
+    leave = () => {
+      // A cancelled call stops waiting; the last one to go takes the download with it.
+      if (--entry.waiting === 0 && entry.until === Infinity) {
+        if (cache.get(key) === entry) cache.delete(key);
+        entry.stop.abort(signal.reason);
+      }
+      reject(signal.reason);
+    };
+  });
+  signal.addEventListener("abort", leave, { once: true });
+  try { return await Promise.race([entry.page, left]); }
+  finally { signal.removeEventListener("abort", leave); }
+}
 
+async function download(first: URL, input: string, options: FetchOptions, stop: AbortSignal): Promise<Page> {
+  let url = first;
   const allowPrivate = options.allowPrivate ?? process.env.PI_WEB_FETCH_PRIVATE === "1";
   const fetchImpl = options.fetchImpl ?? fetch, resolve = options.resolve ?? systemResolve;
-  const timeout = AbortSignal.timeout(TIMEOUT_MS), signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const timeout = AbortSignal.timeout(TIMEOUT_MS), signal = AbortSignal.any([stop, timeout]);
   const abandoned = new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
   const load = async (): Promise<Page> => {
     for (let hop = 0; ; hop++) {
@@ -108,15 +140,11 @@ export async function loadPage(input: string, options: FetchOptions = {}): Promi
       url = target(new URL(location, url).href);
     }
   };
-  let page: Page;
-  try { page = await Promise.race([load(), abandoned]); }
+  try { return await Promise.race([load(), abandoned]); }
   catch (error) {
-    if (timeout.aborted && !options.signal?.aborted) throw new Error(`${url.host} did not answer within ${TIMEOUT_MS / 1000} s`);
+    if (timeout.aborted && !stop.aborted) throw new Error(`${url.host} did not answer within ${TIMEOUT_MS / 1000} s`);
     throw error;
   }
-  cache.set(key, { page, until: Date.now() + CACHE_MS });
-  while (cache.size > CACHE_PAGES) cache.delete(cache.keys().next().value!);
-  return page;
 }
 
 /** One part of a page: from `offset`, or only the passages that contain `find`. */
