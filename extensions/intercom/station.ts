@@ -48,9 +48,13 @@ function alive(pid: number) {
   try { process.kill(pid, 0); return true; } catch (error: any) { return error.code === "EPERM"; }
 }
 
+const stringOrNull = (v: unknown) => v === null || typeof v === "string";
+
+// Every field, as cards have always been written: one that is not a Card must not reach resolve() or the rex CLI.
 function validCard(c: any): c is Card {
   return !!c && isId(c.id) && Number.isSafeInteger(c.pid) && c.pid > 0 && typeof c.cwd === "string"
-    && (c.title === null || typeof c.title === "string") && typeof c.started === "number";
+    && stringOrNull(c.title) && stringOrNull(c.sessionId) && typeof c.started === "number" && typeof c.busy === "boolean"
+    && (c.rex === null || (typeof c.rex?.session === "string" && typeof c.rex.block === "string"));
 }
 
 /** Every live card in `dir`, oldest first. Cards of exited processes are removed. */

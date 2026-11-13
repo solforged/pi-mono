@@ -51,6 +51,7 @@ test("stations list privately, answer requests, validate input, and clean up", a
   assert.deepEqual(await request(dir, peer.card, { kind: "message", from: me.card, text: "x", delivery: "loud" as any }), { ok: false, error: "invalid delivery" });
   assert.match(await raw(join(dir, "bbbbbb.sock"), "not json\n"), /"ok":false/);
   assert.match(await raw(join(dir, "bbbbbb.sock"), `${JSON.stringify({ kind: "message", from: { id: "x" }, text: "x", delivery: "quiet" })}\n`), /invalid request/);
+  assert.match(await raw(join(dir, "bbbbbb.sock"), `${JSON.stringify({ kind: "status", from: { ...me.card, rex: { session: "s" } } })}\n`), /invalid request/);
   assert.equal(received.length, 2);
 
   await me.update({ busy: true, title: "Mine" });
@@ -67,7 +68,12 @@ test("dead and superseded cards are swept; unreachable peers fail fast", async t
   await writeFile(join(dir, "dddddd.json"), JSON.stringify(card("dddddd", { pid: dead })));
   await writeFile(join(dir, "dddddd.sock"), "");
   await writeFile(join(dir, "broken.json"), "{");
+  // One card with a field of the wrong type must not break targets for every session.
+  const odd = { "111111": { sessionId: 7 }, "222222": { busy: "no" }, "333333": { rex: { session: 1, block: "b" } }, "444444": { rex: undefined } };
+  for (const [id, field] of Object.entries(odd)) await writeFile(join(dir, `${id}.json`), JSON.stringify({ ...card(id, { pid: process.ppid }), ...field }));
   assert.deepEqual((await cards(dir)).map(c => c.id), ["cccccc"]);
+  assert.throws(() => resolve("s-1", [{ ...card("111111"), sessionId: 7 as any }]), TypeError, "what such a card did to every target");
+  for (const id of Object.keys(odd)) await rm(join(dir, `${id}.json`));
   assert.deepEqual((await readdir(dir)).sort(), ["broken.json", "cccccc.json", "cccccc.sock"]);
 
   // Reopening this process under a new id removes its old card.
