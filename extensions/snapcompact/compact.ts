@@ -303,7 +303,8 @@ function fileList(readFiles: string[], modifiedFiles: string[]) {
 }
 
 export function fileOpsLists(fileOps: unknown, previous?: unknown) {
-  const from = (value: unknown, key: "readFiles" | "modifiedFiles" | "read" | "modified") => {
+  // Pi's preparation reports `read`, `written` and `edited`; saved details carry the merged lists.
+  const from = (value: unknown, key: "readFiles" | "modifiedFiles" | "read" | "modified" | "written" | "edited") => {
     if (!value || typeof value !== "object") return [];
     const raw = (value as Record<string, unknown>)[key];
     if (Array.isArray(raw)) return raw.map(String);
@@ -312,7 +313,8 @@ export function fileOpsLists(fileOps: unknown, previous?: unknown) {
   };
   return {
     readFiles: [...new Set([...from(previous, "readFiles"), ...from(previous, "read"), ...from(fileOps, "readFiles"), ...from(fileOps, "read")])],
-    modifiedFiles: [...new Set([...from(previous, "modifiedFiles"), ...from(previous, "modified"), ...from(fileOps, "modifiedFiles"), ...from(fileOps, "modified")])],
+    modifiedFiles: [...new Set([...from(previous, "modifiedFiles"), ...from(previous, "modified"),
+      ...from(fileOps, "modifiedFiles"), ...from(fileOps, "modified"), ...from(fileOps, "written"), ...from(fileOps, "edited")])],
   };
 }
 

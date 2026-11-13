@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   compactMessages,
   compactText,
+  fileOpsLists,
   getArchive,
   historyBlocks,
   injectHistory,
@@ -149,4 +150,12 @@ test("previousSnapcompact reads the latest compaction archive", () => {
   ]);
   assert.equal(found.archive?.text, "abc");
   assert.equal(previousSnapcompact([{ type: "message" }]).archive, undefined);
+});
+
+test("file lists merge Pi's written and edited sets with an earlier archive's lists", () => {
+  const lists = fileOpsLists(
+    { read: new Set(["a.ts"]), written: new Set(["new.ts"]), edited: new Set(["b.ts"]) },
+    { readFiles: ["old.ts"], modifiedFiles: ["b.ts", "c.ts"] },
+  );
+  assert.deepEqual(lists, { readFiles: ["old.ts", "a.ts"], modifiedFiles: ["b.ts", "c.ts", "new.ts"] });
 });
