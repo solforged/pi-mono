@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import test from "node:test";
 import { ENTRY, explicitSelection, groups, register, SEARCH, section, SECTION } from "../extensions/deferred-tools/index.ts";
-import { root } from "./helpers.ts";
+import { root, noModel } from "./helpers.ts";
 
 const sessions = { name: "sessions", description: "Search and read earlier Pi sessions" };
 const tools = [
@@ -89,7 +89,7 @@ test("installed Pi turns on tool_search and lists the deferred session tools", t
   for (const key of ["PI_REX_CHILD", "PI_WORKFLOW_CHILD_CONFIG"]) delete env[key];
   const extensions = ["builtin:tool-search", "extensions/sessions/index.ts", "extensions/deferred-tools/index.ts", "tests/fixtures/deferred-tools-smoke.ts"];
   const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session",
-    ...extensions.flatMap(path => ["-e", path.startsWith("builtin:") ? path : join(root, path)]), "-p", "/deferred-tools-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
+    ...extensions.flatMap(path => ["-e", path.startsWith("builtin:") ? path : join(root, path)]), ...noModel, "-p", "/deferred-tools-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
   if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
   assert.equal(check.status, 0, check.stderr || check.stdout);
   assert.match(check.stdout, /Deferred tools integration: passed/);

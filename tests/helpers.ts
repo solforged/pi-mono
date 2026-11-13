@@ -7,6 +7,8 @@ import { resolveConfig } from "../extensions/workflows/roles.ts";
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const base = JSON.parse(await readFile(join(root, "roles.json"), "utf8"));
 export const config = resolveConfig(base, {}, "personal");
+/** Pi arguments for smoke runs: any prompt that reaches a model fails instead of calling the default one. */
+export const noModel = ["-e", join(root, "tests/fixtures/no-model.ts"), "--provider", "no-model", "--model", "no-model/none"];
 export async function temporary(t: { after: (fn: () => Promise<unknown>) => unknown }) {
   const dir = await realpath(await mkdtemp(join(tmpdir(), "pi-workflows-test-")));
   t.after(() => rm(dir, { recursive: true, force: true }));

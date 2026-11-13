@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { cards, describe, MAX_TEXT, request, resolve, Station, wrap, type Card, type Envelope } from "../extensions/intercom/station.ts";
-import { root } from "./helpers.ts";
+import { root, noModel } from "./helpers.ts";
 
 const card = (id: string, extra: Partial<Card> = {}): Card => ({
   id, pid: process.pid, cwd: "/work/alpha", title: null, sessionId: null, started: Date.now(), busy: false, rex: null, ...extra,
@@ -109,7 +109,7 @@ test("notes cannot close their block or forge attributes", () => {
 test("installed Pi loads the extension and executes offline smoke checks", t => {
   const env = { ...process.env };
   for (const key of ["PI_REX_CHILD", "PI_WORKFLOW_CHILD_CONFIG", "PI_CODING_AGENT_DIR"]) delete env[key];
-  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", "-e", join(root, "tests/fixtures/intercom-smoke.ts"), "-p", "/intercom-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
+  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", "-e", join(root, "tests/fixtures/intercom-smoke.ts"), ...noModel, "-p", "/intercom-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
   if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
   assert.equal(check.status, 0, check.stderr || check.stdout);
   assert.match(check.stdout, /Intercom integration:.*passed/);

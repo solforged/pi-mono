@@ -9,6 +9,7 @@ import {
   fingerprintBody, isOfficialEndpoint, VERSION_ENV, wrapAnthropicProvider,
 } from "../extensions/anthropic/compat.ts";
 import { xxhash64 } from "../extensions/anthropic/xxhash.ts";
+import { noModel } from "./helpers.ts";
 
 const identity = "You are Claude Code, Anthropic's official CLI for Claude.";
 const fingerprint = { sessionId: "test-session", deviceId: "a".repeat(64) };
@@ -303,7 +304,7 @@ test("bundled Pi provider preserves parser behavior with mocked HTTP", t => {
   delete env[VERSION_ENV];
   const result = spawnSync("pi", [
     "--offline", "--no-extensions", "--no-skills", "--no-context-files",
-    "--no-prompt-templates", "--no-session", "-e", fixture, "-p", "/anthropic-smoke",
+    "--no-prompt-templates", "--no-session", "-e", fixture, ...noModel, "-p", "/anthropic-smoke",
   ], { encoding: "utf8", timeout: 30_000, env });
   if ((result.error as NodeJS.ErrnoException)?.code === "ENOENT") return t.skip("Pi is not installed");
   assert.ifError(result.error);

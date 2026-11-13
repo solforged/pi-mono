@@ -6,7 +6,7 @@ import {
   NOTE_TYPE, close, create, decide, format, fresh, parseAmount, restore, section, snapshot, statusText, transition, valid, withBudget,
   type Snapshot,
 } from "../extensions/goal/goal.ts";
-import { root } from "./helpers.ts";
+import { root, noModel } from "./helpers.ts";
 
 const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute)).toISOString();
 const custom = (data: Snapshot, minute = 0) => ({ type: "custom", customType: "goal", data, timestamp: at(minute) });
@@ -113,7 +113,7 @@ test("the prompt section, status and summary describe the goal", () => {
 test("installed Pi loads the extension and executes offline smoke checks", t => {
   const env = { ...process.env };
   for (const key of ["PI_REX_CHILD", "PI_WORKFLOW_CHILD_CONFIG"]) delete env[key];
-  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", "-e", join(root, "tests/fixtures/goal-smoke.ts"), "-p", "/goal-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
+  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", "-e", join(root, "tests/fixtures/goal-smoke.ts"), ...noModel, "-p", "/goal-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
   if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
   assert.equal(check.status, 0, check.stderr || check.stdout);
   assert.match(check.stdout, /Goal integration:.*passed/);

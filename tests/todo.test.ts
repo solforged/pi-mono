@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import test from "node:test";
 import { apply, empty, format, ordered, reminder, restore, section, upNext, valid, withParentTodos, type List } from "../extensions/todo/store.ts";
-import { root } from "./helpers.ts";
+import { root, noModel } from "./helpers.ts";
 
 const result = (list: List, isError = false) => ({ type: "message", message: { role: "toolResult", toolName: "todo", isError, details: { action: "add", ...list } } });
 const custom = (data: unknown) => ({ type: "custom", customType: "todo", data });
@@ -81,7 +81,7 @@ test("listings, prompt section, reminder and child context stay bounded", () => 
 test("installed Pi loads the extension and executes offline smoke checks", t => {
   const env = { ...process.env };
   for (const key of ["PI_REX_CHILD", "PI_WORKFLOW_CHILD_CONFIG"]) delete env[key];
-  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", "-e", join(root, "tests/fixtures/todo-smoke.ts"), "-p", "/todo-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
+  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", "-e", join(root, "tests/fixtures/todo-smoke.ts"), ...noModel, "-p", "/todo-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
   if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
   assert.equal(check.status, 0, check.stderr || check.stdout);
   assert.match(check.stdout, /Todo integration:.*passed/);

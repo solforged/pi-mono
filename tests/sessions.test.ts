@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { readPayload, searchPayload } from "../extensions/sessions/payload.ts";
 import { LIMITS, newCoverage, parseDocument, readSession, searchSessions, storageRoots, type Context } from "../extensions/sessions/store.ts";
-import { root, temporary } from "./helpers.ts";
+import { root, temporary, noModel } from "./helpers.ts";
 
 const date = "2026-01-01T00:00:00.000Z";
 function entry(id: string, parentId: string | null, content: any, role = "user", extra: any = {}) {
@@ -367,7 +367,7 @@ test("cancellation stops scans without returning misleading partial results", as
 
 test("installed Pi loads the real tools and executes offline smoke checks", async t => {
   const agentDir = join(await temporary(t), "agent");
-  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", "-e", join(root, "tests/fixtures/sessions-smoke.ts"), "-p", "/sessions-smoke"], { cwd: root, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir }, encoding: "utf8", timeout: 30000 });
+  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", "-e", join(root, "tests/fixtures/sessions-smoke.ts"), ...noModel, "-p", "/sessions-smoke"], { cwd: root, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir }, encoding: "utf8", timeout: 30000 });
   if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
   assert.equal(check.status, 0, check.stderr || check.stdout);
   assert.match(check.stdout, /Session integration:.*passed/);

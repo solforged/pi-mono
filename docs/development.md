@@ -28,7 +28,10 @@ node --test --import ./tests/git-env.ts tests/*.test.ts
 node --test computer/tests/*.test.mjs
 ```
 
-The suites make no model calls. `mise run profile` and `mise run faults` are
+The suites make no model calls. `--offline` stops only background network
+traffic, not prompts, so smoke runs add `noModel` from `tests/helpers.ts`: its
+provider fails any request, and a smoke command that is not registered fails
+the test instead of reaching the default model. `mise run profile` and `mise run faults` are
 the offline [measuring](measuring.md) tools; the second runs the installed Pi
 against a scripted provider, as does `mise run compaction:smoke` for
 [compaction timing](context.md#compaction-summaries). `mise run sandbox:smoke` is a separate live
@@ -44,7 +47,10 @@ and explicit live acceptance tests. These offline suites do not start a guest.
 
 ## Check the user's configuration
 
-These commands make no model requests:
+These commands make no model requests, provided the command exists; a
+mistyped one goes to the default model as a prompt. Add
+`-e ./tests/fixtures/no-model.ts --provider no-model --model no-model/none`
+to rule that out when the check does not depend on the main model.
 
 ```sh
 pi --offline --no-extensions --no-skills --no-context-files \

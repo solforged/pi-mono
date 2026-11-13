@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { declarationSize, dropRepeatedRules, measure, owner, REPEATED_RULES, report, sections, withoutRepeatedRules } from "../extensions/prompt-size/measure.ts";
 import { switchTools } from "../extensions/rex/tools.ts";
-import { root } from "./helpers.ts";
+import { root, noModel } from "./helpers.ts";
 
 test("prompts are measured by section and tools by owning extension", () => {
   assert.deepEqual(sections("intro <tools>\n- a\n</tools>\n<rules>r</rules>"), [{ name: "tools", chars: 20 }, { name: "rules", chars: 16 }, { name: "other", chars: 7 }]);
@@ -50,7 +50,7 @@ test("installed Pi keeps every repo tool declaration within budget", t => {
   const env = { ...process.env };
   for (const key of ["PI_REX_CHILD", "PI_WORKFLOW_CHILD_CONFIG", "REX_SESSION", "REX_BLOCK"]) delete env[key];
   const extensions = ["artifacts", "ask", "figure", "goal", "intercom", "rex", "sessions", "todo", "web-search", "workflows", "workflowz"].flatMap(name => ["-e", join(root, "extensions", name, "index.ts")]);
-  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", ...extensions, "-e", join(root, "tests/fixtures/prompt-size-smoke.ts"), "-p", "/prompt-size-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
+  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", ...extensions, "-e", join(root, "tests/fixtures/prompt-size-smoke.ts"), ...noModel, "-p", "/prompt-size-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
   if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
   assert.equal(check.status, 0, check.stderr || check.stdout);
   assert.match(check.stdout, /Prompt size:.*passed/);
