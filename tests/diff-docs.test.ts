@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,13 +8,28 @@ import test from "node:test";
 import { registerDocs } from "../extensions/diff/docs.ts";
 import { docUrl, linkDocs, parseDocUrl, resolveTarget } from "../extensions/diff/links.ts";
 import { bundledMarked, layoutDoc, loadMarked, plainLexer, renderDoc, slug, type DocView } from "../extensions/diff/markdown.ts";
-import { DEFAULT_SETTINGS, ipcDir } from "../extensions/diff/pane.ts";
+import { DEFAULT_SETTINGS, ipcDir, which } from "../extensions/diff/pane.ts";
 import { DEFAULT_PALETTE } from "../extensions/diff/render.ts";
 import { paint } from "../extensions/diff/text.ts";
 
 const plain = (text: string) => text.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "").replace(/\x1b\[[0-9;]*m/g, "");
-let piBinary: string | undefined;
-try { piBinary = realpathSync(execFileSync("which", ["pi"], { encoding: "utf8" }).trim()); } catch {}
+/**
+ * The installed Pi's binary, which has the bundled libraries beside it. Some
+ * installs put a wrapper script on PATH; follow its `exec` line to the binary.
+ */
+const piBinary = (() => {
+  try {
+    let file = realpathSync(which("pi") ?? "");
+    for (let hops = 0; hops < 5 && statSync(file).size < 65_536; hops++) {
+      const target = /^\s*exec\s+(?:-a\s+\S+\s+)?["']?(\/[^"'\s]+)/m.exec(readFileSync(file, "utf8"))?.[1];
+      if (!target) break;
+      file = realpathSync(target);
+    }
+    return file;
+  } catch {
+    return undefined;
+  }
+})();
 const lexer = piBinary ? loadMarked(bundledMarked(piBinary)) : undefined;
 
 test("pi-open URLs carry the Pi's process ID, an absolute path and an anchor", () => {

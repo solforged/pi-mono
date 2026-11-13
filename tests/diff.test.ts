@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -575,7 +575,23 @@ test("colors diff lines with syntax and keeps word emphasis on top", () => {
   assert.equal(spans(3).map((span) => span.text).join(""), "const b = newName(a);");
 });
 
-const piBinary = (() => { try { return realpathSync(which("pi") ?? ""); } catch { return undefined; } })();
+/**
+ * The installed Pi's binary, which has the bundled libraries beside it. Some
+ * installs put a wrapper script on PATH; follow its `exec` line to the binary.
+ */
+const piBinary = (() => {
+  try {
+    let file = realpathSync(which("pi") ?? "");
+    for (let hops = 0; hops < 5 && statSync(file).size < 65_536; hops++) {
+      const target = /^\s*exec\s+(?:-a\s+\S+\s+)?["']?(\/[^"'\s]+)/m.exec(readFileSync(file, "utf8"))?.[1];
+      if (!target) break;
+      file = realpathSync(target);
+    }
+    return file;
+  } catch {
+    return undefined;
+  }
+})();
 test("loads the highlight.js build bundled with the installed Pi", { skip: !piBinary || !bundledHighlighter(piBinary) }, () => {
   const highlighter = loadHighlighter(bundledHighlighter(piBinary!));
   assert.ok(highlighter);
