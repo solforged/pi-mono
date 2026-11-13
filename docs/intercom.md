@@ -65,7 +65,8 @@ Unix socket and a JSON card (`0600`) per process. Cards hold the id, process
 id, working directory, session id and title, busy flag, and Rex session and
 block; no transcript content. Cards of exited processes are removed when
 another session lists peers, and a normal exit removes the session's own
-files.
+files. A crashed session whose process id went to another program still
+looks alive; its card goes when a request to it finds nobody listening.
 
 This is local messaging between processes of one OS user, not a security
 boundary. Any such process can already read the same sessions' files and Rex

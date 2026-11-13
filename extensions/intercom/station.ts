@@ -197,18 +197,41 @@ function serve(socket: Socket, handler: Handler) {
   });
 }
 
+/**
+ * Removes the card of a session that nobody listens for. Its process died and
+ * the pid went to another, so the liveness check keeps the card, and a folder
+ * or title it shares with a live session stays ambiguous. A card that changed
+ * since `card` was read is left: that session has reopened.
+ */
+async function forget(dir: string, card: Card, socket: boolean) {
+  try {
+    const now = JSON.parse(await readFile(cardPath(dir, card.id), "utf8"));
+    if (now?.pid !== card.pid || now?.started !== card.started) return;
+    await rm(cardPath(dir, card.id), { force: true });
+    if (socket) await rm(sockPath(dir, card.id), { force: true });
+  } catch { /* The request has failed either way. */ }
+}
+
 /** Sends one envelope to `target` and returns its answer. */
 export function request(dir: string, target: Card, envelope: Envelope, patience = PATIENCE): Promise<Answer> {
   return new Promise((done, fail) => {
-    let text = "";
+    let text = "", broken = false;
     const socket = createConnection(sockPath(dir, target.id));
     socket.setEncoding("utf8");
     const timer = setTimeout(() => { socket.destroy(); fail(new Error(`${target.id} did not answer within ${patience} ms`)); }, patience);
     socket.on("connect", () => socket.write(`${JSON.stringify(envelope)}\n`));
     socket.on("data", (chunk: string) => { text += chunk; if (text.length > MAX_LINE) socket.destroy(); });
-    socket.on("error", error => { clearTimeout(timer); fail(new Error(`${target.id} is not answering: ${error.message}`)); });
+    socket.on("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer);
+      broken = true;
+      const report = () => fail(new Error(`${target.id} is not answering: ${error.message}`));
+      // A missing socket has nothing to remove, and removing by name could take a reopened session's.
+      if (error.code === "ENOENT" || error.code === "ECONNREFUSED") void forget(dir, target, error.code === "ECONNREFUSED").then(report);
+      else report();
+    });
     socket.on("close", () => {
       clearTimeout(timer);
+      if (broken) return;
       try { done(JSON.parse(text.trim())); } catch { fail(new Error(`${target.id} gave no answer`)); }
     });
   });

@@ -78,6 +78,30 @@ test("dead and superseded cards are swept; unreachable peers fail fast", async t
   await assert.rejects(request(dir, second.card, { kind: "status", from: second.card }, 200), /did not answer within 200 ms/);
 });
 
+test("a card nobody listens behind is removed by the request that finds out", async t => {
+  const dir = await temp(t);
+  const me = await Station.open(dir, card("aaaaaa", { cwd: "/work/mine" }), () => ({ ok: true }));
+  const live = await Station.open(dir, card("bbbbbb", { pid: process.ppid }), () => ({ ok: true }));
+  t.after(() => Promise.all([me.close(), live.close()]));
+  // Sessions that crashed, whose pids now belong to other processes: one left a socket file, one did not.
+  const ghost = card("cccccc", { pid: process.ppid, started: 1 }), killed = card("dddddd", { pid: process.ppid, started: 2 });
+  for (const lost of [ghost, killed]) await writeFile(join(dir, `${lost.id}.json`), JSON.stringify(lost));
+  spawnSync(process.execPath, ["-e", "require('node:net').createServer().listen(process.argv[1], () => process.kill(process.pid, 'SIGKILL'))", join(dir, "dddddd.sock")]);
+  const others = async () => (await cards(dir)).filter(c => c.id !== "aaaaaa");
+  assert.deepEqual((await others()).map(c => c.id), ["cccccc", "dddddd", "bbbbbb"]);
+  assert.throws(() => resolve("alpha", [ghost, killed, live.card]), /matches 3 sessions/);
+
+  await assert.rejects(request(dir, ghost, { kind: "status", from: me.card }), /cccccc is not answering.*ENOENT/);
+  await assert.rejects(request(dir, killed, { kind: "status", from: me.card }), /dddddd is not answering.*ECONNREFUSED/);
+  assert.deepEqual((await readdir(dir)).sort(), ["aaaaaa.json", "aaaaaa.sock", "bbbbbb.json", "bbbbbb.sock"]);
+  assert.equal(resolve("alpha", await others()).id, "bbbbbb");
+
+  // A session that reopened after its card was read keeps the new card.
+  await writeFile(join(dir, "eeeeee.json"), JSON.stringify(card("eeeeee", { pid: process.ppid, started: 20 })));
+  await assert.rejects(request(dir, card("eeeeee", { pid: process.ppid, started: 10 }), { kind: "status", from: me.card }), /eeeeee is not answering/);
+  assert.ok((await readdir(dir)).includes("eeeeee.json"));
+});
+
 test("targets resolve by id, path, folder or title, and never guess", () => {
   const peers = [
     card("aaaaaa", { cwd: `${homedir()}/src/pi-mono`, title: "Rex review", sessionId: "s-1" }),
