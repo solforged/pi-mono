@@ -47,11 +47,11 @@ change the parent's list.
 
 ## Commands and display
 
-A widget above the editor shows a progress bar and three open items beside it:
-items in progress and blocked items first, with their reasons, then the pending
-items that follow the one in progress. A count of the rest points to
-`/todos`. On narrow terminals the items stack under the progress bar. The
-widget hides when nothing is open.
+A widget above the editor shows a status line with a progress bar, the done
+count and a count of further items pointing to `/todos`. Below it are three
+open items: items in progress and blocked items first, with their reasons, then
+the pending items that follow the one in progress. Item text is cut at 84
+columns so the IDs line up. The widget hides when nothing is open.
 
 `/todos` in the terminal UI opens a framed panel with a progress bar and the
 items grouped by status. Finished items are struck through. The selected item

@@ -11,6 +11,7 @@ export interface Theme {
 
 const sections: Array<[Status, string]> = [["in_progress", "IN PROGRESS"], ["blocked", "BLOCKED"], ["pending", "PENDING"], ["done", "DONE"]];
 const maxWidth = 88;
+const widgetText = 84;
 const pad = (text: string, width: number) => text + " ".repeat(Math.max(0, width - visibleWidth(text)));
 const fitTo = (text: string, width: number) => pad(truncateToWidth(text, Math.max(0, width)), width);
 
@@ -37,23 +38,24 @@ export function bar(done: number, total: number, width: number, theme: Theme) {
 
 const row = (item: Item, theme: Theme) => `${mark(item, theme)} ${label(item, theme)} ${theme.fg("dim", `#${item.id}`)}`;
 
-/** The widget above the editor: progress, then the work in view, beside it when there is room. */
+/**
+ * The widget above the editor: a status line with progress and the overflow
+ * count, then the work in view indented below it. Item text is capped and
+ * padded so the IDs line up in one column.
+ */
 export function widgetLines(list: List, width: number, theme: Theme): string[] {
   const { items, hidden } = upNext(list);
   if (!items.length) return [];
   const { done } = counts(list.items);
-  const head = `${theme.fg("accent", theme.bold("Todo"))} ${bar(done, list.items.length, 10, theme)} ${theme.fg("muted", `${done}/${list.items.length}`)}`;
-  const more = hidden ? theme.fg("dim", `+${hidden} more · /todos`) : "";
-  const indent = visibleWidth(head) + 3;
-  const lines = width >= indent + 40
-    ? items.map((item, index) => (index ? " ".repeat(indent) : `${head}   `) + row(item, theme))
-    : [head, ...items.map((item) => ` ${row(item, theme)}`)];
-  if (more) {
-    const last = lines.length - 1;
-    if (visibleWidth(lines[last]) + 3 + visibleWidth(more) <= width) lines[last] += `   ${more}`;
-    else lines.push(" ".repeat(width >= indent + 40 ? indent : 1) + more);
-  }
-  return lines.map((line) => truncateToWidth(line, width));
+  const more = hidden ? theme.fg("dim", ` · ${hidden} more in /todos`) : "";
+  const head = `${theme.fg("accent", theme.bold("Todo"))} ${bar(done, list.items.length, width >= 60 ? 20 : 10, theme)} ${theme.fg("muted", `${done}/${list.items.length} done`)}${more}`;
+  const ids = items.map((item) => theme.fg("dim", `#${item.id}`));
+  const labels = items.map((item) => label(item, theme));
+  // Indent, mark and gap before the ID; the text takes what is left, up to a readable cap.
+  const room = width - 6 - Math.max(...ids.map(visibleWidth));
+  const textWidth = Math.min(widgetText, room, Math.max(...labels.map(visibleWidth)));
+  const rows = items.map((item, index) => `  ${mark(item, theme)} ${fitTo(truncateToWidth(labels[index], textWidth, "…"), textWidth)}  ${ids[index]}`);
+  return [head, ...rows].map((line) => truncateToWidth(line, width));
 }
 
 /** Tool-result rows: the open work in view, or every item when expanded. */

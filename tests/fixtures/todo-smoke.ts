@@ -128,13 +128,21 @@ export default function (pi: ExtensionAPI) {
         assert.ok(!panelLines(sample, 0, 40, 30, theme).some((line) => line.includes("╭")));
         assert.match(panelLines(empty(), 0, 64, 30, theme).join("\n"), /The list is empty/);
 
-        // The widget puts progress beside the work in view, falling back to stacked lines.
+        // The widget puts a status line above the work in view, with the IDs in one column.
         const wide = widgetLines(sample, 100, theme);
-        assert.equal(wide.length, 3);
-        assert.match(wide[0], /^Todo ━{10} 1\/5   ▸ wire panel #1$/);
-        assert.match(wide[1], /^ +⊘ update docs · needs the resize fix #3$/);
-        assert.match(wide[2], /^ +○ write tests #2   \+1 more · \/todos$/);
-        assert.match(widgetLines(sample, 40, theme).join("\n"), /^Todo ━+ 1\/5\n ▸ wire panel #1\n ⊘ update docs/);
+        assert.deepEqual(wide, [
+          "Todo ━━━━━━━━━━━━━━━━━━━━ 1/5 done · 1 more in /todos",
+          "  ▸ wire panel                          #1",
+          "  ⊘ update docs · needs the resize fix  #3",
+          "  ○ write tests                         #2",
+        ]);
+        // Long text is cut with an ellipsis, keeping the ID column, and narrow widths shrink the bar.
+        const long = apply(sample, { action: "update", id: 1, change: { text: "x".repeat(200) } }).list;
+        assert.ok(widgetLines(long, 200, theme).slice(1).every((line) => visibleWidth(line) === 92));
+        const narrow = widgetLines(long, 40, theme);
+        assert.match(narrow[0], /^Todo ━{10} 1\/5 done/);
+        assert.match(narrow[1].replace(/\x1b\[[0-9;]*m/g, ""), /^  ▸ x+…  #1$/);
+        assert.ok(narrow.every((line) => visibleWidth(line) <= 40));
 
         // Navigating to an earlier point restores that branch's list.
         const later = entries.splice(branchPoint);
