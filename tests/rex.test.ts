@@ -8,6 +8,7 @@ import { ChildState } from "../extensions/rex/child.ts";
 import { BlockGone } from "../extensions/rex/client.ts";
 import { childCommand, inheritedAsk, RexRunner, yieldingWait, validateReady, waitFor, type RexBackend } from "../extensions/rex/runner.ts";
 import { claimOwner, FRAME_BYTES, Frames, record, send, validateManifest, VERSION, type Manifest } from "../extensions/rex/protocol.ts";
+import { agents } from "../extensions/workflows/subagents.ts";
 import { emptyUsage } from "../extensions/workflows/process.ts";
 import { saveJson } from "../extensions/workflows/state.ts";
 import { config, registry, root, temporary } from "./helpers.ts";
@@ -99,6 +100,9 @@ test("versioned handshake pins model, tools, cwd, block, session and capability"
   assert.equal(validateReady(hello, m).block, hello.block);
   for (const patch of [{ model: "other" }, { token: "b".repeat(64) }, { token: "☃".repeat(64) }, { cwd: "/" }, { block: parent }, { tools: ["bash"] }, { sessionFile: "/tmp/other" }, { version: 1 }]) assert.throws(() => validateReady({ ...hello, ...patch }, m));
   assert.equal(validateManifest(m).id, m.id);
+  // Every agent rex_agent offers must start: the child validates the same list.
+  for (const agent of Object.keys(agents)) assert.equal(validateManifest({ ...m, agent }).agent, agent);
+  for (const agent of ["toString", "reviewer", 3]) assert.throws(() => validateManifest({ ...m, agent }), /Invalid/);
   assert.throws(() => validateManifest({ ...m, deadline: 0 }), /expired/);
   assert.equal(validateManifest({ ...m, mark: "🟦" }).mark, "🟦");
   assert.throws(() => validateManifest({ ...m, mark: "\u001b]0;x" }), /Invalid/);

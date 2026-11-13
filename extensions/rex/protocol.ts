@@ -5,6 +5,7 @@ import type { Socket } from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import type { Usage } from "../workflows/process.ts";
 import type { Role } from "../workflows/roles.ts";
+import { agents, type AgentName } from "../workflows/subagents.ts";
 import { MARKS } from "./tabs.ts";
 
 export const VERSION = 2;
@@ -19,7 +20,7 @@ export type Outcome = "succeeded" | "failed" | "cancelled";
 export interface Manifest {
   version: 2; id: string; token: string; socket: string; dir: string; cwd: string;
   rexSession: string; parentBlock: string; role: Role; tools: string[];
-  maxTurns: number; outputBytes: number; deadline: number; agent?: "advisor" | "scout" | "worker"; name?: string;
+  maxTurns: number; outputBytes: number; deadline: number; agent?: AgentName; name?: string;
   /** The parent's colour mark, shown on the child's pane label, title and header. */
   mark?: string;
 }
@@ -89,7 +90,7 @@ export function validateManifest(value: unknown, allowExpired = false): Manifest
     || !Number.isInteger(m.maxTurns) || m.maxTurns < 1 || m.maxTurns > 64
     || !Number.isInteger(m.outputBytes) || m.outputBytes < 1024 || m.outputBytes > 50000
     || !Number.isInteger(r.timeoutMs) || r.timeoutMs < 1000 || r.timeoutMs > 1800000
-    || (m.agent !== undefined && !["advisor", "scout", "worker"].includes(m.agent))
+    || (m.agent !== undefined && !(typeof m.agent === "string" && Object.hasOwn(agents, m.agent)))
     || (m.name !== undefined && !/^[a-z][a-z0-9-]{1,15}$/.test(m.name))
     || (m.mark !== undefined && !MARKS.includes(m.mark))
     || !Number.isFinite(m.deadline) || (!allowExpired && m.deadline <= Date.now())) throw new Error("Invalid or expired Rex child manifest");
