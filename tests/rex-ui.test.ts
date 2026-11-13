@@ -87,7 +87,7 @@ test("hub entries: children by attention, then other sessions busy first; unread
   assert.deepEqual(list.map(e => [e.name, e.section]), [["oak", "attention"], ["birch", "done"], ["app", "peers"], ["calm", "peers"], ["nowhere", "peers"]]);
   assert.equal(list[1].unread, true); assert.equal(list[2].title, "Fix scrollback"); assert.equal(list[4].state, "not in Rex");
   const cols = columns(list, 160);
-  assert.match(entryLine(list[0], true, theme, cols), /^› !·?\s?oak {6}scout {2}Waiting for user: Allow bash\? {2}/);
+  assert.match(entryLine(list[0], true, theme, cols), /^→ !·?\s?oak {6}scout {2}Waiting for user: Allow bash\? {2}/);
   assert.match(entryLine(list[1], false, theme, cols), /^  ✓•birch /);
   assert.match(entryLine(list[2], false, theme, cols), /^  ◆ app {13}working /, "other sessions leave the role blank");
 });
@@ -102,6 +102,15 @@ test("hub list scrolls to keep the selection and its section header in view", ()
   assert(view.lines.some(l => l.kind === "entry" && l.index === 7));
   const first = listLines(list, 4, 3);
   assert.equal(first.lines[0].kind, "section", "the selected row's header stays visible");
+  assert.deepEqual(listLines(list, 4, 1).lines, [{ kind: "entry", entry: list[4], index: 4 }], "a one-line viewport must show the selection, not just its header");
+  const spaced = listLines(list, 0, 20, true).lines;
+  assert.equal(spaced.length, 11);
+  assert.deepEqual(spaced[5], { kind: "gap" }, "sections get a blank line when there is room");
+  for (const spaced of [false, true]) for (let max = 1; max <= 12; max++) for (let at = 0; at < list.length; at++) {
+    const view = listLines(list, at, max, spaced);
+    assert(view.lines.length <= max);
+    assert(view.lines.some(l => l.kind === "entry" && l.index === at), `selection ${at} stays visible at height ${max}`);
+  }
 });
 
 test("hub replies steer running children, start follow-ups for idle ones, and refuse the rest", () => {

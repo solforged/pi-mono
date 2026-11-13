@@ -1,5 +1,5 @@
-import { getMarkdownTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Editor, Markdown, matchesKey, truncateToWidth, type EditorTheme } from "@earendil-works/pi-tui";
+import { DynamicBorder, getMarkdownTheme, rawKeyHint, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Editor, Markdown, matchesKey, Text, truncateToWidth, visibleWidth, type EditorTheme } from "@earendil-works/pi-tui";
 import { columns, COMMANDS, CONFIRM, entryLine, HELP, listLines, replyTarget, SECTIONS, tailLines, type Entry, type HubAction } from "./hub-model.ts";
 import { money, widgetLine, type Row } from "./ui.ts";
 
@@ -35,7 +35,7 @@ export function widget(items: Row[]) {
 export function openHub(ctx: ExtensionContext, host: HubHost, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
   return ctx.ui.custom<void>((tui, theme, _keys, done) => {
-    let selectedKey: string | undefined, peek = false, help = false, cache: string[] | undefined, cacheWidth = 0, disposed = false;
+    let selectedKey: string | undefined, peek = false, help = false, cache: string[] | undefined, cacheWidth = 0, cacheHeight = 0, disposed = false;
     let flash: { text: string; tone: Tone } | undefined, flashTimer: ReturnType<typeof setTimeout> | undefined;
     // A confirmation names exactly what the second press will do, and to which task.
     let confirm: { signature: string; at: number } | undefined;
@@ -48,7 +48,7 @@ export function openHub(ctx: ExtensionContext, host: HubHost, signal: AbortSigna
       selectList: { selectedPrefix: s => theme.fg("accent", s), selectedText: s => theme.fg("accent", s), description: s => theme.fg("muted", s),
         scrollInfo: s => theme.fg("dim", s), noMatch: s => theme.fg("warning", s) },
     };
-    const editor = new Editor(tui, editorTheme);
+    const editor = new Editor(tui, editorTheme, { paddingX: 1 });
     const say = (text: string, tone: Tone = "dim") => {
       if (disposed) return;
       flash = { text, tone }; if (flashTimer) clearTimeout(flashTimer);
@@ -167,52 +167,78 @@ export function openHub(ctx: ExtensionContext, host: HubHost, signal: AbortSigna
       refresh();
     }
 
+    // Use the same frame, margins and hint styling as Pi's selectors. Reserve
+    // the editor and controls first; only the list and peek share the remainder.
+    const border = new DynamicBorder(s => theme.fg("accent", s));
+    const divider = new DynamicBorder(s => theme.fg("border", s));
+    const hints = (pairs: [string, string][]) => pairs.map(([key, what]) => rawKeyHint(key, what)).join("  ");
     function render(width: number) {
-      if (cache && cacheWidth === width) return cache;
+      const height = tui.terminal.rows || 40;
+      if (cache && cacheWidth === width && cacheHeight === height) return cache;
+      const inner = Math.max(1, width - 2);
+      const line = (text: string) => new Text(truncateToWidth(text, inner), 1, 0).render(width)[0];
       const { list, at, entry } = selected();
       const kids = list.filter(e => e.kind === "child"), others = list.length - kids.length;
       const total = kids.reduce((sum, e) => sum + (e.cost ?? 0), 0);
-      const head = [`${theme.fg("accent", theme.bold("Agents"))} ${theme.fg("dim", `· ${kids.length} ${kids.length === 1 ? "child" : "children"} · ${others} other ${others === 1 ? "session" : "sessions"}${total ? ` · ${money(total)}` : ""}`)}`];
-      if (!list.length) head.push("", theme.fg("muted", "  No Rex children yet, and no other Pi sessions are listening."), theme.fg("dim", "  Ask Pi to delegate with rex_agent, or start pi in another Rex pane."));
-      // Pi clips a component taller than the terminal from the bottom, so the
-      // total is a hard bound: Pi's footer and widgets keep a few rows.
-      const budget = Math.max(10, (tui.terminal.rows || 40) - 6);
+      const title = line(`${theme.fg("accent", theme.bold("Agents"))} ${theme.fg("dim", `· ${kids.length} ${kids.length === 1 ? "child" : "children"} · ${others} other ${others === 1 ? "session" : "sessions"}${total ? ` · ${money(total)}` : ""}`)}`);
       const target = draft ? (entry ? { mode: draft.mode, label: draft.mode === "steer" ? `Steer ${entry.name}'s task` : `New task for ${entry.name}` } : { mode: "none" as const, reason: "That child or session is gone; Esc clears the draft" })
         : replyTarget(entry, entry && host.run(entry));
-      const bottom = [""];
-      if (target.mode === "none") { if (target.reason) bottom.push(theme.fg(draft ? "error" : "dim", target.reason)); }
-      else bottom.push(theme.fg("muted", `${target.label}${entry?.section === "attention" ? theme.fg("dim", " · a dialog waiting in its pane needs → to answer") : ""}`));
-      if (target.mode !== "none" || draft) bottom.push(...editor.render(width).slice(-Math.max(3, Math.floor(budget / 3))));
-      if (flash) bottom.push(theme.fg(flash.tone, flash.text));
-      bottom.push(theme.fg("dim", draft ? "enter send · shift+enter newline · esc clear" : help ? "? or esc closes the key list"
-        : "↑↓ move · space peek · → open · type to reply · ctrl+t pin · ctrl+x stop · ? more · ← back"));
-      const room = Math.max(1, budget - head.length - bottom.length);
-      // The key list takes the place of the list and peek.
+      const reply: string[] = [];
+      // Help replaces the list, peek and empty reply box, so every key fits at 80×24.
+      if (!help || draft) {
+        if (target.mode === "none") { if (target.reason) reply.push(line(theme.fg(draft ? "error" : "dim", target.reason))); }
+        else reply.push(line(theme.fg("muted", `${target.label}${entry?.section === "attention" ? " · → answers the dialog in its pane" : ""}`)));
+        if (target.mode !== "none" || draft) reply.push(...editor.render(width));
+      }
+      const primary: [string, string][] = [["↑↓", "move"], ["space", "peek"], ["→", "open"]];
+      if (target.mode !== "none") primary.push(["type", "reply"]);
+      const exit: [string, string][] = [["?", "more"], ["←", "back"]];
+      const full = hints([...primary, ...(entry?.kind === "child" ? [["ctrl+t", "pin"], ["ctrl+x", "stop"]] as [string, string][] : []), ...exit]);
+      const keyLine = draft ? hints([["enter", "send"], ["shift+enter", "newline"], ["esc", "clear"]])
+        : help ? hints([["?", "close keys"], ["esc", "back"]]) : visibleWidth(full) <= inner ? full : hints([...primary, ...exit]);
+      const controls = [...(flash ? [line(theme.fg(flash.tone, flash.text))] : []), line(keyLine)];
+      // Pi keeps its own footer/widgets below us. Never clip the final frame:
+      // doing so would drop the controls or the editor's cursor.
+      const budget = Math.max(10, height - 6);
+      const sections = new Set(list.map(e => e.section)).size;
+      const listSize = list.length + sections;
+      const peeked = !help && entry && peek ? peekLines(entry, inner) : undefined;
+      const fixed = 3 + reply.length + controls.length; // two borders and the title
+      const minimumBody = help ? HELP.length : Math.min(listSize || 2, 8) + (peeked ? 6 : 0);
+      const spacious = budget - fixed >= minimumBody + 4 + Math.max(0, sections - 1);
+      const gap = spacious ? [""] : [];
+      const head = [...border.render(width), ...gap, title, ...gap];
+      const bottom = [...(reply.length ? [...gap, ...reply] : []), ...gap, ...controls, ...border.render(width)];
+      const room = Math.max(0, budget - head.length - bottom.length);
+      const middle: string[] = [];
       if (help) {
-        cache = [...head, ...HELP.map(([key, what]) => `${theme.fg("accent", key.padEnd(16))}${theme.fg("muted", what)}`).slice(0, room), ...bottom]
-          .slice(0, budget).map(line => truncateToWidth(line, width));
-        cacheWidth = width; return cache;
+        middle.push(...HELP.slice(0, room).map(([key, what]) => line(`${theme.fg("dim", key.padEnd(16))}${theme.fg("muted", what)}`)));
+      } else if (!list.length) {
+        middle.push(...[line(theme.fg("muted", "No Rex children yet, and no other Pi sessions are listening.")),
+          line(theme.fg("dim", "Ask Pi to delegate, or start Pi in another Rex pane."))].slice(0, room));
+      } else if (room) {
+        const preview = peeked && room >= 7 ? peeked : undefined;
+        const previewSize = preview ? preview.facts.length + preview.body.length + 1 + gap.length : 0;
+        const listRoom = Math.min(18, room - Math.min(previewSize, Math.floor(room * 0.6)));
+        const overflow = listSize + (spacious ? sections - 1 : 0) > listRoom;
+        const countLine = overflow && listRoom > 1 ? 1 : 0;
+        const view = listLines(list, Math.max(0, at), listRoom - countLine, spacious);
+        const kidCols = columns(kids, inner), peerCols = columns(list.filter(e => e.kind === "peer"), inner);
+        for (const row of view.lines) {
+          middle.push(row.kind === "gap" ? "" : line(row.kind === "section"
+            ? theme.fg(row.section === "attention" ? "warning" : row.section === "peers" ? "muted" : "accent", `${SECTIONS[row.section]}${row.count > 1 ? theme.fg("dim", ` · ${row.count}`) : ""}`)
+            : entryLine(row.entry, row.index === at, theme, row.entry.kind === "peer" ? peerCols : kidCols)));
+        }
+        if (countLine) middle.push(line(theme.fg("dim", `  (${at + 1}/${list.length})`)));
+        if (preview) {
+          const available = room - middle.length - gap.length - 1;
+          const facts = preview.facts.slice(0, available);
+          const fit = Math.max(0, available - facts.length);
+          const body = fit === 0 ? [] : preview.live ? preview.body.slice(-fit) : preview.body.slice(0, fit);
+          middle.push(...gap, ...divider.render(width), ...[...facts, ...body].map(line));
+        }
       }
-      // The peek gets what the list leaves, and only when it can show something.
-      const peeked = entry && peek && room >= 6 ? peekLines(entry, width) : undefined;
-      const listRoom = peeked ? Math.max(3, Math.min(18, room - Math.min(peeked.facts.length + peeked.body.length + 1, Math.ceil(room * 0.6)))) : Math.min(18, room);
-      const overflow = list.length + new Set(list.map(e => e.section)).size > listRoom;
-      const view = listLines(list, Math.max(0, at), Math.max(1, listRoom - (overflow ? 2 : 0)));
-      // Children and other sessions align separately: one long session name must not pad every child.
-      const middle: string[] = [], kidCols = columns(kids, width), peerCols = columns(list.filter(e => e.kind === "peer"), width);
-      if (view.above) middle.push(theme.fg("dim", `  ↑ ${view.above} more`));
-      for (const line of view.lines) {
-        if (line.kind === "section") middle.push(theme.fg(line.section === "attention" ? "warning" : line.section === "peers" ? "muted" : "accent", `${SECTIONS[line.section]}${line.count > 1 ? theme.fg("dim", ` · ${line.count}`) : ""}`));
-        else middle.push(entryLine(line.entry, line.index === at, theme, line.entry.kind === "peer" ? peerCols : kidCols));
-      }
-      if (view.below) middle.push(theme.fg("dim", `  ↓ ${view.below} more`));
-      if (peeked) {
-        // Facts stay; a live screen keeps its newest lines, a result its beginning.
-        const fit = room - middle.length - 1 - peeked.facts.length;
-        const body = fit <= 0 ? [] : peeked.body.length <= fit ? peeked.body : peeked.live ? peeked.body.slice(-fit) : peeked.body.slice(0, fit);
-        middle.push(theme.fg("dim", "─".repeat(Math.min(width, 120))), ...peeked.facts, ...body);
-      }
-      cache = [...head, ...middle.slice(0, room), ...bottom].slice(0, budget).map(line => truncateToWidth(line, width)); cacheWidth = width;
+      cache = [...head, ...middle, ...bottom]; cacheWidth = width; cacheHeight = height;
       return cache;
     }
 
@@ -224,7 +250,7 @@ export function openHub(ctx: ExtensionContext, host: HubHost, signal: AbortSigna
       } else if (detail.result) {
         let shown = results.get(entry.key);
         if (shown?.width !== width || shown.text !== detail.result) {
-          const lines = new Markdown(detail.result, 0, 0, getMarkdownTheme()).render(Math.max(20, width - 2));
+          const lines = new Markdown(detail.result, 0, 0, getMarkdownTheme()).render(Math.max(1, width));
           shown = { width, text: detail.result, lines: lines.length > PEEK_LINES ? [...lines.slice(0, PEEK_LINES), theme.fg("dim", `… ${lines.length - PEEK_LINES} more lines · ctrl+r prints it all`)] : lines };
           results.set(entry.key, shown);
         }
@@ -234,7 +260,7 @@ export function openHub(ctx: ExtensionContext, host: HubHost, signal: AbortSigna
     }
 
     return {
-      render, handleInput, dispose, invalidate: () => { cache = undefined; },
+      render, handleInput, dispose, invalidate: () => { cache = undefined; results.clear(); },
       get focused() { return editor.focused; },
       set focused(value: boolean) { editor.focused = value; },
     };

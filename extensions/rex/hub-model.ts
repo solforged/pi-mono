@@ -56,30 +56,33 @@ export function columns(items: Entry[], width: number): Columns {
   return c;
 }
 
-/** `› ! oak    scout   Allow bash: gh run view?   1m02s  $0.21  Check CI config` */
+/** `→ ! oak    scout   Allow bash: gh run view?   1m02s  $0.21  Check CI config` */
 export function entryLine(e: Entry, selected: boolean, theme: Theme, c: Columns) {
   const fit = (text: string, n: number) => oneLine(text, n).padEnd(n);
   const mark = e.pinned ? theme.fg("accent", "▪") : e.unread ? theme.fg("success", "•") : " ";
   const name = selected ? theme.fg("accent", fit(e.name, c.name)) : fit(e.name, c.name), gap = " ".repeat(GAP);
   const numbers = [c.time ? theme.fg("dim", (e.elapsedMs !== undefined ? duration(e.elapsedMs) : "").padStart(c.time)) : "",
     c.cost ? theme.fg("dim", (e.cost ? money(e.cost) : "").padStart(c.cost)) : ""].filter(Boolean).join(" ");
-  return `${selected ? theme.fg("accent", "›") : " "} ${theme.fg(e.tone, e.glyph)}${mark}${name}${gap}${c.role ? `${theme.fg("muted", fit(e.role, c.role))}${gap}` : ""}`
+  return `${selected ? theme.fg("accent", "→") : " "} ${theme.fg(e.tone, e.glyph)}${mark}${name}${gap}${c.role ? `${theme.fg("muted", fit(e.role, c.role))}${gap}` : ""}`
     + `${fit(e.state, c.state)}${gap}${numbers ? `${numbers}${gap}` : ""}${e.title}`;
 }
 
-export type ListLine = { kind: "section"; section: Section; count: number } | { kind: "entry"; entry: Entry; index: number };
+export type ListLine = { kind: "gap" } | { kind: "section"; section: Section; count: number } | { kind: "entry"; entry: Entry; index: number };
 /** Section headers and rows, scrolled so the selection stays in a window of `max` lines. */
-export function listLines(items: Entry[], selected: number, max: number): { lines: ListLine[]; above: number; below: number } {
+export function listLines(items: Entry[], selected: number, max: number, spaced = false): { lines: ListLine[]; above: number; below: number } {
   const all: ListLine[] = [];
   items.forEach((entry, index) => {
-    if (entry.section !== items[index - 1]?.section) all.push({ kind: "section", section: entry.section, count: items.filter(e => e.section === entry.section).length });
+    if (entry.section !== items[index - 1]?.section) {
+      if (spaced && index) all.push({ kind: "gap" });
+      all.push({ kind: "section", section: entry.section, count: items.filter(e => e.section === entry.section).length });
+    }
     all.push({ kind: "entry", entry, index });
   });
   if (all.length <= max) return { lines: all, above: 0, below: 0 };
   const at = all.findIndex(l => l.kind === "entry" && l.index === selected);
   // Keep the selected row's header in view when it fits.
   let start = Math.max(0, Math.min(at - Math.floor(max / 2), all.length - max));
-  if (at > 0 && all[at - 1].kind === "section" && start === at) start--;
+  if (max > 1 && at > 0 && all[at - 1].kind === "section" && start === at) start--;
   return { lines: all.slice(start, start + max), above: start, below: all.length - start - max };
 }
 

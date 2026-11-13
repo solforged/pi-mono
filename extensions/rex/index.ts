@@ -150,7 +150,7 @@ export default async function (pi: ExtensionAPI) {
     const session = process.env.REX_SESSION, parent = process.env.REX_BLOCK;
     if (ctx.mode === "tui" && session && parent) {
       installLeftArrow(ctx, () => void hub(currentCtx ?? ctx).catch(error => currentCtx?.ui.notify(String(error), "error")),
-        () => currentCtx?.ui.notify("Press ← again for agents", "info"));
+        "Press ← again for agents");
       const saved = (ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "rex-layout").at(-1) as any)?.data;
       const dir = join(await scopeRoot(runner.agentDir, config.profile, ctx.cwd), "rex"), sid = ctx.sessionManager.getSessionId();
       deck = new DeckManager({ rex, session, parent, cwd: ctx.cwd,

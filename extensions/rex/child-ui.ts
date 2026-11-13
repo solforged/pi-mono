@@ -70,7 +70,7 @@ export function registerChildUi(pi: ExtensionAPI, manifestPath: string) {
       await rm(marker, { force: true });
     };
     installLeftArrow(ctx, () => void back().catch(error => ctx.ui.notify(`Could not return to the parent: ${error instanceof Error ? error.message : String(error)}`, "error")),
-      () => ctx.ui.notify("Press ← again to return to the parent", "info"));
+      "Press ← again to return to the parent");
   });
   // Display-only: the model still receives the exact delegated framing.
   pi.registerMarkdownTransformer((markdown, { messageType }) => messageType === "user" ? displayTaskPrompt(markdown, label) : markdown);

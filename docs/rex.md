@@ -153,17 +153,30 @@ then the other live Pi sessions on this machine, from their
 [intercom](intercom.md) cards. The list updates live; `•` marks a result the
 parent has not read yet, `▪` a pin. Columns are as wide as their longest entry,
 so long session names stay whole; in a narrow pane they shrink before the title.
+The frame uses Pi's native selector components: accent rules, inset text,
+`→` for the selection, and space between sections when the pane is tall enough.
 
 ```text
-Agents · 3 children · 1 other session · $0.71
-Needs you
-› !·oak   scout    Waiting for user: Allow bash?  1m02s  $0.21  Check CI config
-Working
-  ● fern  worker   bash npm test                    48s  $0.40  Fix flaky retry test
-Done
-  ✓•elm   advisor  done                                  $0.10  Review retry design
-Other Pi sessions
-  ◆ rex-app  working  Fix iOS scrollback
+──────────────────────────────────────────────────────────────────────────────
+
+ Agents · 3 children · 1 other session · $0.71
+
+ Needs you
+ → ! oak   scout    Waiting for user: Allow bash?  1m02s  $0.21  Check CI config
+
+ Working
+   ● fern  worker   bash npm test                    48s  $0.40  Fix retry test
+
+ Done
+   ✓•elm   advisor  done                                  $0.10  Review design
+
+ Other Pi sessions
+   ◆ rex-app  working  Fix iOS scrollback
+
+ ...peek or reply...
+
+ ↑↓ move  space peek  → open  type reply  ? more  ← back
+──────────────────────────────────────────────────────────────────────────────
 ```
 
 | Key | Action |
@@ -192,10 +205,14 @@ you made yourself is left alone. So `←` `→` `←` is a round trip. Other ses
 are focused where they are (a detached one must be shown in Rex first), and
 replies go only to children: type in a session's own pane, where `←` opens that
 session's hub. Peeks and replies never add entries to the parent transcript.
-The hub fits the pane: in a short one the list scrolls and the peek shrinks.
+The hub fits the pane: short panes lose blank lines before the list scrolls
+and the peek shrinks. The key list replaces the body and empty reply box;
+the editor cursor and bottom controls stay visible. Less-used keys move to
+`?` when the hint line is narrow.
 
 `←` on a prompt you just emptied (by deleting text or leaving history) needs a
-second press, so a held backspace cannot jump away. The hub replaces Pi's
+second press, so a held backspace cannot jump away. Its hint appears briefly
+in the editor border, not in the transcript. The hub replaces Pi's
 editor with a subclass that adds only this key; if another extension has
 replaced the editor, `←` is left alone and `ctrl+shift+a` still works.
 

@@ -89,7 +89,7 @@ try {
   await type(parent, "keep going please");
   await until(parent, t => t.includes("Steer birch's task"), "the steer label");
   await type(parent, "\x1b[B"); // While drafting, ↓ stays in the draft: the recipient cannot change.
-  await until(parent, t => t.includes("Steer birch's task") && /› ● birch/.test(t), "the draft to keep its recipient");
+  await until(parent, t => t.includes("Steer birch's task") && /→ ● birch/.test(t), "the draft to keep its recipient");
   await type(parent, "\r");
   text = await until(parent, t => t.includes("Sent to birch"), "the steer receipt");
   // The child acknowledged it; it shows there at the child's next step, which a held fixture never reaches.
@@ -131,10 +131,10 @@ try {
 
   // In a small pane, peek and help together still leave the controls on screen.
   resize(80, 24); await sleep(800);
-  text = await until(parent, t => t.includes("Task: Hold fixture") && t.includes("ctrl+x stop"), "the peek in a small pane, controls still on screen");
+  text = await until(parent, t => t.includes("Task: Hold fixture") && t.includes("← back"), "the peek in a small pane, controls still on screen");
   show("small pane: peek", text, "Agents ·");
   await type(parent, "?");
-  text = await until(parent, t => t.includes("back to the prompt") && t.includes("? or esc closes"), "the whole key list in a small pane");
+  text = await until(parent, t => t.includes("back to the prompt") && t.includes("? close keys"), "the whole key list in a small pane");
   show("small pane: keys", text, "Agents ·");
   await type(parent, "?"); resize(120, 40); await sleep(500);
 
