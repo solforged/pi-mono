@@ -60,6 +60,17 @@ export function clip<T>(lines: T[], count: number, keep: "start" | "end" = "star
   return { shown: keep === "start" ? lines.slice(0, count) : lines.slice(lines.length - count), hidden: lines.length - count };
 }
 
+/**
+ * The last `count` rows of `lines` wrapped to `width`, plus how many lines and
+ * rows come before them. Only the lines those rows come from are wrapped: a
+ * running command redraws its row every second, and its output can be long.
+ */
+export function wrapTail(m: Measure, lines: string[], width: number, count: number): { shown: string[]; hidden: number } {
+  const kept = clip(lines, count, "end");
+  const rows = clip(fit(m, kept.shown, width, true), count, "end");
+  return { shown: rows.shown, hidden: kept.hidden + rows.hidden };
+}
+
 export function formatDuration(ms: number): string {
   const seconds = ms / 1000;
   if (seconds < 60) return `${seconds.toFixed(1)}s`;
@@ -151,14 +162,15 @@ const FULL_OUTPUT = /\n?\[(?:Showing [^\n]*)Full output: ([^\n\]]+)\]\s*$/;
 
 /** Splits shell output into what the command printed and how it ended. */
 export function shellResult(text: string, isError: boolean): { output: string; status: ShellStatus; fullOutputPath?: string } {
-  let output = text.replace(/\s+$/, "");
+  // trimEnd is linear; /\s+$/ starts over at every space of a long run inside the output.
+  let output = text.trimEnd();
   let status: ShellStatus = isError ? { kind: "failed" } : { kind: "ok" };
   for (const { pattern, status: read } of STATUS) {
     const match = output.match(pattern);
-    if (match) { status = read(match); output = output.slice(0, match.index).replace(/\s+$/, ""); break; }
+    if (match) { status = read(match); output = output.slice(0, match.index).trimEnd(); break; }
   }
   const full = output.match(FULL_OUTPUT);
-  if (full) output = output.slice(0, full.index).replace(/\s+$/, "");
+  if (full) output = output.slice(0, full.index).trimEnd();
   if (output === "(no output)") output = "";
   return { output, status, fullOutputPath: full?.[1] };
 }
@@ -168,7 +180,7 @@ export function shellResult(text: string, isError: boolean): { output: string; s
  * says nothing when it names the working directory, so it is dropped.
  */
 export function splitCommand(command: string, cwd: string, home?: string): { title: string; rest: string[] } {
-  let text = command.replace(/^\s+/, "").replace(/\s+$/, "");
+  let text = command.trim();
   const cd = text.match(/^cd\s+("([^"]+)"|'([^']+)'|(\S+))\s*(&&|;)\s*/);
   if (cd) {
     const target = cd[2] ?? cd[3] ?? cd[4];

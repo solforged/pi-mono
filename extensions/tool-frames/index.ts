@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { formatReadLineRange, getLanguageFromPath, highlightCode, renderDiff, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, hyperlink, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import {
-  absolutePath, clip, diffExcerpt, diffStats, DIVIDER, displayPath, fit, formatDuration, frame, grepStats, listedEntries, plural, readLines, row, shellResult, splitCommand,
+  absolutePath, clip, diffExcerpt, diffStats, DIVIDER, displayPath, fit, formatDuration, frame, grepStats, listedEntries, plural, readLines, row, shellResult, splitCommand, wrapTail,
   type BodyLine, type Measure,
 } from "./layout.ts";
 
@@ -286,14 +286,11 @@ const bash: Draw = (view, width) => {
     body.push(...fit(measure, shown, inner, false));
     if (hidden) body.push(more(view, hidden, "more command line"));
   }
-  const printed = output ? fit(measure, output.split("\n").map((line) => theme.fg("toolOutput", tabs(line))), inner, true) : [];
-  if (body.length && printed.length) body.push(DIVIDER);
-  if (view.expanded) body.push(...printed);
-  else {
-    const { shown, hidden } = clip(printed, OUTPUT_LINES, "end");
-    if (hidden) body.push(more(view, hidden, "earlier line"));
-    body.push(...shown);
-  }
+  const lines = output ? output.split("\n").map((line) => theme.fg("toolOutput", tabs(line))) : [];
+  const printed = view.expanded ? { shown: fit(measure, lines, inner, true), hidden: 0 } : wrapTail(measure, lines, inner, OUTPUT_LINES);
+  if (body.length && printed.shown.length) body.push(DIVIDER);
+  if (printed.hidden) body.push(more(view, printed.hidden, "earlier line"));
+  body.push(...printed.shown);
   if (fullOutputPath) body.push(theme.fg("dim", `full output: ${displayPath(fullOutputPath, view.cwd, HOME)}`));
   return boxed(view, width, heading, meta, body, failed);
 };

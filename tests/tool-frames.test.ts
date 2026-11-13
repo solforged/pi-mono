@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  clip, diffExcerpt, diffStats, DIVIDER, displayPath, formatDuration, frame, grepStats, listedEntries, readLines, row, shellResult, splitCommand, type Measure,
+  clip, diffExcerpt, diffStats, DIVIDER, displayPath, formatDuration, frame, grepStats, listedEntries, readLines, row, shellResult, splitCommand, wrapTail, type Measure,
 } from "../extensions/tool-frames/layout.ts";
 
 const measure: Measure = {
@@ -41,6 +41,16 @@ test("clips from either end and formats durations", () => {
   assert.deepEqual(clip([1, 2, 3, 4], 2, "end"), { shown: [3, 4], hidden: 2 });
   assert.deepEqual(clip([1], 2), { shown: [1], hidden: 0 });
   assert.deepEqual([40, 1234, 61_000, 3_725_000].map(formatDuration), ["0.0s", "1.2s", "1m 1s", "1h 2m"]);
+});
+
+test("a collapsed tail wraps only the lines its rows come from", () => {
+  const wrapped: string[] = [];
+  const counting: Measure = { ...measure, wrap: (text, width) => { wrapped.push(text); return measure.wrap(text, width); } };
+  const lines = [...Array.from({ length: 2000 }, (_, i) => `line ${i}`), "x".repeat(25), "", "end"];
+  assert.deepEqual(wrapTail(counting, lines, 10, 4), { shown: ["xxxxxxxxxx", "xxxxx", "", "end"], hidden: 1999 + 2 });
+  assert.deepEqual(wrapped, ["line 1999", "x".repeat(25), "end"]);
+  assert.deepEqual(wrapTail(counting, ["a", "b"], 10, 4), { shown: ["a", "b"], hidden: 0 });
+  assert.deepEqual(wrapTail(counting, [], 10, 4), { shown: [], hidden: 0 });
 });
 
 test("paths read relative to the working directory, then home", () => {
@@ -89,6 +99,15 @@ test("separates shell output from how the command ended", () => {
   assert.deepEqual(shellResult("something odd", true).status, { kind: "failed" });
   assert.deepEqual(shellResult("a\nb\n[Showing lines 3-4 of 4. Full output: /tmp/pi-bash-1.log]\nCommand exited with code 1", true),
     { output: "a\nb", status: { kind: "exit", code: 1 }, fullOutputPath: "/tmp/pi-bash-1.log" });
+});
+
+test("long runs of spaces inside output or a command are trimmed in linear time", () => {
+  const spaces = " ".repeat(200_000);
+  const started = performance.now();
+  assert.equal(shellResult(`a${spaces}b \n`, false).output, `a${spaces}b`);
+  assert.equal(splitCommand(` echo a${spaces}b \n`, "/h").title, `echo a${spaces}b`);
+  // The trimming regular expressions this replaced took seconds on each of these.
+  assert.ok(performance.now() - started < 500);
 });
 
 test("a command's title drops a cd into the working directory and keeps the rest", () => {
