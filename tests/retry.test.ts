@@ -47,6 +47,13 @@ test("an extension message that started the turn is resent", () => {
   assert.deepEqual((plan as any).message, { customType: "trigger", content: "go", display: true, details: { a: 1 } });
 });
 
+test("context attached to a prompt is dropped with it, and the prompt is resent", () => {
+  const note = { type: "custom_message", customType: "memory-terms", content: "Terms: ...", display: true };
+  const branch = chain(user("earlier"), assistant("stop"), user("what is herdr?"), note, system, note, assistant("error"));
+  const plan = planRetry(branch)!;
+  assert.deepEqual([plan.kind, plan.target, (plan as any).content, plan.dropped.length], ["prompt", branch[2].id, "what is herdr?", 5]);
+});
+
 test("settled turns and later activity leave nothing to retry", () => {
   assert.equal(planRetry([]), undefined);
   assert.equal(planRetry(chain(user(), assistant("stop"))), undefined);

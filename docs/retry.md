@@ -10,6 +10,8 @@ show; it is not deleted.
 
 - A turn that failed on its first response resends the prompt that started it
   on a new branch. The same applies to a turn started by an extension message.
+  Context an extension attached to your prompt is dropped with it and added
+  again when the prompt is resent.
 - A turn that failed after tool calls keeps their results and continues with a
   short note to the model, hidden from the transcript. If Esc
   interrupted a tool, the note tells the model to run it again if still needed.

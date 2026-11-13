@@ -25,6 +25,8 @@ const text = (content: unknown) => typeof content === "string" ? content
  * Earlier failed attempts and passive entries are dropped with it. A turn
  * started by a user or extension message is retried by resending that message
  * on a new branch; one that failed after tool results continues from them.
+ * Context that extensions attach to a prompt (a memory note, say) is saved
+ * after it, so the walk goes back through such messages to the prompt.
  */
 export function planRetry(branch: Entry[]): Plan | undefined {
   let i = branch.length - 1;
@@ -32,6 +34,11 @@ export function planRetry(branch: Entry[]): Plan | undefined {
   if (i < 0 || !failed(branch[i])) return undefined;
   while (i >= 0 && (passive(branch[i]) || failed(branch[i]))) i--;
   if (i < 0) return undefined;
+  if (branch[i].type === "custom_message") {
+    let k = i;
+    while (k >= 0 && (passive(branch[k]) || branch[k].type === "custom_message")) k--;
+    if (k >= 0 && branch[k].type === "message" && branch[k].message.role === "user") i = k;
+  }
   const anchor = branch[i];
   if (anchor.type === "message" && anchor.message.role === "user") {
     return { kind: "prompt", target: anchor.id, content: anchor.message.content, dropped: branch.slice(i) };
