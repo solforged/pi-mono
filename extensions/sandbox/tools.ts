@@ -104,7 +104,7 @@ export async function grep(sandbox: Sandbox, params: GrepParams, searchPath: str
     if (!stopped && !collector.push(line)) { stopped = true; stop.abort(); }
   };
   try {
-    const result = await sandbox.exec(["sh", "-c", GREP_SCRIPT, "sh", searchPath, ...rgArgs(params, searchPath)], {
+    const result = await sandbox.exec(["sh", "-c", GREP_SCRIPT, "sh", searchPath, ...rgArgs(params)], {
       signal: stop.signal,
       onData: (chunk) => {
         // stdout and stderr share the stream; rg's JSON lines are recognizable.

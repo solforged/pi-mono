@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
+import { mkdir, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { sharedTarget, shareCargoTarget } from "../extensions/sandbox/cargo.ts";
 import { ContainerCli, runProcess, type RunResult } from "../extensions/sandbox/container.ts";
-import { commandEnv, fdArgs, GrepCollector, guestError, parseListing, rgArgs, sniffImage } from "../extensions/sandbox/guest.ts";
+import { commandEnv, fdArgs, GREP_SCRIPT, GrepCollector, guestError, parseListing, rgArgs, sniffImage } from "../extensions/sandbox/guest.ts";
 import { buildPlan, containerName, promptNote, runArgs, type Probe } from "../extensions/sandbox/plan.ts";
 import { imageTag, Sandbox, withLock } from "../extensions/sandbox/sandbox.ts";
 import { chooseEnabled, DEFAULTS, inheritedSwitch, resolveSettings } from "../extensions/sandbox/settings.ts";
@@ -162,8 +163,9 @@ test("listings, grep events, and fd arguments match Pi's tools", () => {
   assert.deepEqual([...listing.entries], [["src", true], ["README.md", false], ["broken", false]]);
   assert.equal(parseListing(Buffer.from("M\0")).kind, "missing");
 
-  assert.deepEqual(rgArgs({ pattern: "x", ignoreCase: true, literal: true, glob: "*.ts", context: 2 }, "/r"),
-    ["--no-config", "--json", "--line-number", "--color=never", "--hidden", "--ignore-case", "--fixed-strings", "--glob", "*.ts", "--context", "2", "--", "x", "/r"]);
+  assert.deepEqual(rgArgs({ pattern: "x", ignoreCase: true, literal: true, glob: "*.ts", context: 2 }),
+    ["--no-config", "--json", "--line-number", "--color=never", "--hidden", "--ignore-case", "--fixed-strings", "--glob", "*.ts", "--context", "2", "--", "x"]);
+  assert.deepEqual(rgArgs({ pattern: "x", glob: "!./src/*.ts" }).slice(5, 7), ["--glob", "!src/*.ts"]);
   const event = (type: string, line: number, text: string, path = "/r/src/a.ts") => JSON.stringify({ type, data: { path: { text: path }, line_number: line, lines: { text: `${text}\n` } } });
   const collector = new GrepCollector(2);
   for (const raw of [JSON.stringify({ type: "begin" }), event("match", 1, "one"), event("context", 2, "ctx"), event("match", 3, "two"), event("context", 4, "after")]) assert(collector.push(raw));
@@ -172,9 +174,35 @@ test("listings, grep events, and fd arguments match Pi's tools", () => {
   const { output } = collector.format("/r", true, (text) => ({ text, wasTruncated: false }));
   assert.deepEqual(output, ["src/a.ts:1: one", "src/a.ts-2- ctx", "src/a.ts:3: two", "src/a.ts-4- after"]);
   assert.deepEqual(collector.format("/r/src/a.ts", false, (text) => ({ text, wasTruncated: false })).output[0], "a.ts:1: one");
+  // A directory is searched as ".", so ripgrep reports paths from there.
+  const relative = new GrepCollector(5);
+  relative.push(event("match", 1, "one", "./src/a.ts"));
+  assert.deepEqual(relative.format("/r", true, (text) => ({ text, wasTruncated: false })).output, ["src/a.ts:1: one"]);
 
   assert.deepEqual(fdArgs("src/*.ts", "/r", 50, ["**/node_modules/**", "**/.git/**"]),
     ["--glob", "--color=never", "--hidden", "--no-require-git", "--max-results", "50", "--exclude", "node_modules", "--exclude", ".git", "--full-path", "--", "**/src/*.ts", "/r"]);
+});
+
+test("a grep glob with a slash matches from the searched directory", async (t) => {
+  try { execFileSync("rg", ["--version"], { stdio: "ignore" }); } catch { t.skip("ripgrep is not installed"); return; }
+  const dir = await temporary(t);
+  await mkdir(join(dir, "src", "deep"), { recursive: true });
+  await writeFile(join(dir, "src", "a.ts"), "needle\n");
+  await writeFile(join(dir, "src", "deep", "b.ts"), "needle\n");
+  await writeFile(join(dir, "c.ts"), "needle\n");
+  // The script the guest runs, here on the host and from another directory.
+  const run = (path: string, glob?: string) => {
+    const out = execFileSync("sh", ["-c", GREP_SCRIPT, "sh", path, ...rgArgs({ pattern: "needle", glob })], { encoding: "utf8", cwd: "/" });
+    const [kind, ...events] = out.trim().split("\n");
+    const collector = new GrepCollector(100);
+    for (const raw of events) collector.push(raw);
+    return { kind, files: collector.format(path, kind === "D", (text) => ({ text, wasTruncated: false })).output.map((line) => line.split(":")[0]).sort() };
+  };
+  assert.deepEqual(run(dir, "src/*.ts"), { kind: "D", files: ["src/a.ts"] });
+  assert.deepEqual(run(dir, "./src/**/*.ts").files, ["src/a.ts", "src/deep/b.ts"]);
+  assert.deepEqual(run(dir).files, ["c.ts", "src/a.ts", "src/deep/b.ts"]);
+  assert.deepEqual(run(join(dir, "c.ts")), { kind: "F", files: ["c.ts"] });
+  assert.equal(run(join(dir, "absent")).kind, "M");
 });
 
 test("guest errors and environment stay narrow", () => {

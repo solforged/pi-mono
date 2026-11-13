@@ -20,19 +20,24 @@ export function parseListing(output: Buffer): Listing {
   return { kind, entries };
 }
 
-// Prints D, F, or M on the first line, then runs ripgrep with the remaining arguments.
+// Prints D, F, or M on the first line, then runs ripgrep with the remaining
+// arguments. A directory is searched as "." from inside it, as Pi does: a glob
+// with a slash is matched against the path from there.
 export const GREP_SCRIPT = `p=$1; shift
-if [ -d "$p" ]; then echo D; elif [ -e "$p" ]; then echo F; else echo M; exit 0; fi
+if [ -d "$p" ]; then echo D; cd -- "$p" || exit 2; set -- "$@" .
+elif [ -e "$p" ]; then echo F; set -- "$@" "$p"
+else echo M; exit 0; fi
 exec rg "$@"`;
 
 export interface GrepParams { pattern: string; path?: string; glob?: string; ignoreCase?: boolean; literal?: boolean; context?: number; limit?: number }
-export function rgArgs(params: GrepParams, searchPath: string): string[] {
+/** ripgrep's arguments up to the pattern; GREP_SCRIPT adds the path. */
+export function rgArgs(params: GrepParams): string[] {
   const args = ["--no-config", "--json", "--line-number", "--color=never", "--hidden"];
   if (params.ignoreCase) args.push("--ignore-case");
   if (params.literal) args.push("--fixed-strings");
-  if (params.glob) args.push("--glob", params.glob);
+  if (params.glob) args.push("--glob", params.glob.replace(/^(!?)(?:\.\/)+/, "$1"));
   if (params.context && params.context > 0) args.push("--context", String(Math.floor(params.context)));
-  args.push("--", params.pattern, searchPath);
+  args.push("--", params.pattern);
   return args;
 }
 
@@ -63,7 +68,9 @@ export class GrepCollector {
   format(searchPath: string, isDirectory: boolean, truncate: (line: string) => { text: string; wasTruncated: boolean }) {
     let linesTruncated = false;
     const output = this.lines.map(({ match, path, line, text }) => {
-      const shown = isDirectory ? posix.relative(searchPath, path) || basename(path) : basename(path);
+      // Paths come back relative to the searched directory ("./src/a.ts").
+      const relative = isDirectory ? posix.relative(searchPath, posix.resolve(searchPath, path)) : "";
+      const shown = relative && !relative.startsWith("..") ? relative : basename(path);
       const cleaned = text.replace(/\r\n/g, "\n").replace(/\r/g, "").replace(/\n$/, "");
       const result = truncate(cleaned);
       if (result.wasTruncated) linesTruncated = true;
