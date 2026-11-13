@@ -144,7 +144,7 @@ export default async function (pi: ExtensionAPI) {
       },
       async run(child, task, context, signal, title) {
         const combined = AbortSignal.any([signal, lifetime.signal]);
-        const submitted = await runner.submit(child, task, context, combined, false, title);
+        const submitted = await runner.submit(child, task, context, combined, false, title, true);
         let done: TaskRun;
         try { done = await runner.wait(submitted.id, combined); }
         catch (error) {
@@ -219,12 +219,17 @@ export default async function (pi: ExtensionAPI) {
   }
   /** Every unread finished result that fits, oldest first, after waiting for at least one. */
   async function nextResults(signal: AbortSignal, ctx: ExtensionContext, onUpdate?: (u: any) => void) {
-    const stop = progress(onUpdate, signal);
-    let first: TaskRun | undefined;
-    try { first = await yieldingWait(s => runner.next(s), signal, () => ctx.hasPendingMessages()); }
-    finally { stop(); }
-    if (!first) return yielded("results");
-    const ready = runner.ready(), texts = ready.map(describe), count = fitResults(texts.map(t => Buffer.byteLength(t)), RESULTS_BYTES);
+    let ready: TaskRun[];
+    // The hub can read a result between the wake and here; wait again rather than return nothing.
+    do {
+      const stop = progress(onUpdate, signal);
+      let first: TaskRun | undefined;
+      try { first = await yieldingWait(s => runner.next(s), signal, () => ctx.hasPendingMessages()); }
+      finally { stop(); }
+      if (!first) return yielded("results");
+      ready = runner.ready();
+    } while (!ready.length);
+    const texts = ready.map(describe), count = fitResults(texts.map(t => Buffer.byteLength(t)), RESULTS_BYTES);
     if (count === 1) return result(ready[0], false, signal);
     const picked = ready.slice(0, count), usage = emptyUsage();
     let known = false;
@@ -258,6 +263,8 @@ export default async function (pi: ExtensionAPI) {
       context: str(), wait: Type.Optional(Type.Boolean()), view: Type.Optional(StringEnum(["deck", "background"] as const)) }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal]);
+      // Before a pane, a Pi process and perhaps a worktree exist for it.
+      runner.checkTask(params.task, params.context);
       const config = await loadConfig(root, runner.agentDir, ctx.sessionManager.getBranch());
       const run = await runner.open(params.agent, config, ctx, instructions, combined, r => pi.appendEntry("rex-run", { id: r.id, profile: r.profile }), params.title ?? "", params.name);
       let task: TaskRun | undefined;
@@ -306,7 +313,8 @@ export default async function (pi: ExtensionAPI) {
   });
   pi.registerTool({
     ...toolRenderers("rex_result"),
-    name: "rex_result", label: "Rex results",
+    // Sequential: two readers woken by one completion would otherwise race for it.
+    name: "rex_result", label: "Rex results", executionMode: "sequential",
     description: "Rex child results; read them before reporting success. next=true: all unread results, or wait for the next (instead of polling; a user message ends the wait, so answer it and call again). taskId: that result; wait=true waits. Neither: list children.",
     parameters: Type.Object({ next: Type.Optional(Type.Boolean()), taskId: Type.Optional(Type.String()), wait: Type.Optional(Type.Boolean()) }),
     async execute(_id, params, signal, onUpdate, ctx) {

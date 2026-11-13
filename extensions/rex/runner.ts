@@ -46,6 +46,8 @@ export interface TaskRun {
   liveCost?: number; status: "starting" | "running" | Outcome;
   text: string; usage: Usage; usageKnown: boolean; started: number; elapsedMs: number; resultFile: string;
   collected: boolean; notified: boolean; background: boolean;
+  /** Run for another extension (a workflowz pool), which reads the result itself: never offered to the model. */
+  programmatic?: boolean;
 }
 export type RexBackend = Pick<RexClient, "probe" | "create" | "show" | "hide" | "close" | "peek" | "minimize" | "keep" | "toggle">;
 interface Live {
@@ -90,6 +92,8 @@ export class RexRunner {
   readonly tasks = new Map<string, TaskRun>();
   private live = new Map<string, Live>();
   private starting = new Map<AbortController, ReturnType<typeof Promise.withResolvers<void>>>();
+  /** Names of launches not yet in `runs`, so opens that overlap cannot pick the same one. */
+  private naming = new Set<string>();
   private stopped = false;
   private writes = new Map<string, Promise<void>>();
   readonly pi: Pick<ExtensionAPI, "getAllTools"> & Partial<Pick<ExtensionAPI, "getActiveTools">>;
@@ -126,15 +130,25 @@ export class RexRunner {
   }
   /** Names are unique within this parent session, including retired children. */
   private allocateName(requested?: string) {
-    const taken = new Set([...this.runs.values()].map(r => r.name));
-    if (requested !== undefined) {
-      if (!NAME.test(requested)) throw new Error("Child names use 2–16 lowercase letters, digits or hyphens, starting with a letter");
-      if (taken.has(requested)) throw new Error(`A child named ${requested} already exists in this session`);
-      return requested;
-    }
-    const free = NAMES.find(n => !taken.has(n));
-    if (free) return free;
-    for (let i = 2; ; i++) for (const n of NAMES) if (!taken.has(`${n}-${i}`)) return `${n}-${i}`;
+    const taken = new Set([...this.runs.values()].map(r => r.name).concat([...this.naming]));
+    const pick = () => {
+      if (requested !== undefined) {
+        if (!NAME.test(requested)) throw new Error("Child names use 2–16 lowercase letters, digits or hyphens, starting with a letter");
+        if (taken.has(requested)) throw new Error(`A child named ${requested} already exists in this session`);
+        return requested;
+      }
+      const free = NAMES.find(n => !taken.has(n));
+      if (free) return free;
+      for (let i = 2; ; i++) for (const n of NAMES) if (!taken.has(`${n}-${i}`)) return `${n}-${i}`;
+    };
+    const name = pick();
+    this.naming.add(name);
+    return name;
+  }
+  /** Why a task or its context cannot be sent, before anything is launched for it. */
+  checkTask(task: string, context = "") {
+    if (!text(task, 16000) || !task.trim()) throw new Error("The task must be non-empty and at most 16,000 characters");
+    if (!text(context, 16000)) throw new Error("The context must be at most 16,000 characters");
   }
   /** Resolve a child by exact name, else by unambiguous ID prefix. */
   child(ref: string): Run {
@@ -146,17 +160,17 @@ export class RexRunner {
   }
   private waiters = new Set<() => void>();
   private finished: string[] = []; // Completion order; restored results sort first by time.
-  /** The oldest finished, uncollected task; otherwise wait for the next one to finish. */
-  /** Finished, unread results in completion order. */
+  /** Finished, unread results in completion order. Another extension's tasks are its own to read. */
   ready(): TaskRun[] {
-    return [...this.tasks.values()].filter(t => !["starting", "running"].includes(t.status) && !t.collected)
+    return [...this.tasks.values()].filter(t => !t.programmatic && !["starting", "running"].includes(t.status) && !t.collected)
       .sort((a, b) => this.finished.indexOf(a.id) - this.finished.indexOf(b.id) || (a.started + a.elapsedMs) - (b.started + b.elapsedMs));
   }
+  /** The oldest finished, uncollected task; otherwise wait for the next one to finish. */
   async next(signal: AbortSignal): Promise<TaskRun> {
     for (;;) {
       const done = this.ready();
       if (done.length) return done[0];
-      if (![...this.tasks.values()].some(t => ["starting", "running"].includes(t.status) && this.live.get(t.childId)?.tasks.has(t.id))) throw new Error("No Rex tasks are running and every result has been read");
+      if (![...this.tasks.values()].some(t => !t.programmatic && ["starting", "running"].includes(t.status) && this.live.get(t.childId)?.tasks.has(t.id))) throw new Error("No Rex tasks are running and every result has been read");
       const woke = Promise.withResolvers<void>(), wake = () => woke.resolve();
       this.waiters.add(wake);
       try { await waitFor(woke.promise, signal); } finally { this.waiters.delete(wake); }
@@ -174,14 +188,14 @@ export class RexRunner {
     // Idle managed children occupy a slot too: their processes and context remain live.
     if (this.starting.size + [...this.live.values()].filter(l => l.ready && l.run.owner === "managed").length >= config.subagents.rexConcurrency) throw new Error(`Rex child limit (${config.subagents.rexConcurrency}, subagents.rexConcurrency) reached; reuse, take, or close an existing child`);
     const { role } = resolveRole(config, agents[agent].role, ctx.modelRegistry);
-    const name = this.allocateName(requestedName);
     const session = process.env.REX_SESSION, parentBlock = process.env.REX_BLOCK;
     if (!session || !parentBlock) throw new Error("Missing Rex identity; no headless fallback");
+    const name = this.allocateName(requestedName);
     const controller = new AbortController();
     const launchDone = Promise.withResolvers<void>();
     this.starting.set(controller, launchDone);
     const launchSignal = AbortSignal.any([signal, controller.signal, AbortSignal.timeout(30_000)]);
-    let run: Run | undefined, live: Live | undefined, controlDir: string | undefined;
+    let run: Run | undefined, live: Live | undefined, controlDir: string | undefined, announced = false;
     try {
       const identity = await this.rex.probe(session, parentBlock, launchSignal);
       const scope = await scopeRoot(this.agentDir, config.profile, ctx.cwd), id = randomUUID(), dir = join(scope, "rex", id);
@@ -189,7 +203,7 @@ export class RexRunner {
       run = { version: VERSION, id, name, parentSession: ctx.sessionManager.getSessionId(), parentEntry: ctx.sessionManager.getLeafId() ?? null,
         profile: config.profile, dir, agent, owner: "managed", status: "starting", cwd: await realpath(ctx.cwd), provider: role.provider, model: role.model,
         rexSession: session, parentBlock, hostId: identity.hostId, instanceId: identity.instanceId, sessionFile: join(dir, "session.jsonl"), taskIds: [] };
-      this.runs.set(id, run); await this.save(run); announce(run); this.onChange();
+      this.runs.set(id, run); await this.save(run); this.onChange();
       const extensions = await childExtensions(this.pi as ExtensionAPI, config, agents[agent].tools, join(this.root, "extensions/workflows/index.ts"));
       // Not tool routing: it neither satisfies nor weakens subagents.sandbox.
       const ask = inheritedAsk(this.pi), tools = ask ? [...agents[agent].tools, ASK] : agents[agent].tools;
@@ -210,6 +224,9 @@ export class RexRunner {
       live = { run, manifest, channel, controlDir, ready: false, transferring: false, tasks: new Map() };
       this.live.set(id, live);
       await channel.listen(); launchSignal.throwIfAborted();
+      // Recorded in the session just before a terminal can exist: a launch that
+      // fails earlier (a dirty repository for a worker, say) leaves nothing to track.
+      announce(run); announced = true;
       // Rex shows the label on floating panes; prefer the first task over an ID.
       const summary = cleanTitle(title);
       run.block = await this.rex.create(session, `${mark ? `${mark} ` : ""}${name} · ${agent}${summary ? ` · ${summary}` : ""}`.slice(0, 120), childCommand(manifest, this.agentDir, config.profile, extension, extensions), run.cwd, launchSignal);
@@ -225,20 +242,25 @@ export class RexRunner {
         run.note = String(error);
         if (run.owner === "managed") run.owner = "retired";
         run.block ??= live?.channel.hello?.block;
+        // Without a terminal there is nothing to inspect or close, so it must not stay listed as starting.
+        if (!run.block) run.status = "closed";
         if (live) await this.dispose(live, true);
         else { if (controlDir) await rm(controlDir, { recursive: true, force: true }); await this.save(run); }
+        // A launch the session never recorded is forgotten, which frees its name.
+        if (!announced) this.runs.delete(run.id);
+        this.onChange();
       }
       throw error;
-    } finally { this.starting.delete(controller); launchDone.resolve(); }
+    } finally { this.starting.delete(controller); this.naming.delete(name); launchDone.resolve(); }
   }
-  async submit(id: string, task: string, context = "", signal: AbortSignal, background = true, title?: string): Promise<TaskRun> {
+  async submit(id: string, task: string, context = "", signal: AbortSignal, background = true, title?: string, programmatic = false): Promise<TaskRun> {
     const live = this.managed(id), run = live.run;
     if (run.activeTask || run.taskIds.length >= MAX_TASKS) throw new Error("Child is busy or its task limit was reached");
-    if (!text(task, 16000) || !task.trim() || !text(context, 16000)) throw new Error("Invalid task/context");
+    this.checkTask(task, context);
     signal.throwIfAborted();
     const taskId = randomUUID(), requestId = randomUUID(), started = Date.now();
     const item: TaskRun = { id: taskId, childId: id, requestId, task, ...(title ? { title: cleanTitle(title) } : {}), status: "starting", text: "", usage: emptyUsage(), usageKnown: false, started,
-      elapsedMs: 0, resultFile: join(run.dir, "tasks", taskId, "result.json"), collected: false, notified: false, background };
+      elapsedMs: 0, resultFile: join(run.dir, "tasks", taskId, "result.json"), collected: false, notified: false, background, ...(programmatic ? { programmatic } : {}) };
     run.activeTask = taskId; run.taskIds.push(taskId); run.status = "running";
     this.tasks.set(taskId, item);
     live.pending = Promise.withResolvers<TaskRun>(); live.tasks.set(taskId, live.pending.promise);
@@ -343,17 +365,21 @@ export class RexRunner {
     if (live.run.activeTask !== taskId || !text(message, 16000) || !message.trim()) throw new Error("Invalid message or task is no longer active");
     await live.channel.request({ type: "steer", id, taskId, requestId: randomUUID(), text: message }, AbortSignal.any([signal, AbortSignal.timeout(5000)]));
   }
-  async cancel(id: string, reason = "Cancelled by user") {
+  /** `reason` is given when it is not the parent's own choice (a deadline); the child puts it in its receipt. */
+  async cancel(id: string, reason?: string) {
     const live = this.managed(id), taskId = live.run.activeTask;
     if (!taskId) throw new Error("Child has no active task");
     const pending = live.tasks.get(taskId)!;
     try {
-      await live.channel.request({ type: "cancel", id, taskId, requestId: randomUUID() }, AbortSignal.timeout(2000));
+      try { await live.channel.request({ type: "cancel", id, taskId, requestId: randomUUID(), ...(reason ? { text: reason } : {}) }, AbortSignal.timeout(2000)); }
+      // A refusal means the task is already stopping (a second cancel, or the
+      // child's own deadline): its receipt is still due, so only silence falls through.
+      catch (error) { if ((error as Error)?.name === "TimeoutError") throw error; }
       await waitFor(pending, AbortSignal.timeout(3000));
     } catch {
       if (live.run.owner === "human" || live.transferring || live.run.activeTask !== taskId) return;
       live.run.owner = "retired";
-      await this.complete(live, "cancelled", `${reason}; child did not settle within the cancellation grace period`);
+      await this.complete(live, "cancelled", `${reason ?? "Cancelled by user"}; child did not settle within the cancellation grace period`);
       await this.dispose(live, true);
     }
   }

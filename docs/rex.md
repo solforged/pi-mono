@@ -64,6 +64,14 @@ The model has three tools:
   context. `taskId` reads a specific result (`wait: true` waits for it). With
   neither, it lists children by name. Cancelling a wait leaves work running.
 
+Task IDs are shown as their first eight characters, and the tools accept any
+unambiguous prefix. A result names its files only when they are the way
+forward: `result.json` and the session file when the text was cut or the task
+did not succeed, and a worker's worktree always. A launch that fails before
+its pane exists (a worker on a dirty repository, say) leaves no child behind.
+Tasks that a workflowz pool runs on Rex children are read by the pool and are
+never offered through `rex_result`.
+
 While the parent waits, its tool row shows who it is waiting on
 (`waiting on 3 · alpha 2m10s · …`). Any wait, including `wait: true` on
 `rex_agent` or `rex_send`, ends early when you type a message during it:

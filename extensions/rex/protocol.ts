@@ -63,7 +63,7 @@ export type ChildMessage = Ready | Result | {
   | { type: "retired"; id: string; seq: number; text: string };
 export type ParentMessage = { type: "dispatch"; id: string; requestId: string; taskId: string; task: string; context: string; deadline: number }
   | { type: "steer"; id: string; requestId: string; taskId: string; text: string }
-  | { type: "cancel"; id: string; requestId: string; taskId: string }
+  | { type: "cancel"; id: string; requestId: string; taskId: string; text?: string }
   | { type: "take"; id: string; requestId: string }
   | { type: "ping" | "retire"; id: string }; 
 

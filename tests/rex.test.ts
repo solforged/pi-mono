@@ -6,7 +6,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { ChildState } from "../extensions/rex/child.ts";
 import { BlockGone } from "../extensions/rex/client.ts";
-import { childCommand, inheritedAsk, RexRunner, yieldingWait, validateReady, waitFor, type RexBackend } from "../extensions/rex/runner.ts";
+import { childCommand, inheritedAsk, RexRunner, yieldingWait, validateReady, waitFor, type RexBackend, type Run } from "../extensions/rex/runner.ts";
+import { rows } from "../extensions/rex/ui.ts";
 import { claimOwner, FRAME_BYTES, Frames, record, send, validateManifest, VERSION, type Manifest } from "../extensions/rex/protocol.ts";
 import { agents } from "../extensions/workflows/subagents.ts";
 import { emptyUsage } from "../extensions/workflows/process.ts";
@@ -30,12 +31,13 @@ async function until(predicate: () => unknown) {
   const limit = Date.now() + 3000;
   while (!predicate()) { if (Date.now() > limit) throw new Error("Timed out"); await new Promise(resolve => setTimeout(resolve, 5)); }
 }
-function backend(behavior: "success" | "disconnect" | "wait" | "no-hello" | "lost-receipt" | "lost-take" | "late-cancel" = "success") {
+function backend(behavior: "success" | "disconnect" | "wait" | "no-hello" | "lost-receipt" | "lost-take" | "late-cancel" | "no-create" | "refused-cancel" = "success") {
   const gone = new Set<string>(), calls: string[] = [], labels: string[] = [], messages: any[] = [], children = new Map<string, { socket: ReturnType<typeof connect>; emit: (v: any) => void; manifest: Manifest; block: string }>();
   const rex: RexBackend = {
     async probe() { return identity; },
     async create(_s, label, command, cwd) {
       calls.push("create"); labels.push(label);
+      if (behavior === "no-create") throw new Error("Rex refused to create the block");
       const file = command.find(v => v.startsWith("PI_REX_CHILD="))!.slice("PI_REX_CHILD=".length);
       const m: Manifest = JSON.parse(await readFile(file, "utf8")), block = `block:${randomUUID()}`;
       assert.equal(m.cwd, cwd); assert.equal((await stat(file)).mode & 0o777, 0o600);
@@ -51,13 +53,19 @@ function backend(behavior: "success" | "disconnect" | "wait" | "no-hello" | "los
           calls.push("dispatch");
           if (behavior === "disconnect") { socket.destroy(); return; }
           emit({ type: "accepted", requestId: event.requestId, taskId: event.taskId });
-          if (!["wait", "late-cancel"].includes(behavior)) emit({ type: "result", taskId: event.taskId, status: "succeeded", text: event.task, usage: { ...emptyUsage(), input: 3, totalTokens: 3 } });
+          if (!["wait", "late-cancel", "refused-cancel"].includes(behavior)) emit({ type: "result", taskId: event.taskId, status: "succeeded", text: event.task, usage: { ...emptyUsage(), input: 3, totalTokens: 3 } });
         }
         if (event.type === "steer") emit({ type: "ack", requestId: event.requestId, taskId: event.taskId });
         if (event.type === "cancel") {
           if (behavior === "late-cancel") {
             emit({ type: "result", taskId: event.taskId, status: "succeeded", text: "Finished first", usage: emptyUsage() });
             setTimeout(() => emit({ type: "error", requestId: event.requestId, text: "Task no longer active" }), 30);
+            return;
+          }
+          if (behavior === "refused-cancel") {
+            // Already stopping, as after the child's own deadline: the receipt follows the refusal.
+            emit({ type: "error", requestId: event.requestId, text: "Task is no longer active; message not delivered" });
+            setTimeout(() => emit({ type: "result", taskId: event.taskId, status: "cancelled", text: "Task deadline expired", usage: emptyUsage() }), 60);
             return;
           }
           calls.push("cancel"); emit({ type: "ack", requestId: event.requestId, taskId: event.taskId });
@@ -181,6 +189,17 @@ test("a late cancellation rejection never cancels a newer task", async t => {
   assert(!h.fake.calls.includes("close"));
 });
 
+test("a refused cancellation waits for the receipt already on its way, and a reason reaches the child", async t => {
+  const h = await harness(t, "refused-cancel"), run = await h.open(), task = await h.runner.submit(run.id, "Work", "", signal());
+  await h.runner.cancel(run.id, "Task deadline exceeded");
+  assert.equal(task.status, "cancelled"); assert.equal(task.text, "Task deadline expired");
+  assert.equal(run.owner, "managed", "the child is not retired for refusing"); assert(!h.fake.calls.includes("close"));
+  assert.equal(h.fake.messages.find(v => v.type === "cancel").text, "Task deadline exceeded");
+  const plain = await harness(t, "wait"), other = await plain.open(); await plain.runner.submit(other.id, "Work", "", signal());
+  await plain.runner.cancel(other.id);
+  assert.equal("text" in plain.fake.messages.find(v => v.type === "cancel"), false, "the parent's own cancel names no reason");
+});
+
 test("explicit takeover relinquishes control without changing presentation or closing the child", async t => {
   const h = await harness(t), run = await h.open();
   await h.runner.take(run.id); assert.equal(run.owner, "human");
@@ -288,6 +307,38 @@ test("ready lists every unread result in completion order; an abandoned blocking
   assert.deepEqual(h.runner.ready().map(x => x.id), [tb.id, ta.id]);
   await h.runner.collect(tb.id);
   assert.deepEqual(h.runner.ready().map(x => x.id), [ta.id]);
+});
+
+test("overlapping opens get different names, and a failed launch leaves no child behind", async t => {
+  const h = await harness(t), c = { ...config, subagents: { ...config.subagents, rexConcurrency: 4 } };
+  const announced: string[] = [], open = (signal: AbortSignal, name?: string) => h.runner.open("scout", c, context(), "", signal, run => announced.push(run.name), "", name);
+  const [a, b] = await Promise.all([open(signal()), open(signal())]);
+  assert.deepEqual([a.name, b.name].sort(), ["birch", "cedar"]);
+  // Stopped before a terminal exists: never recorded in the session, and its name is free again.
+  await assert.rejects(open(AbortSignal.abort(new Error("stopped early"))), /stopped early/);
+  assert.deepEqual([...announced].sort(), ["birch", "cedar"]);
+  assert.deepEqual([...h.runner.runs.values()].map(run => run.name).sort(), ["birch", "cedar"]);
+  assert.equal((await open(signal())).name, "fern");
+
+  // Rex refusing the block: recorded, but closed, so it is not listed as starting forever.
+  const failing = await harness(t, "no-create"), seen: Run[] = [];
+  await assert.rejects(failing.runner.open("scout", config, context(), "", signal(), run => seen.push(run)), /refused to create/);
+  assert.equal(seen.length, 1);
+  assert.deepEqual([seen[0]!.status, seen[0]!.owner, seen[0]!.block], ["closed", "retired", undefined]);
+  assert.deepEqual(rows(failing.runner.runs.values(), failing.runner.tasks), []);
+  assert.equal(JSON.parse(await readFile(join(seen[0]!.dir, "run.json"), "utf8")).status, "closed");
+});
+
+test("a task run for another extension is never offered to the model", async t => {
+  const h = await harness(t, "wait"), run = await h.open();
+  const task = await h.runner.submit(run.id, "Pool item", "", signal(), false, undefined, true);
+  await assert.rejects(h.runner.next(signal()), /No Rex tasks are running/, "the model does not wait on a pool's work");
+  h.fake.children.get(run.id)!.emit({ type: "result", taskId: task.id, status: "succeeded", text: "done", usage: emptyUsage() });
+  assert.equal((await h.runner.wait(task.id, signal())).status, "succeeded");
+  assert.deepEqual(h.runner.ready(), []);
+  assert.throws(() => h.runner.checkTask(" "), /non-empty/);
+  assert.throws(() => h.runner.checkTask("ok", "x".repeat(16_001)), /context must be at most/);
+  await assert.rejects(h.runner.submit(run.id, "x".repeat(16_001), "", signal()), /at most 16,000/);
 });
 
 test("next returns unread results oldest first, then waits across children", async t => {

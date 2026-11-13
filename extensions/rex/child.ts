@@ -214,7 +214,7 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
       }
       if (!current || current.id !== message.taskId || current.state.cancelled) throw new Error("Task is no longer active; message not delivered");
       if (message.type === "cancel") {
-        current.state.cancelled = "Cancelled by parent";
+        current.state.cancelled = text(message.text, 200) && message.text.trim() ? message.text.trim() : "Cancelled by parent";
         ctx!.abort();
         emit({ type: "ack", requestId: message.requestId, taskId: message.taskId });
         if (ctx!.isIdle()) await finish(true);

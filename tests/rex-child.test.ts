@@ -121,6 +121,11 @@ test("cancellation waits for Pi settlement, then permits another task", async t 
   await h.settle(first, true);
   assert.equal(h.events.find(v => v.type === "result" && v.taskId === first).status, "cancelled");
   const second = await h.dispatch(); assert.notEqual(second, first); assert.equal(h.prompts.length, 2);
+  // A reason from the parent (its deadline, say) is what the receipt reports.
+  const timed = h.request({ type: "cancel", taskId: second, text: " Task deadline exceeded " });
+  await h.until(() => h.events.some(v => v.requestId === timed));
+  await h.settle(second, true);
+  assert.equal(h.events.find(v => v.type === "result" && v.taskId === second).text, "Task deadline exceeded");
 });
 test("takeover requires idle, persists ownership, preserves tool policy, and survives reload", async t => {
   const h = await harness(t), task = await h.dispatch();
