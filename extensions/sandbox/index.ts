@@ -299,11 +299,14 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   pi.registerTool(route((cwd, s) => createWriteToolDefinition(cwd, s ? { operations: writeOps(s) } : undefined)));
   pi.registerTool(route((cwd, s) => createEditToolDefinition(cwd, s ? { operations: editOps(s) } : undefined)));
   pi.registerTool(route((cwd, s) => createBashToolDefinition(cwd, s ? { operations: bashOps(s) } : { spawnHook: shareCargoTarget })));
-  pi.registerTool(route((cwd, s) => createLsToolDefinition(cwd, s ? { operations: lsOps(s) } : undefined)));
-  pi.registerTool(route((cwd, s) => createFindToolDefinition(cwd, s ? { operations: findOps(s) } : undefined)));
+  // Pi leaves ls, find and grep off unless asked for; registering them here
+  // would otherwise switch them on, and their declarations into every request.
+  pi.registerTool({ ...route((cwd, s) => createLsToolDefinition(cwd, s ? { operations: lsOps(s) } : undefined)), defaultActive: false });
+  pi.registerTool({ ...route((cwd, s) => createFindToolDefinition(cwd, s ? { operations: findOps(s) } : undefined)), defaultActive: false });
   const grepTool = createGrepToolDefinition(process.cwd());
   pi.registerTool({
     ...grepTool,
+    defaultActive: false,
     async execute(id, params, signal, onUpdate, ctx) {
       const s = await current();
       if (!s) return createGrepToolDefinition(ctx.cwd).execute(id, params, signal, onUpdate, ctx);
@@ -332,13 +335,13 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "browser",
     label: "browser",
-    description: "Drive a real browser shown beside the user's Pi pane. It runs on the macOS host, but all of its traffic goes through the sandbox, so localhost is the sandbox's. Pass one agent-browser command as a list of strings: [\"open\", \"localhost:3000\"] starts the browser or navigates it; then [\"snapshot\", \"-i\"], [\"click\", \"@e3\"], [\"fill\", \"@e2\", \"text\"], [\"press\", \"Enter\"], [\"get\", \"text\", \"h1\"], [\"eval\", \"document.title\"], [\"wait\", \"--text\", \"Saved\"], [\"console\"], [\"errors\"], [\"set\", \"viewport\", \"390\", \"844\"]. [\"screenshot\"] returns the image; add a selector for one element, --full for the whole page, or a .png path to also save it in the sandbox. Screenshots can show the page as it was a few actions earlier, so confirm what changed with snapshot or get before trusting one. [\"close\"] closes the pane. Only http and https pages open; commands that touch host files or the clipboard are refused.",
+    description: "Drive a real browser shown beside the user's Pi pane. It runs on the macOS host, but all of its traffic goes through the sandbox, so localhost is the sandbox's. Pass one agent-browser command as a list of strings: [\"open\", \"localhost:3000\"] starts the browser or navigates it; then [\"snapshot\", \"-i\"], [\"click\", \"@e3\"], [\"fill\", \"@e2\", \"text\"], [\"press\", \"Enter\"], [\"get\", \"text\", \"h1\"], [\"eval\", \"document.title\"], [\"wait\", \"--text\", \"Saved\"], [\"console\"], [\"errors\"], [\"set\", \"viewport\", \"390\", \"844\"]. [\"screenshot\"] returns the image; add a selector for one element, --full for the whole page, or a .png path to also save it in the sandbox. [\"close\"] closes the pane. Only http and https pages open; commands that touch host files or the clipboard are refused.",
     promptSnippet: "Show and drive a web page in a browser beside the user, with the sandbox's network",
     promptGuidelines: [
-      "Use browser, not the terminal-browser command (it is not installed in the sandbox), to view or test a web page; a dev server listening on the sandbox's localhost is reachable as localhost.",
+      "Use browser, not the terminal-browser command (it is not installed in the sandbox), to view or test a web page.",
     ],
     parameters: Type.Object({
-      command: Type.Array(Type.String(), { description: "One agent-browser command and its arguments, such as [\"click\", \"@e3\"]" }),
+      command: Type.Array(Type.String()),
     }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       if (!enabled) throw new Error("The sandbox is off; use terminal-browser with bash instead.");
@@ -353,13 +356,15 @@ export default function sandboxExtension(pi: ExtensionAPI) {
         // terminal-browser's offscreen rendering hands DevTools captures a
         // cached frame that can lag behind the page; no command refreshes it
         // reliably. Its own capturePage path would fix this upstream.
-        let note = "Screenshot of the page. It can lag behind recent changes; snapshot or get shows the current state.";
+        // Said here, with each image, and not in the description sent with every request.
+        const lag = "It can lag behind recent changes; snapshot or get shows the current state.";
+        let note = `Screenshot of the page. ${lag}`;
         if (command.save) {
           // Written by the guest, so the path means what it means there.
           const path = resolvePath(command.save, ctx.cwd);
           const saved = await box.exec(["sh", "-c", 'mkdir -p -- "$(dirname -- "$1")" && cat > "$1"', "sh", path], { input: png, signal, timeoutMs: 30000 });
           if (saved.code !== 0) throw new Error(`Could not save the screenshot to ${path}: ${saved.stderr.trim()}`);
-          note = `Screenshot saved to ${path}.`;
+          note = `Screenshot saved to ${path}. ${lag}`;
         }
         return { content: [{ type: "text" as const, text: note }, { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" }], details: undefined };
       }

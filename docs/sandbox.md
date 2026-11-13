@@ -5,7 +5,9 @@
 using Apple's `container` CLI. It is off by default while it is being tested;
 turn it on with `/sandbox on`, `pi --sandbox on`, or `"enabled": true` in
 settings. Pi itself, other extension
-tools, and provider credentials stay on the host.
+tools, and provider credentials stay on the host. As in stock Pi, `grep`,
+`find`, and `ls` stay inactive unless `--tools` or the `defaultTools` setting
+names them, so their declarations are not sent with every request.
 
 While the sandbox is on, a green cube follows the cost on the status line, with
 `…` while it starts and a red `!` when it is unavailable. With the sandbox off,
