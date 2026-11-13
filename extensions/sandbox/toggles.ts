@@ -24,6 +24,6 @@ export function saveToggle(file: string, root: string, enabled: boolean, setting
   else toggles[root] = enabled;
   mkdirSync(dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(toggles, null, 2)}\n`);
+  writeFileSync(temporary, `${JSON.stringify(toggles, null, 2)}\n`, { mode: 0o600 });
   renameSync(temporary, file);
 }
