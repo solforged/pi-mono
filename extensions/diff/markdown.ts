@@ -51,7 +51,7 @@ export function loadMarked(file: string | undefined): Lexer | undefined {
 /** Without marked, a document still reads as plain paragraphs and fenced code. */
 export function plainLexer(markdown: string): MdToken[] {
   const tokens: MdToken[] = [];
-  const lines = markdown.split("\n");
+  const lines = markdown.split(/\r\n?|\n/);
   for (let i = 0; i < lines.length;) {
     const fence = /^\s{0,3}(`{3,}|~{3,})\s*([\w+#.-]*)/.exec(lines[i]);
     if (fence) {

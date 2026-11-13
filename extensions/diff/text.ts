@@ -139,10 +139,6 @@ export function clipSpans(spans: Span[], max: number): Span[] {
   return out;
 }
 
-export function rowWidth(row: Row): number {
-  return row.spans.reduce((sum, span) => sum + width(span.text), 0);
-}
-
 const hex = (value: string) => {
   const match = /^#?([0-9a-f]{6})$/i.exec(value);
   if (!match) return undefined;

@@ -119,7 +119,11 @@ test("reads a document without marked as paragraphs, headings and fenced code", 
   const tokens = plainLexer("# Title\n\nSome text\nmore\n\n```sh\necho hi\n```\n");
   assert.deepEqual(tokens.map((token) => token.type), ["heading", "paragraph", "code"]);
   const doc = renderDoc(tokens, { width: 30, palette: DEFAULT_PALETTE, link: () => undefined });
-  assert.deepEqual(doc.rows.map((row) => plain(paint(row, 30)).trimEnd()).filter(Boolean), ["Title", "─".repeat(30), "Some text more", " echo hi"]);
+  const text = (rows: typeof doc.rows) => rows.map((row) => plain(paint(row, 30)).trimEnd()).filter(Boolean);
+  assert.deepEqual(text(doc.rows), ["Title", "─".repeat(30), "Some text more", " echo hi"]);
+  // Windows line endings: the heading is still one, and no ␍ shows.
+  const crlf = plainLexer("# Title\r\n\r\nSome text\r\nmore\r\n\r\n```sh\r\necho hi\r\n```\r\n");
+  assert.deepEqual(text(renderDoc(crlf, { width: 30, palette: DEFAULT_PALETTE, link: () => undefined }).rows), text(doc.rows));
 });
 
 test("frames the document with a title, position, scrollbar and key bar", () => {

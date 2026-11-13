@@ -139,8 +139,8 @@ function isViewer(pid: number): boolean {
 }
 
 let sequence = 0;
-/** Tells an open viewer to refresh, optionally following an edited file. */
-export function tick(dir: string, piPid: number, message: { event: string; path?: string }) {
+/** Tells an open viewer to refresh, optionally following an edited file or moving to another working tree. */
+export function tick(dir: string, piPid: number, message: { event: string; path?: string; root?: string }) {
   if (viewerPid(dir, piPid) === undefined) return;
   const target = join(dir, `${piPid}.tick`);
   const temporary = `${target}.${process.pid}.tmp`;
