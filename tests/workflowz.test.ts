@@ -52,7 +52,8 @@ test("cells keep top-level declarations, allow redeclaration and return the last
   const context = vm.createContext({ setTimeout });
   const run = async (code: string) => {
     const t = transformCell(code);
-    const value = await new vm.Script(wrapCell(t.body, t.prelude)).runInContext(context);
+    if (t.functions) new vm.Script(t.functions).runInContext(context);
+    const value = await new vm.Script(wrapCell(t.body)).runInContext(context);
     return value && typeof value === "object" ? plain(value) : value;
   };
   assert.equal(await run("const q = await Promise.resolve(3); q"), 3);
@@ -133,6 +134,19 @@ test("kernel functions cannot be replaced by a cell's own names", async () => {
   // The list the transform checks is the kernel's own.
   const names = JSON.parse((await cell(kernel, "JSON.stringify(Object.keys(globalThis).filter((k) => !['count', 'x'].includes(k)).sort())")).value!);
   assert.deepEqual(names, [...KERNEL_NAMES].sort());
+});
+
+test("a redefined function replaces the old one for callers from earlier cells", async () => {
+  const kernel = newKernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }));
+  await cell(kernel, "function helper() { return 'old' }\nfunction caller() { return helper() }\nawait tool('ask', () => helper())");
+  // The declaration used to be local to its cell, so caller() and the tool kept the first helper.
+  assert.equal((await cell(kernel, "async function helper() { return 'new' }\nawait caller()")).value, "new");
+  assert.equal((await kernel.invoke("ask", {})).value, "new");
+  assert.equal((await cell(kernel, "helper = () => 'assigned'\ncaller()")).value, "assigned");
+  // Declarations are still hoisted, with the brace on its own line too, and errors keep the cell's lines.
+  assert.equal((await cell(kernel, "const got = main()\nfunction main()\n{\n  return 'hoisted'\n}\ngot")).value, "hoisted");
+  const failed = await kernel.run("const one = 1\nfunction* bad(o = {}) {\n  yield o.x.y\n}\n[...bad()]", { timeoutMs: 1000 });
+  assert.match(failed.error!, /TypeError[^\n]*\n\s+at bad \(cell-\d\.js:3:\d+\)\n\s+at cell-\d\.js:5:/);
 });
 
 test("line and paragraph separators survive the kernel protocol in both directions", async () => {

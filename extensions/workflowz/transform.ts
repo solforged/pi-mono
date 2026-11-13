@@ -156,13 +156,19 @@ const declare = (token: Token | undefined) => { if (token?.type === "name" && KE
 const STATEMENT_WORDS = new Set(["var", "let", "const", "function", "class", "if", "for", "while", "do", "switch", "try",
   "return", "throw", "break", "continue", "import", "export", "with", "debugger"]);
 
-export interface Transformed { body: string; prelude: string; returnsValue: boolean }
+export interface Transformed {
+  body: string; returnsValue: boolean;
+  /** The cell's top-level function declarations at their own lines and columns, or "" without any. */
+  functions: string;
+}
+/** Spaces of the same shape, so what stays keeps its line and column in errors. */
+const blank = (text: string) => text.replace(/[^\n\r\u2028\u2029]/g, " ");
 
-/** Rewrites depth-0 declarations into global assignments and returns the last expression. */
+/** Rewrites depth-0 declarations into global assignments, lifts functions out and returns the last expression. */
 export function transformCell(code: string, returnLast = true): Transformed {
   const { tokens } = tokenize(code);
   const edits: Array<{ at: number; end: number; text: string }> = [];
-  const functions: string[] = [];
+  let functions = "", copied = 0;
   const ranges = statements(tokens);
   let returnsValue = false;
   ranges.forEach(([s, e], index) => {
@@ -200,7 +206,20 @@ export function transformCell(code: string, returnLast = true): Transformed {
       let k = s + (isAsyncFn ? 2 : 1);
       if (tokens[k]?.value === "*") k++;
       declare(tokens[k]);
-      if (tokens[k]?.type === "name") functions.push(tokens[k]!.value);
+      // Inside the wrapper the declaration would be a local that the cell's
+      // other functions close over, so a later cell could not replace it for
+      // them. It moves to a script of its own, where it declares a global.
+      let depth = 0, close: Token | undefined;
+      for (; k < tokens.length && !close; k++) {
+        const t = tokens[k]!;
+        if (t.type !== "punct") continue;
+        if (["(", "[", "{"].includes(t.value)) depth++;
+        else if ([")", "]", "}"].includes(t.value) && --depth === 0 && t.value === "}") close = t;
+      }
+      if (!close) return;
+      functions += blank(code.slice(copied, first.start)) + code.slice(first.start, close.end);
+      copied = close.end;
+      edits.push({ at: first.start, end: close.end, text: blank(code.slice(first.start, close.end)) });
       return;
     }
     if (first.type === "name" && first.value === "class" && second?.type === "name" && second.value !== "extends") {
@@ -221,11 +240,10 @@ export function transformCell(code: string, returnLast = true): Transformed {
   // Apply from the end; at one position, later insertions go first so they end up after earlier ones.
   const ordered = edits.map((edit, index) => ({ ...edit, index })).sort((a, b) => b.at - a.at || b.index - a.index);
   for (const edit of ordered) body = body.slice(0, edit.at) + edit.text + body.slice(edit.end);
-  const prelude = functions.map((name) => `globalThis[${JSON.stringify(name)}] = ${name};`).join(" ");
-  return { body, prelude, returnsValue };
+  return { body, functions, returnsValue };
 }
 
 /** The async wrapper; the header shares the body's first line so line numbers match. */
-export function wrapCell(body: string, prelude = "") {
-  return `(async () => { ${prelude} ${body}\n})()`;
+export function wrapCell(body: string) {
+  return `(async () => { ${body}\n})()`;
 }

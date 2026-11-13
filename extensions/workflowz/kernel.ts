@@ -63,9 +63,9 @@ const snapshot = (item: Item) => ({ id: item.id, status: item.status, label: ite
  * running it with local declarations would hide the mistake until the next cell.
  */
 export function candidates(code: string) {
-  const list: Array<{ code: string; returnsValue: boolean; note?: string }> = [];
+  const list: Array<{ code: string; functions?: string; returnsValue: boolean; note?: string }> = [];
   for (const returnLast of [true, false]) {
-    try { const t = transformCell(code, returnLast); list.push({ code: wrapCell(t.body, t.prelude), returnsValue: t.returnsValue }); }
+    try { const t = transformCell(code, returnLast); list.push({ code: wrapCell(t.body), ...(t.functions ? { functions: t.functions } : {}), returnsValue: t.returnsValue }); }
     catch (error) { if (error instanceof ReservedName) throw error; /* otherwise fall through */ }
   }
   list.push({ code: wrapCell(code), returnsValue: false, note: "This cell's top-level declarations stay local: the kernel could not rewrite them." });

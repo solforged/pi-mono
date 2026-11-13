@@ -189,13 +189,16 @@ const context = vm.createContext(protect(globals()));
 
 async function run(message) {
   const cell = { n: message.cell, pending: new Set() };
-  let script, candidate;
+  const compile = (code) => new vm.Script(code, { filename: `cell-${message.cell}.js` });
+  let script, functions, candidate;
   for (const c of message.candidates) {
-    try { script = new vm.Script(c.code, { filename: `cell-${message.cell}.js` }); candidate = c; break; }
+    try { functions = c.functions ? compile(c.functions) : undefined; script = compile(c.code); candidate = c; break; }
     catch (error) { if (c === message.candidates[message.candidates.length - 1]) { send({ t: "done", cell: cell.n, error: describeError(error) }); return; } }
   }
   let promise;
-  try { promise = cells.run(cell, () => Promise.resolve(script.runInContext(context, { timeout: syncTimeoutMs }))); }
+  // Function declarations run first as a script of their own: there they are
+  // globals, so redefining one in a later cell reaches its earlier callers.
+  try { promise = cells.run(cell, () => { if (functions) functions.runInContext(context, { timeout: syncTimeoutMs }); return Promise.resolve(script.runInContext(context, { timeout: syncTimeoutMs })); }); }
   catch (error) { promise = Promise.reject(error); }
   let result;
   try {
