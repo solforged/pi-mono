@@ -2,6 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { DISCUSS } from "../ask/model.ts";
 import { showPanel } from "./panel.ts";
 import {
   apply, counts, empty, format, limits, open, reminder, restore, section, statuses, tally, withParentTodos,
@@ -18,6 +19,7 @@ export default function (pi: ExtensionAPI) {
   let list: List = empty();
   let reminders = 0;     // Reminders sent since the user's last prompt.
   let progressed = false; // A tool ran since that prompt or the last reminder.
+  let discussing = false; // The user ended an ask to talk; cleared when the next run starts.
 
   function refresh(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
@@ -37,7 +39,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => sync(ctx));
   pi.on("session_tree", (_event, ctx) => sync(ctx));
+  pi.events.on(DISCUSS, () => { discussing = true; });
   pi.on("before_agent_start", (event) => {
+    discussing = false;
     if (event.messageType === "user") { reminders = 0; progressed = false; }
     const sections = event.systemPromptOptions.sections;
     const text = event.systemPromptOptions.selectedTools?.includes("todo") ? section(list) : undefined;
@@ -47,7 +51,10 @@ export default function (pi: ExtensionAPI) {
 
   // Remind the agent once per stop while it keeps making progress, at most three
   // times per prompt. Aborted runs skip this event; print and JSON runs are left alone.
+  // A run that failed, that the user stopped to discuss, or that another
+  // extension is already continuing is not pushed on.
   pi.on("agent_before_settle", (event, ctx) => {
+    if (event.outcome !== "completed" || event.continue || discussing) return;
     if (!ctx.hasUI || !progressed || reminders >= limits.reminders || !pi.getActiveTools().includes("todo")) return;
     const content = reminder(list, reminders + 1);
     if (!content) return;

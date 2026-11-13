@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { askInTerminal, askWithDialogs } from "./dialog.ts";
-import { invalid, items, MAX_OPTIONS, MAX_QUESTIONS, MIN_OPTIONS, normalize, prepare, resultText, TOOL, withLedger, type Details, type Question } from "./model.ts";
+import { DISCUSS, invalid, items, MAX_OPTIONS, MAX_QUESTIONS, MIN_OPTIONS, normalize, prepare, resultText, TOOL, withLedger, type Details, type Question } from "./model.ts";
 
 const option = Type.Object({
   label: Type.String(),
@@ -48,6 +48,7 @@ export default function (pi: ExtensionAPI) {
       // Whatever was entered before leaving the dialog stays in the result as drafts.
       if (ending.outcome === "discuss" && process.env.PI_REX_CHILD) return done({ outcome: "handback", items: items(questions, ending.answers, false) });
       discussing = ending.outcome === "discuss";
+      if (discussing) pi.events.emit(DISCUSS, {});
       if (ending.outcome !== "answered") return { ...done({ outcome: ending.outcome, items: items(questions, ending.answers, false) }), terminate: discussing };
       return done({ outcome: "answered", items: items(questions, ending.answers) });
     },

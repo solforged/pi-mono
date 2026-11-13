@@ -36,7 +36,9 @@ them and asks the agent to continue, mark them done, remove them, or say that
 it is waiting for the user. The terminal shows a one-line notice. A reminder is
 sent only if a tool has run since the user's prompt or the previous reminder,
 and at most three times per prompt. Aborted runs, print and JSON modes, and
-sessions with the tool disabled receive none.
+sessions with the tool disabled receive none; nor does a run that ended in a
+provider error, that you stopped to discuss an `ask_user_question`, or that
+another extension is already continuing.
 
 ## Delegated agents
 

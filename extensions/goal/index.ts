@@ -2,6 +2,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { DISCUSS } from "../ask/model.ts";
 import {
   KICKOFF_TYPE, NOTE_TYPE, amount, close, continueNote, create, decide, format, isUnfinished, kickoff, label,
   limitNote, overBudget, parseAmount, restore, section, snapshot, statusText, transition, withBudget,
@@ -15,6 +16,7 @@ export default function (pi: ExtensionAPI) {
   let state: State = restore([]);
   let progressed = false;    // A tool other than goal ran since the run started or the last continuation.
   let waiting = false;       // The loop stopped because the last turn ran no tool.
+  let discussing = false;    // The user ended an ask to talk; cleared when the next run starts.
   let prompted: string | undefined;   // The objective in this run's system prompt.
   let pending: "set" | "resume" | undefined; // Goal work to start once the current run settles.
   let settled: (() => void)[] = [];   // Headless commands waiting for the goal run to end.
@@ -53,9 +55,10 @@ export default function (pi: ExtensionAPI) {
 
   // The objective and its rules sit in a prompt section, and the goal tool is
   // declared, only while the goal is active; both change only with the goal.
+  pi.events.on(DISCUSS, () => { discussing = true; });
   pi.on("before_agent_start", (event, ctx) => {
     reload(ctx);
-    progressed = false; waiting = false;
+    progressed = false; waiting = false; discussing = false;
     const options = event.systemPromptOptions;
     const text = section(state.goal);
     if (text) options.sections.goal = text; else delete options.sections.goal;
@@ -86,6 +89,8 @@ export default function (pi: ExtensionAPI) {
     const goal = state.goal;
     // A goal set during this run starts after it settles, with its prompt section.
     if (!goal || goal.status !== "active" || prompted !== goal.objective || event.continue) return;
+    // A failed run, or one the user stopped to discuss, waits for them like a stop without progress.
+    if (event.outcome !== "completed" || discussing) { waiting = true; refresh(ctx); return; }
     const decision = decide(state, progressed);
     if (decision.kind === "wait") { waiting = true; refresh(ctx); }
     if (decision.kind === "wait" || decision.kind === "none") return;

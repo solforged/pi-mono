@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import install from "../../extensions/goal/index.ts";
+import { DISCUSS } from "../../extensions/ask/model.ts";
 import { KICKOFF_TYPE, NOTE_TYPE, restore } from "../../extensions/goal/goal.ts";
 
 const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
@@ -9,10 +10,11 @@ const render = (component: any) => component.render(200).map((line: string) => l
 
 export default function (pi: ExtensionAPI) {
   const entries: any[] = [], events: Record<string, any> = {}, commands: Record<string, any> = {};
-  const renderers: Record<string, any> = {}, sent: any[] = [];
+  const renderers: Record<string, any> = {}, sent: any[] = [], bus: Record<string, any> = {};
   let tool: any, entryRenderer: any;
   install({
     on: (event: string, fn: any) => { events[event] = fn; },
+    events: { on: (name: string, fn: any) => { bus[name] = fn; } },
     registerTool: (definition: any) => { tool = definition; pi.registerTool(definition); },
     registerCommand: (name: string, options: any) => { commands[name] = options; },
     registerMessageRenderer: (type: string, fn: any) => { renderers[type] = fn; },
@@ -37,7 +39,7 @@ export default function (pi: ExtensionAPI) {
         events.before_agent_start(event, ui);
         return event.systemPromptOptions;
       };
-      const settle = (extra: any = {}) => events.agent_before_settle({ entries: [], continue: false, ...extra }, ui);
+      const settle = (extra: any = {}) => events.agent_before_settle({ entries: [], continue: false, outcome: "completed", ...extra }, ui);
       const commit = (decision: any) => { for (const entry of decision?.entries ?? []) entries.push({ ...entry, timestamp: new Date().toISOString() }); return decision; };
       const work = () => events.tool_execution_end({ toolName: "bash" });
 
@@ -67,6 +69,15 @@ export default function (pi: ExtensionAPI) {
       assert.deepEqual(options.selectedTools, ["read", "goal"]);
 
       // No tool ran: wait for the user. Progress: continue once per stop.
+      assert.equal(await settle(), undefined);
+      assert.equal(status.goal, "goal 0/25 · waiting");
+      // A failed run, or one the user stopped to discuss, waits too, whatever ran; the next run clears it.
+      work();
+      assert.equal(await settle({ outcome: "error" }), undefined);
+      bus[DISCUSS]();
+      assert.equal(await settle(), undefined);
+      prompt();
+      assert.equal(status.goal, "goal 0/25");
       assert.equal(await settle(), undefined);
       assert.equal(status.goal, "goal 0/25 · waiting");
       work();

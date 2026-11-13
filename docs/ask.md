@@ -49,7 +49,8 @@ There are three outcomes:
   "decide yourself and state your assumption". That is how you skip.
 - **Discuss in chat.** Esc, or the Review tab's second row, ends the turn
   without answers. Tool calls after the ask in the same response are blocked;
-  ones before it have already run. Reply in your own words.
+  ones before it have already run. Todo reminders and an active goal leave the
+  run stopped. Reply in your own words.
 - **Interrupted.** Aborting the run closes the dialog.
 
 When the dialog closes without being submitted, the picks and notes you had entered

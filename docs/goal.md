@@ -43,7 +43,8 @@ appear and disappear only when the goal changes, so the cached prompt is kept.
 When the agent stops, Pi asks it to continue with a short note, shown as one
 line in the transcript, if it ran a tool since the run started or the previous
 note. A stop with no tool call, such as a question for you, ends the loop until
-your next message; the footer then shows `waiting`. If an extension that runs
+your next message; the footer then shows `waiting`. So does a run that ended
+in a provider error, or that you stopped to discuss an `ask_user_question`. If an extension that runs
 earlier has already asked the agent to continue at that stop, no note is added.
 
 The loop also ends when:

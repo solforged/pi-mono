@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import install from "../../extensions/todo/index.ts";
+import { DISCUSS } from "../../extensions/ask/model.ts";
 import { apply, empty, restore } from "../../extensions/todo/store.ts";
 import { panelLines, widgetLines } from "../../extensions/todo/view.ts";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -11,9 +12,11 @@ const render = (component: any) => component.render(200).map((line: string) => l
 
 export default function (pi: ExtensionAPI) {
   const entries: any[] = [], events: Record<string, any> = {}, commands: Record<string, any> = {}, renderers: Record<string, any> = {};
+  const bus: Record<string, any> = {};
   let tool: any, active = ["todo"];
   install({
     on: (event: string, fn: any) => { events[event] = fn; },
+    events: { on: (name: string, fn: any) => { bus[name] = fn; } },
     registerTool: (definition: any) => { tool = definition; pi.registerTool(definition); },
     registerCommand: (name: string, options: any) => { commands[name] = options; },
     registerMessageRenderer: (type: string, fn: any) => { renderers[type] = fn; },
@@ -59,10 +62,10 @@ export default function (pi: ExtensionAPI) {
         assert.equal(event.systemPromptOptions.sections.todos, undefined);
 
         // Reminders need progress since the last one, stop at three, and reset per user prompt.
-        const settle = () => events.agent_before_settle({ entries: [] }, ui);
+        const settle = (extra: any = {}) => events.agent_before_settle({ entries: [], outcome: "completed", ...extra }, ui);
         await events.before_agent_start(prompt(), fake);
         assert.equal(await settle(), undefined);
-        assert.equal(await events.agent_before_settle({ entries: [] }, { ...fake }), undefined);
+        assert.equal(await events.agent_before_settle({ entries: [], outcome: "completed" }, { ...fake }), undefined);
         for (const count of [1, 2, 3]) {
           await events.tool_execution_end({});
           const decision = await settle();
@@ -81,6 +84,13 @@ export default function (pi: ExtensionAPI) {
         active = [];
         assert.equal(await settle(), undefined);
         active = ["todo"];
+        // A failed run, one another extension is continuing, or one the user stopped to discuss is not pushed on.
+        assert.equal(await settle({ outcome: "error" }), undefined);
+        assert.equal(await settle({ continue: true }), undefined);
+        bus[DISCUSS]();
+        assert.equal(await settle(), undefined);
+        await events.before_agent_start(prompt("custom"), fake);
+        assert.equal((await settle()).continue, true);
         assert.match(render(renderers["todo-reminder"]({ details: { count: 1, open: 2 } }, { outputPad: 0 }, theme)), /Todo reminder 1\/3: 2 open item/);
 
         // Delegations carry the parent's open items as context; steering does not.

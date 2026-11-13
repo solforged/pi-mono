@@ -3,6 +3,8 @@
 
 export const TOOL = "ask_user_question";
 export const LEDGER = "ask-decisions";
+/** Emitted on `pi.events` when the user ends an ask to discuss in chat, so nothing continues the run for them. */
+export const DISCUSS = "ask:discuss";
 export const MAX_QUESTIONS = 4, MIN_OPTIONS = 2, MAX_OPTIONS = 4;
 
 export interface Option { label: string; description?: string; preview?: string }
