@@ -97,21 +97,30 @@ function continues(prev: Token, next: Token) {
   if (prev.type === "name" && OPEN_ENDED_WORDS.has(prev.value)) return true;
   if (next.type === "template") return true;
   if (next.type === "punct" && CONTINUES.has(next.value)) return true;
-  if (next.type === "name" && ["in", "instanceof", "of"].includes(next.value)) return true;
+  if (next.type === "name" && ["in", "instanceof", "of", "else", "catch", "finally"].includes(next.value)) return true;
   return false;
 }
 
 const BLOCK_STARTERS = new Set(["if", "for", "while", "switch", "try", "function", "async", "class", "with"]);
 const BLOCK_AFTER = new Set(["else", "try", "finally"]);
+/** Keywords whose parenthesized header is followed by a body, which may sit on the next line without braces. */
+const HEADERS = new Set(["if", "for", "while", "with"]);
 
 /** Depth-0 statements as token index ranges [start, end). */
 export function statements(tokens: Token[]): Array<[number, number]> {
   const result: Array<[number, number]> = [];
-  let depth = 0, start = 0, block = false;
+  let depth = 0, start = 0, block = false, header = false, headerEnd = -1;
   for (let k = 0; k < tokens.length; k++) {
     const t = tokens[k]!;
-    if (depth === 0 && k > start && t.nl && !continues(tokens[k - 1]!, t)) { result.push([start, k]); start = k; }
+    // `for (...)` then a newline is not a whole statement: its body follows.
+    if (depth === 0 && k > start && t.nl && headerEnd !== k - 1 && !continues(tokens[k - 1]!, t)) { result.push([start, k]); start = k; }
     if (t.type === "punct") {
+      if (depth === 0 && t.value === "(") {
+        const at = tokens[k - 1]?.value === "await" ? k - 2 : k - 1, word = tokens[at], before = tokens[at - 1];
+        header = word?.type === "name" && HEADERS.has(word.value) && !(before?.type === "punct" && [".", "?."].includes(before.value))
+          // `do {} while (x)` ends there.
+          && !(word.value === "while" && tokens[start]!.value === "do");
+      }
       if (["(", "[", "{"].includes(t.value)) {
         if (depth === 0 && t.value === "{") {
           // A statement block, not an object literal or arrow body.
@@ -121,6 +130,7 @@ export function statements(tokens: Token[]): Array<[number, number]> {
         depth++;
       } else if ([")", "]", "}"].includes(t.value)) {
         depth = Math.max(0, depth - 1);
+        if (depth === 0 && t.value === ")" && header) { headerEnd = k; header = false; }
         // `try {} catch {} [a]`: a closed block ends the statement unless it continues.
         const next = tokens[k + 1];
         if (depth === 0 && t.value === "}" && block && next && !(next.type === "name" && ["else", "catch", "finally"].includes(next.value))

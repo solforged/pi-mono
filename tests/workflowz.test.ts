@@ -8,7 +8,7 @@ import { callKernel, ToolServer } from "../extensions/workflowz/tool-server.ts";
 import { childArgs } from "../extensions/workflows/subagents.ts";
 import { Kernel, type KernelHooks } from "../extensions/workflowz/kernel.ts";
 import { budgetIn, keywordsIn, loadNotices, renderNotice } from "../extensions/workflowz/notices.ts";
-import { tokenize, transformCell, wrapCell } from "../extensions/workflowz/transform.ts";
+import { statements, tokenize, transformCell, wrapCell } from "../extensions/workflowz/transform.ts";
 import { emptyUsage } from "../extensions/workflows/process.ts";
 import { root } from "./helpers.ts";
 
@@ -100,6 +100,25 @@ test("the kernel prints, reports errors with cell frames and survives syntax err
   assert.match(syntax.error!, /SyntaxError/);
   assert.equal((await cell(kernel, "x")).value, "2");
   assert.equal((await cell(kernel, "typeof require + typeof process")).value, "undefinedundefined");
+});
+
+test("loop and branch bodies on their own line without braces stay part of their statement", async () => {
+  const kernel = newKernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }));
+  // The body used to be split off and, as the last statement, turned into a return after one pass.
+  assert.equal((await cell(kernel, "let n = 0\nfor (const x of [1, 2, 3])\n  n += x")).value, undefined);
+  assert.equal((await cell(kernel, "n")).value, "6");
+  assert.equal((await cell(kernel, "let i = 0\nwhile (i < 4)\n  i++\ni")).value, "4");
+  assert.equal((await cell(kernel, "let which\nif (i > 9)\n  which = 'big'\nelse\n  which = 'small'\nwhich")).value, "small");
+  assert.equal((await cell(kernel, "do { i-- } while (i > 1)\ni")).value, "1");
+  assert.deepEqual(statements(tokenize("a.for (x)\nb").tokens).length, 2);
+});
+
+test("line and paragraph separators survive the kernel protocol in both directions", async () => {
+  const kernel = newKernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }));
+  // JSON leaves U+2028 and U+2029 raw; a reader that treats them as newlines drops the message.
+  const out = await cell(kernel, "const s = 'a\u2028b\u2029c'; print(s)\ns.length");
+  assert.equal(out.output, "a\u2028b\u2029c");
+  assert.equal(out.value, "5");
 });
 
 test("a cell that outlives its wait keeps running and reports in the next cell", async () => {

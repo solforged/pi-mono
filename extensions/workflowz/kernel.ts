@@ -6,7 +6,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { bounded } from "../workflows/process.ts";
 import { transformCell, wrapCell } from "./transform.ts";
@@ -136,7 +135,13 @@ export class Kernel {
       ready.reject(new Error(`Kernel could not start: ${why}`));
       this.crash(child, why);
     });
-    createInterface({ input: proc.stdout }).on("line", (line) => this.receive(child, line, ready.resolve));
+    // Split on "\n" only: readline also breaks lines at U+2028 and U+2029, which JSON leaves raw inside strings.
+    let pending = "";
+    proc.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      const lines = (pending + chunk).split("\n");
+      pending = lines.pop()!;
+      for (const line of lines) this.receive(child, line, ready.resolve);
+    });
     // Registered before it is ready, so the monitor, crashes, reset and dispose all reach it.
     this.child = child;
     this.send(child, { t: "init", counters: this.jobs.counterSnapshot(), syncTimeoutMs: this.hooks.syncTimeoutMs ?? SYNC_TIMEOUT_MS });

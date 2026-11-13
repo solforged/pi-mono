@@ -6,7 +6,6 @@
 "use strict";
 const vm = require("node:vm");
 const { inspect } = require("node:util");
-const readline = require("node:readline");
 const { AsyncLocalStorage } = require("node:async_hooks");
 
 const send = (message) => { process.stdout.write(`${JSON.stringify(message)}\n`); };
@@ -208,7 +207,7 @@ process.on("uncaughtException", (error) => print(`[uncaught] ${describeError(err
 process.on("unhandledRejection", (error) => print(`[unhandled rejection] ${describeError(error)}`));
 setInterval(() => send({ t: "beat" }), 500);
 
-readline.createInterface({ input: process.stdin }).on("line", (line) => {
+function receive(line) {
   let message;
   try { message = JSON.parse(line); } catch { return; }
   if (message.t === "init") { counters = message.counters || {}; syncTimeoutMs = message.syncTimeoutMs || syncTimeoutMs; send({ t: "ready" }); }
@@ -219,4 +218,12 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     calls.delete(message.id);
     if (message.ok) pending.resolve(message.value); else pending.reject(errorFrom(message.error));
   } else if (message.t === "invoke") void invoke(message);
-}).on("close", () => process.exit(0));
+}
+
+// Split on "\n" only: readline also breaks lines at U+2028 and U+2029, which JSON leaves raw inside strings.
+let pending = "";
+process.stdin.setEncoding("utf8").on("data", (chunk) => {
+  const lines = (pending + chunk).split("\n");
+  pending = lines.pop();
+  for (const line of lines) receive(line);
+}).on("end", () => process.exit(0)).on("close", () => process.exit(0));
