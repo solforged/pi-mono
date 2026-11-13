@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { displayTaskPrompt, taskPrompt } from "../extensions/rex/protocol.ts";
-import { COMMANDS, CONFIRM, entries, entryLine, LeftGate, listLines, replyTarget, tailLines, type Peer } from "../extensions/rex/hub-model.ts";
+import { columns, COMMANDS, CONFIRM, entries, entryLine, LeftGate, listLines, replyTarget, tailLines, type Peer } from "../extensions/rex/hub-model.ts";
 import { activityLine, callLine, childFooter, money, fitResults, rows, splitResult, taskLine, waitingLine, widgetLine, type TaskMeta } from "../extensions/rex/ui.ts";
 
 const run = (name: string, extra: object = {}) => ({ id: `${name}-id`, name, agent: "scout", owner: "managed", status: "idle", taskIds: [], ...extra }) as any;
@@ -86,10 +86,10 @@ test("hub entries: children by attention, then other sessions busy first; unread
   const list = entries(kids, new Set(["birch-id"]), [peer("calm", { started: 1 }), peer("app", { busy: true, title: "Fix scrollback", started: 2 }), peer("nowhere", { rex: null })]);
   assert.deepEqual(list.map(e => [e.name, e.section]), [["oak", "attention"], ["birch", "done"], ["app", "peers"], ["calm", "peers"], ["nowhere", "peers"]]);
   assert.equal(list[1].unread, true); assert.equal(list[2].title, "Fix scrollback"); assert.equal(list[4].state, "not in Rex");
-  assert.match(entryLine(list[0], true, theme), /^› !·?\s?oak {10}scout {3}Waiting for user: Allow bash\?/);
-  assert.match(entryLine(list[1], false, theme), /^  ✓•birch /);
-  const narrow = entryLine({ ...list[2], name: "pi-mono--improve-subagent-session" }, false, theme, 70);
-  assert.match(narrow, /^  ◆ pi-mono--im… pi {6}working {18}Fix scrollback$/, "narrow panes clip names and drop time and cost");
+  const cols = columns(list, 160);
+  assert.match(entryLine(list[0], true, theme, cols), /^› !·?\s?oak {6}scout {2}Waiting for user: Allow bash\? {2}/);
+  assert.match(entryLine(list[1], false, theme, cols), /^  ✓•birch /);
+  assert.match(entryLine(list[2], false, theme, cols), /^  ◆ app {13}working /, "other sessions leave the role blank");
 });
 
 test("hub list scrolls to keep the selection and its section header in view", () => {
@@ -131,4 +131,19 @@ test("← opens the hub only from an empty prompt, and needs a second press righ
   assert.equal(gate.left(true, 25_000), "open", "an expired arm, once settled, opens directly");
   gate.edited(false, 30_000);
   assert.equal(gate.left(true, 30_001), "open", "keys on an empty prompt do not count as edits");
+});
+
+test("hub columns fit what the rows hold: long session names stay whole, and the title takes the rest", () => {
+  const names = ["pi-mono--workflowz-eval-kernel", "system--audit-nix", "dotfiles"];
+  const list = entries([], new Set(), names.map((n, i) => peer(n, { cwd: `/src/${n}`, busy: i < 2, title: `Task ${i}` })));
+  const wide = columns(list, 160);
+  assert.deepEqual(wide, { name: 30, role: 0, state: 7, time: 0, cost: 0 });
+  assert.equal(entryLine(list[0], false, theme, wide), "  ◆ pi-mono--workflowz-eval-kernel  working  Task 0", "no cut name, no empty gap");
+  const narrow = columns(list, 50);
+  assert.equal(narrow.name, 11, "a narrow pane shrinks the name before the title");
+  assert.match(entryLine(list[0], false, theme, narrow), /^  ◆ pi-mono--w… {2}working {2}Task 0$/);
+  const tasks = new Map<string, any>([task("r", "running")]);
+  const busy = entries(rows([run("oak", { status: "running", activeTask: "r", taskIds: ["r"], note: "x".repeat(60) })], tasks, 61_000), new Set(), []);
+  assert.deepEqual(columns(busy, 160), { name: 3, role: 5, state: 40, time: 6, cost: 0 }, "time is a fixed width so ticking never shifts columns");
+  assert.equal(columns(busy, 40).time, 0, "a cramped pane drops time and cost before the title");
 });

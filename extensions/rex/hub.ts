@@ -1,6 +1,6 @@
 import { getMarkdownTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Editor, Markdown, matchesKey, truncateToWidth, type EditorTheme } from "@earendil-works/pi-tui";
-import { COMMANDS, CONFIRM, entryLine, HELP, listLines, replyTarget, SECTIONS, tailLines, type Entry, type HubAction } from "./hub-model.ts";
+import { columns, COMMANDS, CONFIRM, entryLine, HELP, listLines, replyTarget, SECTIONS, tailLines, type Entry, type HubAction } from "./hub-model.ts";
 import { money, widgetLine, type Row } from "./ui.ts";
 
 /** What the hub needs from the coordinator. Everything is re-read on each render. */
@@ -198,11 +198,12 @@ export function openHub(ctx: ExtensionContext, host: HubHost, signal: AbortSigna
       const listRoom = peeked ? Math.max(3, Math.min(18, room - Math.min(peeked.facts.length + peeked.body.length + 1, Math.ceil(room * 0.6)))) : Math.min(18, room);
       const overflow = list.length + new Set(list.map(e => e.section)).size > listRoom;
       const view = listLines(list, Math.max(0, at), Math.max(1, listRoom - (overflow ? 2 : 0)));
-      const middle: string[] = [];
+      // Children and other sessions align separately: one long session name must not pad every child.
+      const middle: string[] = [], kidCols = columns(kids, width), peerCols = columns(list.filter(e => e.kind === "peer"), width);
       if (view.above) middle.push(theme.fg("dim", `  ↑ ${view.above} more`));
       for (const line of view.lines) {
         if (line.kind === "section") middle.push(theme.fg(line.section === "attention" ? "warning" : line.section === "peers" ? "muted" : "accent", `${SECTIONS[line.section]}${line.count > 1 ? theme.fg("dim", ` · ${line.count}`) : ""}`));
-        else middle.push(entryLine(line.entry, line.index === at, theme, width));
+        else middle.push(entryLine(line.entry, line.index === at, theme, line.entry.kind === "peer" ? peerCols : kidCols));
       }
       if (view.below) middle.push(theme.fg("dim", `  ↓ ${view.below} more`));
       if (peeked) {

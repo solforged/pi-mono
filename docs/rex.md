@@ -142,18 +142,19 @@ Press `←` on an empty prompt (or `ctrl+shift+a`, or run `/agents`) to open the
 hub. It lists this session's children grouped by state, needing you first, and
 then the other live Pi sessions on this machine, from their
 [intercom](intercom.md) cards. The list updates live; `•` marks a result the
-parent has not read yet, `▪` a pin.
+parent has not read yet, `▪` a pin. Columns are as wide as their longest entry,
+so long session names stay whole; in a narrow pane they shrink before the title.
 
 ```text
 Agents · 3 children · 1 other session · $0.71
 Needs you
-› !·oak          scout   Waiting for user: Allow bash?   1m02s  $0.21  Check CI config
+› !·oak   scout    Waiting for user: Allow bash?  1m02s  $0.21  Check CI config
 Working
-  ● fern         worker  bash npm test                     48s  $0.40  Fix flaky retry test
+  ● fern  worker   bash npm test                    48s  $0.40  Fix flaky retry test
 Done
-  ✓•elm          advisor done                                   $0.10  Review retry design
+  ✓•elm   advisor  done                                  $0.10  Review retry design
 Other Pi sessions
-  ◆ rex-app      pi      working                                       Fix iOS scrollback
+  ◆ rex-app  working  Fix iOS scrollback
 ```
 
 | Key | Action |

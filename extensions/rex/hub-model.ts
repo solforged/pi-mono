@@ -31,22 +31,40 @@ export function entries(rows: Row[], unread: Set<string>, peers: Peer[]): Entry[
     state: r.state, title: r.title, elapsedMs: r.elapsedMs, cost: r.cost, pinned: r.pinned, unread: unread.has(r.id), childId: r.id }));
   const others: Entry[] = [...peers].sort((a, b) => Number(!!b.rex) - Number(!!a.rex) || Number(b.busy) - Number(a.busy) || a.started - b.started).map(p => ({
     key: `peer:${p.id}`, kind: "peer", section: "peers", glyph: p.busy ? "◆" : "◇", tone: p.busy ? "accent" : "muted",
-    name: base(p.cwd), role: "pi", state: p.rex ? (p.busy ? "working" : "idle") : "not in Rex", title: p.title ?? short(p.cwd), peer: p }));
+    name: base(p.cwd), role: "", state: p.rex ? (p.busy ? "working" : "idle") : "not in Rex", title: p.title ?? `in ${short(p.cwd.replace(/\/+[^/]*\/*$/, "")) || "/"}`, peer: p }));
   return [...kids, ...others].sort((a, b) => ORDER.indexOf(a.section) - ORDER.indexOf(b.section));
 }
 
+export interface Columns { name: number; role: number; state: number; time: number; cost: number }
+const GAP = 2, LEAD = 4, TITLE = 24, MIN = 8;
 /**
- * `› ! oak          scout   Allow bash?        1m02s  $0.21  Check CI config`.
- * Columns shrink with the pane (an unviewed Rex pane is 80 wide); the title takes the rest.
+ * Column widths from what the rows hold, so a long session name is not cut
+ * while the screen beside it is empty. The title takes what is left; when the
+ * pane is narrow, state and name shrink (not below 8), then time and cost go.
  */
-export function entryLine(e: Entry, selected: boolean, theme: Theme, width = 160) {
-  const rest = width - 25, numbers = rest >= 50;
-  const stateWidth = Math.max(12, Math.min(35, Math.floor((rest - (numbers ? 14 : 0)) * 0.55)));
-  const time = e.elapsedMs !== undefined ? duration(e.elapsedMs) : "", cost = e.cost ? money(e.cost) : "";
+export function columns(items: Entry[], width: number): Columns {
+  const longest = (f: (e: Entry) => number) => items.reduce((n, e) => Math.max(n, f(e)), 0);
+  const c: Columns = { name: longest(e => e.name.length), role: longest(e => e.role.length), state: longest(e => e.state.length),
+    // Fixed widths: these change every second and must not shift the columns.
+    time: items.some(e => e.elapsedMs !== undefined) ? 6 : 0, cost: items.some(e => e.cost) ? 6 : 0 };
+  c.name = Math.min(c.name, 40); c.state = Math.min(c.state, 40);
+  const used = () => LEAD + c.name + GAP + (c.role && c.role + GAP) + c.state + GAP + (c.time && c.time + 1) + (c.cost && c.cost + 1) + (c.time || c.cost ? GAP - 1 : 0);
+  while (width - used() < TITLE && (c.state > MIN || c.name > MIN)) {
+    if (c.state >= c.name && c.state > MIN) c.state--; else c.name--;
+  }
+  if (width - used() < TITLE) c.time = c.cost = 0;
+  return c;
+}
+
+/** `› ! oak    scout   Allow bash: gh run view?   1m02s  $0.21  Check CI config` */
+export function entryLine(e: Entry, selected: boolean, theme: Theme, c: Columns) {
+  const fit = (text: string, n: number) => oneLine(text, n).padEnd(n);
   const mark = e.pinned ? theme.fg("accent", "▪") : e.unread ? theme.fg("success", "•") : " ";
-  const label = oneLine(e.name, 12).padEnd(12), name = selected ? theme.fg("accent", label) : label;
-  return `${selected ? theme.fg("accent", "›") : " "} ${theme.fg(e.tone, e.glyph)}${mark}${name} ${theme.fg("muted", oneLine(e.role, 7).padEnd(7))} `
-    + `${oneLine(e.state, stateWidth - 1).padEnd(stateWidth)}${numbers ? `${theme.fg("dim", time.padStart(6))} ${theme.fg("dim", cost.padStart(6))} ` : ""} ${e.title}`;
+  const name = selected ? theme.fg("accent", fit(e.name, c.name)) : fit(e.name, c.name), gap = " ".repeat(GAP);
+  const numbers = [c.time ? theme.fg("dim", (e.elapsedMs !== undefined ? duration(e.elapsedMs) : "").padStart(c.time)) : "",
+    c.cost ? theme.fg("dim", (e.cost ? money(e.cost) : "").padStart(c.cost)) : ""].filter(Boolean).join(" ");
+  return `${selected ? theme.fg("accent", "›") : " "} ${theme.fg(e.tone, e.glyph)}${mark}${name}${gap}${c.role ? `${theme.fg("muted", fit(e.role, c.role))}${gap}` : ""}`
+    + `${fit(e.state, c.state)}${gap}${numbers ? `${numbers}${gap}` : ""}${e.title}`;
 }
 
 export type ListLine = { kind: "section"; section: Section; count: number } | { kind: "entry"; entry: Entry; index: number };
