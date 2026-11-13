@@ -5,7 +5,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { userStarted } from "../continue/started.ts";
-import { addUsage, bounded, emptyUsage } from "../workflows/process.ts";
+import { addUsage, bounded, emptyUsage, stopped } from "../workflows/process.ts";
 import { completeRole } from "../workflows/requests.ts";
 import { loadConfig, type Config, type RoleName } from "../workflows/roles.ts";
 import { createRunner } from "../workflows/subagents.ts";
@@ -169,7 +169,7 @@ export default async function (pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => { ctxNow = ctx; await refreshConfig(ctx).catch(() => undefined); });
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
     lifetime.abort(new Error("Workflow session closed"));
     if (flushTimer) clearTimeout(flushTimer);
     if (widgetTimer) clearTimeout(widgetTimer);
@@ -179,6 +179,8 @@ export default async function (pi: ExtensionAPI) {
     const usage = (jobs ?? retired)?.takeUsage();
     if (usage) recordUsage(pi, undefined, { role: "eval", usage });
     if (ctxNow?.mode === "tui") ctxNow.ui.setWidget("workflowz", undefined);
+    // Pi may exit as soon as the handlers return, before a child that ignores SIGTERM is killed.
+    await stopped();
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
