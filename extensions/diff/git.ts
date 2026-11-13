@@ -1,7 +1,8 @@
 // Collects and parses Git diffs for the viewer. No Pi imports: the viewer runs
 // as a plain Node process in its own Rex pane.
 import { execFile } from "node:child_process";
-import { open } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import { hostGit } from "../sandbox/hostgit.ts";
 
@@ -28,14 +29,16 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const MAX_OUTPUT = 64 * 1024 * 1024;
 const MAX_UNTRACKED = 300;
 const MAX_UNTRACKED_BYTES = 512 * 1024;
+/** A Git call that takes longer has stalled; without a limit it would hold up every later refresh. */
+const TIMEOUT_MS = 30_000;
 
 export type Git = (args: string[]) => Promise<string>;
 
-export function gitRunner(root: string): Git {
+export function gitRunner(root: string, timeout = TIMEOUT_MS): Git {
   return (args) => new Promise((resolve, reject) => {
     const call = hostGit(root, ["-c", "core.quotePath=false", ...args]);
-    execFile("git", call.args, { cwd: root, maxBuffer: MAX_OUTPUT, encoding: "utf8", env: { ...call.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } },
-      (error, stdout, stderr) => error ? reject(new Error(stderr.trim().split("\n")[0] || error.message)) : resolve(stdout));
+    execFile("git", call.args, { cwd: root, timeout, maxBuffer: MAX_OUTPUT, encoding: "utf8", env: { ...call.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } },
+      (error, stdout, stderr) => error ? reject(new Error(error.killed ? `git ${args[0]} timed out` : stderr.trim().split("\n")[0] || error.message)) : resolve(stdout));
   });
 }
 
@@ -77,17 +80,28 @@ export async function collect(root: string, source: Source, git: Git = gitRunner
 
 async function untracked(root: string, path: string): Promise<FileDiff> {
   const file: FileDiff = { path, status: "untracked", binary: false, notes: [], added: 0, removed: 0, hunks: [] };
+  const full = join(root, path);
   let handle;
   try {
-    handle = await open(join(root, path), "r");
-    const info = await handle.stat();
-    if (!info.isFile()) { file.notes.push("not a regular file"); return file; }
-    const size = Math.min(info.size, MAX_UNTRACKED_BYTES);
-    const buffer = Buffer.alloc(size);
-    await handle.read(buffer, 0, size, 0);
-    if (buffer.subarray(0, 8000).includes(0)) { file.binary = true; return file; }
-    let text = buffer.toString("utf8");
-    if (info.size > size) file.notes.push(`showing the first ${Math.round(size / 1024)} KB`);
+    const info = await lstat(full);
+    let text: string;
+    if (info.isSymbolicLink()) {
+      // As Git stores a link: its target, never what that points at.
+      file.notes.push("symbolic link");
+      text = await readlink(full);
+    } else if (!info.isFile()) {
+      file.notes.push("not a regular file");
+      return file;
+    } else {
+      // Not through a link, and without waiting: a FIFO opened to read blocks until someone writes to it.
+      handle = await open(full, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const size = Math.min(info.size, MAX_UNTRACKED_BYTES);
+      const buffer = Buffer.alloc(size);
+      const { bytesRead } = await handle.read(buffer, 0, size, 0);
+      if (buffer.subarray(0, 8000).includes(0)) { file.binary = true; return file; }
+      text = buffer.toString("utf8", 0, bytesRead);
+      if (info.size > size) file.notes.push(`showing the first ${Math.round(size / 1024)} KB`);
+    }
     if (text.endsWith("\n")) text = text.slice(0, -1);
     const lines = text === "" ? [] : text.split("\n");
     if (lines.length) file.hunks.push({ oldStart: 0, newStart: 1, context: "", lines: lines.map((line, i) => ({ kind: "+", text: line.replace(/\r$/, ""), new: i + 1 })) });

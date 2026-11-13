@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { changedHunks, collect, parseDiff, unquote } from "../extensions/diff/git.ts";
+import { changedHunks, collect, gitRunner, parseDiff, unquote } from "../extensions/diff/git.ts";
 import { bundledHighlighter, DEFAULT_SETTINGS, paneSize, readPanes, readSettings, registerDiff, run, tick, treeState, which } from "../extensions/diff/pane.ts";
 import { body, DEFAULT_PALETTE, emphasis, fileBody, hunkAt, layout, type View } from "../extensions/diff/render.ts";
 import { createHighlighter, loadHighlighter, piecesFromHtml, tokenFor } from "../extensions/diff/syntax.ts";
@@ -109,6 +109,25 @@ test("collects uncommitted, staged and branch diffs from a real repository", asy
   const branch = await collect(root, "branch");
   assert.equal(branch.label, "since main");
   assert.deepEqual(branch.files.map((file) => file.path), ["a.txt", "blob.bin", "new.txt", "staged.txt"]);
+});
+
+test("a refresh cannot stall on a pipe behind an untracked link, or on Git", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "diff-stall-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  git(root, "init", "-q", "-b", "main");
+  await writeFile(join(root, "real.txt"), "one\ntwo\n");
+  execFileSync("mkfifo", [join(root, "pipe")]);
+  await symlink("pipe", join(root, "to-pipe"));
+  await symlink("real.txt", join(root, "to-real"));
+  // Opening the pipe to read would wait for a writer that never comes.
+  const { files } = await collect(root, "uncommitted");
+  assert.deepEqual(files.map((file) => [file.path, file.notes, file.hunks[0]?.lines.map((line) => line.text)]), [
+    ["real.txt", [], ["one", "two"]],
+    ["to-pipe", ["symbolic link"], ["pipe"]],
+    ["to-real", ["symbolic link"], ["real.txt"]],
+  ]);
+  // `cat-file --batch` reads standard input, which never ends here.
+  await assert.rejects(gitRunner(root, 100)(["cat-file", "--batch"]), /git cat-file timed out/);
 });
 
 test("the pane's own Git calls find the working tree and its state", async (t) => {
