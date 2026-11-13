@@ -20,6 +20,11 @@ export function parseListing(output: Buffer): Listing {
   return { kind, entries };
 }
 
+// Runs fd with the remaining arguments, or exits with FIND_MISSING when the
+// searched path is not there, which fd itself reports like any other failure.
+export const FIND_MISSING = 97;
+export const FIND_SCRIPT = `[ -e "$1" ] || exit ${FIND_MISSING}; shift; exec fd "$@"`;
+
 // Prints D, F, or M on the first line, then runs ripgrep with the remaining
 // arguments. A directory is searched as "." from inside it, as Pi does: a glob
 // with a slash is matched against the path from there.

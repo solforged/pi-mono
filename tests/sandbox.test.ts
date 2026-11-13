@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { sharedTarget, shareCargoTarget } from "../extensions/sandbox/cargo.ts";
 import { ContainerCli, EXEC_ID, runProcess, STOP_SCRIPT, type RunOptions, type RunResult } from "../extensions/sandbox/container.ts";
-import { commandEnv, fdArgs, GREP_SCRIPT, GrepCollector, guestError, parseListing, rgArgs, sniffImage } from "../extensions/sandbox/guest.ts";
+import { commandEnv, fdArgs, FIND_MISSING, FIND_SCRIPT, GREP_SCRIPT, GrepCollector, guestError, parseListing, rgArgs, sniffImage } from "../extensions/sandbox/guest.ts";
 import { repath, shareOutput } from "../extensions/sandbox/output.ts";
 import { buildPlan, containerName, promptNote, runArgs, type Probe } from "../extensions/sandbox/plan.ts";
 import { contextOf, gitContext } from "../extensions/sandbox/probe.ts";
@@ -249,6 +249,14 @@ test("a grep glob with a slash matches from the searched directory", async (t) =
   assert.deepEqual(run(dir).files, ["c.ts", "src/a.ts", "src/deep/b.ts"]);
   assert.deepEqual(run(join(dir, "c.ts")), { kind: "F", files: ["c.ts"] });
   assert.equal(run(join(dir, "absent")).kind, "M");
+});
+
+test("find tells a missing folder from a search that failed, in one run", { skip: !["fd"].every((bin) => { try { execFileSync("which", [bin]); return true; } catch { return false; } }) && "needs fd" }, async (t) => {
+  const dir = await temporary(t);
+  await writeFile(join(dir, "a.txt"), "");
+  const find = (path: string) => { try { return execFileSync("sh", ["-c", FIND_SCRIPT, "sh", path, ...fdArgs("*.txt", path, 10)], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch (error: any) { return error.status as number; } };
+  assert.equal(find(dir), `${join(dir, "a.txt")}\n`);
+  assert.equal(find(join(dir, "nowhere")), FIND_MISSING);
 });
 
 test("guest errors and environment stay narrow", () => {

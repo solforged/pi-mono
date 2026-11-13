@@ -303,15 +303,15 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     request.answer = current().then((s) => s?.command(request.argv, { cwd: request.cwd }));
   });
 
-  const route = <T extends { execute: (...args: any[]) => any }>(make: (cwd: string, sandbox?: Sandbox) => T) => ({
+  const route = <T extends { execute: (...args: any[]) => any }>(make: (cwd: string, sandbox?: Sandbox, signal?: AbortSignal) => T) => ({
     ...make(process.cwd()),
     async execute(id: string, params: any, signal: AbortSignal | undefined, onUpdate: any, ctx: ExtensionContext) {
-      return make(ctx.cwd, await current()).execute(id, params, signal, onUpdate, ctx);
+      return make(ctx.cwd, await current(), signal).execute(id, params, signal, onUpdate, ctx);
     },
   });
-  pi.registerTool(route((cwd, s) => createReadToolDefinition(cwd, s ? { operations: readOps(s) } : undefined)));
-  pi.registerTool(route((cwd, s) => createWriteToolDefinition(cwd, s ? { operations: writeOps(s) } : undefined)));
-  pi.registerTool(route((cwd, s) => createEditToolDefinition(cwd, s ? { operations: editOps(s) } : undefined)));
+  pi.registerTool(route((cwd, s, signal) => createReadToolDefinition(cwd, s ? { operations: readOps(s, signal) } : undefined)));
+  pi.registerTool(route((cwd, s, signal) => createWriteToolDefinition(cwd, s ? { operations: writeOps(s, signal) } : undefined)));
+  pi.registerTool(route((cwd, s, signal) => createEditToolDefinition(cwd, s ? { operations: editOps(s, signal) } : undefined)));
   pi.registerTool({
     ...createBashToolDefinition(process.cwd()),
     async execute(id: string, params: any, signal: AbortSignal | undefined, onUpdate: any, ctx: ExtensionContext) {
@@ -336,8 +336,8 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   });
   // Pi leaves ls, find and grep off unless asked for; registering them here
   // would otherwise switch them on, and their declarations into every request.
-  pi.registerTool({ ...route((cwd, s) => createLsToolDefinition(cwd, s ? { operations: lsOps(s) } : undefined)), defaultActive: false });
-  pi.registerTool({ ...route((cwd, s) => createFindToolDefinition(cwd, s ? { operations: findOps(s) } : undefined)), defaultActive: false });
+  pi.registerTool({ ...route((cwd, s, signal) => createLsToolDefinition(cwd, s ? { operations: lsOps(s, signal) } : undefined)), defaultActive: false });
+  pi.registerTool({ ...route((cwd, s, signal) => createFindToolDefinition(cwd, s ? { operations: findOps(s, signal) } : undefined)), defaultActive: false });
   const grepTool = createGrepToolDefinition(process.cwd());
   pi.registerTool({
     ...grepTool,

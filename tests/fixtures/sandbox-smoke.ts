@@ -129,6 +129,16 @@ export default function (pi: ExtensionAPI) {
         await assert.rejects(pending, /abort/i);
         await sleep(2500);
         assert.match(text(await call("bash", { command: "pgrep -f 'sleep 60[01]' || echo none-left" })), /none-left/);
+        // File tools stop with their call too: a read that can never finish leaves no `cat` behind.
+        await call("bash", { command: "mkfifo /tmp/pi-smoke-fifo" });
+        const stopRead = new AbortController();
+        const reading = call("read", { path: "/tmp/pi-smoke-fifo" }, stopRead.signal);
+        await sleep(1500);
+        stopRead.abort();
+        await assert.rejects(reading, /abort/i);
+        await sleep(1000);
+        assert.match(text(await call("bash", { command: "pgrep -x cat || echo none-left" })), /none-left/);
+        await assert.rejects(call("find", { pattern: "*.txt", path: "nowhere" }), /Path not found/);
         // So does a timeout, without waiting for the client to be killed.
         const timing = Date.now();
         await assert.rejects(call("bash", { command: "sleep 602", timeout: 1 }), /timed out after 1 seconds/);

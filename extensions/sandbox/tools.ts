@@ -7,16 +7,27 @@ import {
 import { posix } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { Sandbox } from "./sandbox.ts";
-import { commandEnv, fdArgs, GREP_SCRIPT, GrepCollector, type GrepParams, guestError, LS_SCRIPT, parseListing, rgArgs, sniffImage, type Listing } from "./guest.ts";
+import { commandEnv, fdArgs, FIND_MISSING, FIND_SCRIPT, GREP_SCRIPT, GrepCollector, type GrepParams, guestError, LS_SCRIPT, parseListing, rgArgs, sniffImage, type Listing } from "./guest.ts";
 
 const READ_LIMIT = 256 * 1024 * 1024;
+const FILE_TIMEOUT_MS = 120_000;
 
-export function readOps(sandbox: Sandbox): ReadOperations & Pick<EditOperations, "readFile" | "access"> {
+// Pi's file operations take no abort signal, so the tool call's own is passed
+// in, and each is bounded: reading a FIFO or a device would otherwise never
+// end, in a guest process that outlives the tool call.
+async function run(sandbox: Sandbox, argv: string[], signal?: AbortSignal, options: { maxBytes?: number; input?: Buffer } = {}) {
+  const result = await sandbox.exec(argv, { ...options, signal, timeoutMs: FILE_TIMEOUT_MS });
+  if (result.aborted) throw new Error("Operation aborted");
+  if (result.timedOut) throw new Error(`Timed out after ${FILE_TIMEOUT_MS / 1000} seconds in the sandbox: ${argv[0]} ${argv.at(-1)}`);
+  return result;
+}
+
+export function readOps(sandbox: Sandbox, signal?: AbortSignal): ReadOperations & Pick<EditOperations, "readFile" | "access"> {
   const cache = new Map<string, Promise<Buffer>>();
   const load = (path: string) => {
     let pending = cache.get(path);
     if (!pending) {
-      pending = sandbox.exec(["cat", "--", path], { maxBytes: READ_LIMIT }).then((result) => {
+      pending = run(sandbox, ["cat", "--", path], signal, { maxBytes: READ_LIMIT }).then((result) => {
         if (result.truncated) throw new Error(`File is larger than ${formatSize(READ_LIMIT)}: ${path}`);
         if (result.code !== 0) throw guestError(result.stderr, path, "open");
         return result.stdout;
@@ -32,30 +43,28 @@ export function readOps(sandbox: Sandbox): ReadOperations & Pick<EditOperations,
   };
 }
 
-export function writeOps(sandbox: Sandbox): WriteOperations {
+export function writeOps(sandbox: Sandbox, signal?: AbortSignal): WriteOperations {
   return {
-    mkdir: async (dir) => {
-      const result = await sandbox.exec(["mkdir", "-p", "--", dir]);
-      if (result.code !== 0) throw guestError(result.stderr, dir, "mkdir");
-    },
+    // Pi makes the folder and then writes; writeFile does both in one exec.
+    mkdir: async () => {},
     writeFile: async (path, content) => {
-      const result = await sandbox.exec(["sh", "-c", 'mkdir -p -- "$(dirname -- "$1")" && cat > "$1"', "sh", path], { input: Buffer.from(content, "utf8") });
+      const result = await run(sandbox, ["sh", "-c", 'mkdir -p -- "$(dirname -- "$1")" && cat > "$1"', "sh", path], signal, { input: Buffer.from(content, "utf8") });
       if (result.code !== 0) throw guestError(result.stderr, path, "open");
     },
   };
 }
 
-export function editOps(sandbox: Sandbox): EditOperations {
-  const { readFile, access } = readOps(sandbox);
-  return { readFile, access, writeFile: writeOps(sandbox).writeFile };
+export function editOps(sandbox: Sandbox, signal?: AbortSignal): EditOperations {
+  const { readFile, access } = readOps(sandbox, signal);
+  return { readFile, access, writeFile: writeOps(sandbox, signal).writeFile };
 }
 
-export function lsOps(sandbox: Sandbox): LsOperations {
+export function lsOps(sandbox: Sandbox, signal?: AbortSignal): LsOperations {
   const listings = new Map<string, Promise<Listing>>();
   const list = (path: string) => {
     let pending = listings.get(path);
     if (!pending) {
-      pending = sandbox.exec(["sh", "-c", LS_SCRIPT, "sh", path]).then((result) => {
+      pending = run(sandbox, ["sh", "-c", LS_SCRIPT, "sh", path], signal).then((result) => {
         if (result.code !== 0) throw guestError(result.stderr, path, "scandir");
         return parseListing(result.stdout);
       });
@@ -79,11 +88,13 @@ export function lsOps(sandbox: Sandbox): LsOperations {
   };
 }
 
-export function findOps(sandbox: Sandbox): FindOperations {
+export function findOps(sandbox: Sandbox, signal?: AbortSignal): FindOperations {
   return {
-    exists: async (path) => (await sandbox.exec(["test", "-e", path])).code === 0,
+    // Pi asks this first and then globs; the glob's exec answers both, with Pi's own error.
+    exists: async () => true,
     glob: async (pattern, cwd, options) => {
-      const result = await sandbox.exec(["fd", ...fdArgs(pattern, cwd, options.limit, options.ignore)]);
+      const result = await run(sandbox, ["sh", "-c", FIND_SCRIPT, "sh", cwd, ...fdArgs(pattern, cwd, options.limit, options.ignore)], signal);
+      if (result.code === FIND_MISSING) throw new Error(`Path not found: ${cwd}`);
       if (result.code !== 0 && !result.stdout.length) throw new Error(result.stderr.trim() || `fd exited with code ${result.code}`);
       return result.stdout.toString("utf8").split("\n").map((line) => line.replace(/\r$/, "").trim()).filter(Boolean);
     },
