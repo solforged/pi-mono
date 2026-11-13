@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -278,4 +279,40 @@ test("files staged before the first commit are split like any others", async (t)
   assert.deepEqual(result.committed, ["feat: added a", "feat: added b"]);
   assert.equal((await git("show", "--stat", "--format=", "HEAD~1")).includes("b.txt"), false);
   assert.match(await git("show", "--stat", "--format=", "HEAD"), /b\.txt/);
+});
+
+test("a submodule is committed by its recorded commit, without running Git inside it", async (t) => {
+  const { repo, git, ctx, home } = await isolated(t);
+  // As a sandbox guest could leave it: a repository of its own whose config names a program to run.
+  const marker = join(home, "ran"), trap = join(home, "trap.sh");
+  await writeFile(trap, `#!/bin/sh\necho ran >> ${marker}\n`);
+  await chmod(trap, 0o755);
+  const nested = join(repo, "nested");
+  await mkdir(nested);
+  const inside = async (...args: string[]) => {
+    const result = await runProcess("git", args, { cwd: nested, signal: ctx.signal, env: ctx.env });
+    assert.equal(result.code, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  await inside("init", "-q");
+  await writeFile(join(nested, "n.txt"), "one\n");
+  await inside("add", ".");
+  await inside("commit", "-qm", "one");
+  await git("add", "nested");
+  await git("commit", "-qm", "init");
+  await writeFile(join(nested, "n.txt"), "two\n");
+  await inside("commit", "-qam", "two");
+  const head = await inside("rev-parse", "HEAD");
+  await inside("config", "core.fsmonitor", trap);
+  await writeFile(join(nested, "n.txt"), "uncommitted\n");
+  await writeFile(join(repo, "a.txt"), "a\n");
+
+  const current = await snapshot(ctx);
+  const { units, sections } = await analyze(ctx, current.head, current.files);
+  assert.deepEqual(units.map((unit) => unit.paths[0]).sort(), ["a.txt", "nested"]);
+  assert.match(sections.join("\n"), /\+Subproject commit [0-9a-f]{40}$/m);
+  const plan = await createPlan(ctx, current, "style", async () => JSON.stringify({ groups: [{ subject: "chore: moved nested", units: units.map((unit) => unit.id) }] }));
+  assert.equal((await applyGroups(ctx, plan, async () => {})).error, undefined);
+  assert.match(await git("ls-tree", "HEAD", "nested"), new RegExp(`^160000 commit ${head}\\tnested`));
+  assert.equal(existsSync(marker), false, "Git ran inside the submodule");
 });

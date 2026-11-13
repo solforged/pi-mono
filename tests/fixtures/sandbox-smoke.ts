@@ -125,12 +125,32 @@ export default function (pi: ExtensionAPI) {
         assert.match(text(await call("grep", { pattern: "needle", path: "many", limit: 5 })), /5 matches limit reached/);
         assert(Date.now() - limited < 4000, `a limited grep took ${Date.now() - limited} ms`);
 
+        // The guards cannot be left behind by moving the Git directory away.
+        assert.match(text(await call("bash", { command: "mv .git .git-moved 2>&1 || echo guarded" })), /guarded/);
+        assert(existsSync(join(repo, ".git", "HEAD")) && !existsSync(join(repo, ".git-moved")));
+        // A commondir file can still be added. Plain host Git then takes its
+        // config from the guest; the host tools name the repository themselves.
+        await call("bash", { command: [
+          "mkdir .evil && cp .git/config .evil/config",
+          `printf '[core]\\n\\tfsmonitor = %s/trap.sh\\n' "$PWD" >> .evil/config`,
+          'for n in objects refs HEAD info; do ln -s "$PWD/.git/$n" .evil/$n; done',
+          `printf '#!/bin/sh\\nuname -s >> %s/trap-ran\\n' "$PWD" > trap.sh && chmod +x trap.sh`,
+          'echo "$PWD/.evil" > .git/commondir',
+        ].join(" && ") });
+        // The guest's own Git runs it too, in the guest: only a run on macOS counts.
+        const ranOnHost = () => existsSync(join(repo, "trap-ran")) && readFileSync(join(repo, "trap-ran"), "utf8").includes("Darwin");
+        git("status", "--porcelain");
+        assert(ranOnHost(), "the planted commondir did not redirect plain Git; the check below proves nothing");
+        rmSync(join(repo, "trap-ran"));
+
         // Commits: the guest refuses, the host tool commits what the guest staged.
         await call("bash", { command: "git add src/hello.txt" });
         assert.match(text(await call("bash", { command: "git commit -m 'feat: tried' 2>&1; echo rc=$?" })), /created on the host[\s\S]*rc=1/);
         process.env.GIT_CONFIG_GLOBAL = "/dev/null";
         assert.match(text(await call("git_commit", { message: "feat: committed from the sandbox" })), /committed from the sandbox/);
         delete process.env.GIT_CONFIG_GLOBAL;
+        assert(!ranOnHost(), "the host commit ran a program the guest named");
+        rmSync(join(repo, ".git", "commondir"));
         assert.match(git("log", "-1", "--format=%s"), /committed from the sandbox/);
 
         // The prompt says where tools run; turning it off routes tools to the host.

@@ -3,6 +3,7 @@
 import { execFile } from "node:child_process";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
+import { hostGit } from "../sandbox/hostgit.ts";
 
 export type Source = "uncommitted" | "staged" | "branch";
 export const SOURCES: Source[] = ["uncommitted", "staged", "branch"];
@@ -32,7 +33,8 @@ export type Git = (args: string[]) => Promise<string>;
 
 export function gitRunner(root: string): Git {
   return (args) => new Promise((resolve, reject) => {
-    execFile("git", ["-c", "core.quotePath=false", ...args], { cwd: root, maxBuffer: MAX_OUTPUT, encoding: "utf8", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } },
+    const call = hostGit(root, ["-c", "core.quotePath=false", ...args]);
+    execFile("git", call.args, { cwd: root, maxBuffer: MAX_OUTPUT, encoding: "utf8", env: { ...call.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } },
       (error, stdout, stderr) => error ? reject(new Error(stderr.trim().split("\n")[0] || error.message)) : resolve(stdout));
   });
 }

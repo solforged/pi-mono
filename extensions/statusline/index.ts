@@ -1,9 +1,11 @@
+import { execFile } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   displayPath, fitSegments, formatCost, formatTokens, icons, layout, parseGitStatus, readContribution, rightStatuses, sessionStats,
   modelLabel, thinkingColor, thinkingIcon, thinkingLabel, worktreeHome, SEGMENT_EVENT, type Contribution, type Git, type Segment, type Stats,
 } from "./format.ts";
+import { hostGit, trustedLayout } from "../sandbox/hostgit.ts";
 
 const POLL_MS = 10_000; // Catches changes made outside Pi.
 const DEBOUNCE_MS = 300;
@@ -41,8 +43,14 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
   let git: Git | undefined;
   let home: string | undefined; // The main checkout's directory when cwd is in a linked worktree.
   let render = () => {};
-  void pi.exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"], { cwd, timeout: 5000 })
-    .then((result) => { home = result.code === 0 ? worktreeHome(cwd, result.stdout) : undefined; if (home && !closed) render(); }, () => undefined);
+  // Read from the directory, not asked of Git: nothing a sandbox guest left in the repository runs.
+  const layout = trustedLayout(cwd);
+  if (layout) home = worktreeHome(cwd, [layout.workTree, layout.gitDir, layout.commonDir].join("\n"));
+  // pi.exec takes no environment, which is what names the repository for Git.
+  const status = () => new Promise<string | undefined>((resolve) => {
+    const call = hostGit(cwd, ["--no-optional-locks", "status", "--porcelain=v2", "--branch"]);
+    execFile("git", call.args, { cwd, timeout: 5000, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env: call.env }, (error, stdout) => resolve(error ? undefined : stdout));
+  });
   let running = false, again = false, closed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -50,8 +58,8 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
     if (running) { again = true; return; }
     running = true;
     try {
-      const result = await pi.exec("git", ["--no-optional-locks", "status", "--porcelain=v2", "--branch"], { cwd, timeout: 5000 });
-      git = result.code === 0 ? parseGitStatus(result.stdout) : undefined;
+      const output = await status();
+      git = output === undefined ? undefined : parseGitStatus(output);
       if (!closed) render();
     } catch { git = undefined; }
     finally {

@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { lstat, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { hostGit } from "../sandbox/hostgit.ts";
 import { bounded, runProcess } from "./process.ts";
 import { completeRole } from "./requests.ts";
 import { configSnapshot, type ConfigSource } from "./roles.ts";
@@ -124,10 +126,17 @@ function utf8(buffer: Buffer): string | null {
   return Buffer.from(text, "utf8").equals(buffer) ? text : null;
 }
 
+// Every call names the repository and stays out of submodules: see ../sandbox/hostgit.ts.
+function call(ctx: GitCtx, args: string[]) {
+  const safe = hostGit(ctx.repo, args, ctx.env ?? process.env);
+  return { args: ["-C", ctx.repo, ...safe.args], env: safe.env };
+}
+
 function gitBytes(ctx: GitCtx, args: string[]): Promise<Buffer> {
   ctx.signal.throwIfAborted();
+  const git = call(ctx, args);
   return new Promise((resolvePromise, reject) => {
-    execFile("git", ["-C", ctx.repo, ...args], { env: ctx.env ?? process.env, signal: ctx.signal, encoding: "buffer", maxBuffer: 16 * 1024 * 1024 },
+    execFile("git", git.args, { env: git.env, signal: ctx.signal, encoding: "buffer", maxBuffer: 16 * 1024 * 1024 },
       (error, stdout, stderr) => error ? reject(new Error(stderr.toString("utf8").trim() || error.message)) : resolvePromise(stdout));
   });
 }
@@ -138,9 +147,10 @@ function gitBytes(ctx: GitCtx, args: string[]): Promise<Buffer> {
  */
 function gitHead(ctx: GitCtx, args: string[], bytes: number): Promise<string> {
   ctx.signal.throwIfAborted();
+  const git = call(ctx, args);
   return new Promise((resolvePromise, reject) => {
     // The margin keeps a character split at the buffer's end outside the part that is kept.
-    execFile("git", ["-C", ctx.repo, ...args], { env: ctx.env ?? process.env, signal: ctx.signal, encoding: "buffer", maxBuffer: bytes + 64 },
+    execFile("git", git.args, { env: git.env, signal: ctx.signal, encoding: "buffer", maxBuffer: bytes + 64 },
       (error: any, stdout, stderr) => error && error.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" && error.code !== 1
         ? reject(new Error(stderr.toString("utf8").trim() || error.message))
         : resolvePromise(bounded(stdout.toString("utf8"), bytes)));
@@ -148,14 +158,16 @@ function gitHead(ctx: GitCtx, args: string[], bytes: number): Promise<string> {
 }
 
 async function git(ctx: GitCtx, args: string[], allow = [0], input?: string): Promise<string> {
-  const result = await runProcess("git", ["-C", ctx.repo, ...args], { cwd: ctx.repo, signal: ctx.signal, env: ctx.env ?? process.env, input });
+  const safe = call(ctx, args);
+  const result = await runProcess("git", safe.args, { cwd: ctx.repo, signal: ctx.signal, env: safe.env, input });
   if (!allow.includes(result.code)) throw new Error((result.stderr || result.stdout || `git ${args[0]} failed`).trim());
   if (result.stdout.endsWith("\n[truncated]")) throw new Error(`git ${args[0]} output is too large for /commit`);
   return result.stdout;
 }
 
 export async function repoRoot(cwd: string, signal: AbortSignal, env?: NodeJS.ProcessEnv): Promise<string> {
-  const result = await runProcess("git", ["rev-parse", "--show-toplevel"], { cwd, signal, env: env ?? process.env });
+  const safe = hostGit(cwd, ["rev-parse", "--show-toplevel"], env ?? process.env);
+  const result = await runProcess("git", safe.args, { cwd, signal, env: safe.env });
   if (result.code !== 0) throw new Error("Not a git repository");
   return resolve(result.stdout.trim());
 }
@@ -178,10 +190,12 @@ async function digestFile(repo: string, path: string): Promise<string> {
 export async function snapshot(ctx: GitCtx): Promise<{ head: string; files: FileState[] }> {
   ctx.signal.throwIfAborted();
   for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REBASE_HEAD", "REVERT_HEAD"]) {
-    const result = await runProcess("git", ["-C", ctx.repo, "rev-parse", "-q", "--verify", name], { cwd: ctx.repo, signal: ctx.signal, env: ctx.env ?? process.env });
+    const safe = call(ctx, ["rev-parse", "-q", "--verify", name]);
+    const result = await runProcess("git", safe.args, { cwd: ctx.repo, signal: ctx.signal, env: safe.env });
     if (result.code === 0 && result.stdout.trim()) throw new Error(`Repository has ${name}; finish that operation before /commit`);
   }
-  const headResult = await runProcess("git", ["-C", ctx.repo, "rev-parse", "--verify", "HEAD"], { cwd: ctx.repo, signal: ctx.signal, env: ctx.env ?? process.env });
+  const safeHead = call(ctx, ["rev-parse", "--verify", "HEAD"]);
+  const headResult = await runProcess("git", safeHead.args, { cwd: ctx.repo, signal: ctx.signal, env: safeHead.env });
   const head = headResult.code === 0 ? headResult.stdout.trim() : "unborn";
   const raw = await git(ctx, ["status", "--porcelain=v2", "-z", "--untracked-files=all"]);
   const files = parsePorcelainV2(raw);
@@ -369,7 +383,8 @@ export async function checkMessages(ctx: GitCtx, groups: Group[]): Promise<strin
       if (group.status === "done") continue;
       const file = join(dir, `msg-${index}`);
       await writeFile(file, messageText(group), { mode: 0o600 });
-      const result = await runProcess("git", ["-C", ctx.repo, "hook", "run", "--ignore-missing", "commit-msg", "--", file], { cwd: ctx.repo, signal: ctx.signal, env: ctx.env ?? process.env });
+      const safe = call(ctx, ["hook", "run", "--ignore-missing", "commit-msg", "--", file]);
+      const result = await runProcess("git", safe.args, { cwd: ctx.repo, signal: ctx.signal, env: safe.env });
       if (result.code !== 0) {
         const output = stripAnsi(`${result.stderr}\n${result.stdout}`).split("\n").filter((line) => line.trim() && !/\bINF\b/.test(line)).join("\n");
         errors.push(`Group ${index + 1} ("${group.subject}") failed the commit-msg hook:\n${bounded(output || "hook exited non-zero", 1500)}`);
@@ -440,15 +455,19 @@ export async function applyGroups(ctx: GitCtx, plan: Plan, save: (plan: Plan) =>
       if (unit.hunk === undefined) whole.push(...unit.paths);
       else split.add(unit.paths[0]);
     }
-    if (whole.length) await git(ctx, ["add", "-A", "--", ...whole.map(literal)]);
+    // `git add` can run Git inside a submodule, under that repository's own
+    // config, to look for edits; update-index only records its commit.
+    const repos = whole.filter((path) => existsSync(join(ctx.repo, safePath(path), ".git")));
+    const files = whole.filter((path) => !repos.includes(path));
+    if (repos.length) await git(ctx, ["update-index", "--add", "--remove", "--", ...repos.map(safePath)]);
+    if (files.length) await git(ctx, ["add", "-A", "--", ...files.map(literal)]);
     for (const path of split) {
       // Earlier groups are already committed, so stage every hunk up to and including this group.
       const indices = plan.units.filter((unit) => unit.paths[0] === path && unit.hunk !== undefined && (groupOf.get(unit.id) ?? Infinity) <= index).map((unit) => unit.hunk!);
       await stageHunks(ctx, plan, path, indices);
     }
-    const result = await runProcess("git", ["-C", ctx.repo, "commit", "--cleanup=verbatim", "-F", "-"], {
-      cwd: ctx.repo, signal: ctx.signal, env: ctx.env ?? process.env, input: messageText(group),
-    });
+    const safe = call(ctx, ["commit", "--cleanup=verbatim", "-F", "-"]);
+    const result = await runProcess("git", safe.args, { cwd: ctx.repo, signal: ctx.signal, env: safe.env, input: messageText(group) });
     if (result.code !== 0) {
       await save(plan);
       return { committed, error: stripAnsi(result.stderr || result.stdout || "git commit failed").trim() };

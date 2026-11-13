@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { hostGit } from "../sandbox/hostgit.ts";
 import { bounded, runProcess, Semaphore, emptyUsage, addUsage, type Usage } from "./process.ts";
 import { configSnapshot, resolveRole, type Config, type ConfigSource, type RoleName } from "./roles.ts";
 import { atomicWrite, privateDir, saveJson, scopeRoot } from "./state.ts";
@@ -103,7 +104,8 @@ export function childArgs(provider: string, model: string, thinking: string, too
 
 export async function createWorktree(cwd: string, destination: string, signal: AbortSignal) {
   const git = async (args: string[]) => {
-    const result = await runProcess("git", args, { cwd, signal });
+    const call = hostGit(cwd, args);
+    const result = await runProcess("git", call.args, { cwd, signal, env: call.env });
     if (result.code !== 0) throw new Error(result.stderr || result.stdout || "Git command failed");
     return result.stdout.trim();
   };

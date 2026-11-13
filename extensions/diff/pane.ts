@@ -103,8 +103,9 @@ export function bundledHighlighter(execPath = process.execPath): string | undefi
 
 export type Run = (command: string, args: string[], cwd: string) => Promise<string>;
 export const run: Run = (command, args, cwd) => new Promise((resolve, reject) => {
+  const call = command === "git" ? hostGit(cwd, args) : { args, env: process.env };
   // Optional locks off: a status check must never block Pi's own Git commands.
-  execFile(command, args, { cwd, timeout: 10_000, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } },
+  execFile(command, call.args, { cwd, timeout: 10_000, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env: { ...call.env, GIT_OPTIONAL_LOCKS: "0" } },
     (error, stdout, stderr) => error ? reject(new Error(stderr.trim().split("\n").at(-1) || error.message)) : resolve(stdout));
 });
 

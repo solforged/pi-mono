@@ -81,6 +81,27 @@ stages with `git add`, and the model calls `git_commit`, which runs
 `git commit` on the host. Guest commits fail unless forced with
 `--no-gpg-sign`.
 
+## Git on the host
+
+The guest can write to the repository, and Git takes its config, and the
+programs named there, from wherever the repository says. So the Git calls these
+extensions make on the host (the status line, `/diff`, `/wt`, `/commit`,
+workers' worktrees and `git_commit`) do not ask the repository:
+
+- They name the Git directory themselves, found by reading the folder. A
+  `commondir` file added to a main checkout is not followed.
+- While the sandbox is on, they keep to the repository that was there when the
+  session started. One the guest creates nearer the working directory is not
+  used, and `git_commit` refuses in a directory that had none: its hooks and
+  config would be the guest's.
+- They do not run Git inside submodules, whose config the guest can write.
+  The status line and `/diff` therefore show a submodule only when its commit
+  changed, not when its files did, and `/commit` records a submodule's commit
+  without looking inside.
+
+The first and last hold with the sandbox off too, so what a guest left behind
+does not run once you switch.
+
 With the sandbox off, host bash in a linked Git worktree whose root has a
 `Cargo.toml` sets `CARGO_TARGET_DIR` to the main checkout's `target/`, so
 throwaway lanes share one build instead of each copying every dependency. An
@@ -175,10 +196,14 @@ This keeps generated commands away from your home directory, credentials, and
 host processes. It does not make untrusted code safe to run later: the guest
 can still edit project files that you or your tools execute on the host
 (package scripts, Makefiles, `mise.toml`, hooks configured from the work tree),
-and it can reach the network. Submodule Git directories are not guarded, and
-neither is a `commondir` the guest adds to a Git directory that has none, such
-as a main checkout's: host Git would then read config and hooks from wherever
-it points.
+and it can reach the network.
+
+The Git protection covers these extensions' own calls. Git you run yourself in
+the project, including from a shell prompt or an editor, still reads whatever
+the guest left: a `commondir` file, or a submodule with its own config. A
+repository the guest created is trusted from the next Pi start, and in a
+linked worktree of a repository that reads `config.worktree`, the guest can
+replace that file.
 
 The browser is Chromium on the host, rendering pages the guest serves. It is
 as exposed to them as to any website, with its own profile.

@@ -4,10 +4,14 @@ import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { findLayout, hostGit } from "./hostgit.ts";
 import type { Probe } from "./plan.ts";
 
+// Git is asked only for the identity. The repository itself is found by
+// reading the directory, which cannot run anything the guest left there.
 const git = (cwd: string, args: string[]) => new Promise<string | undefined>((resolve) => {
-  execFile("git", ["-C", cwd, ...args], { timeout: 10000 }, (error, stdout) => resolve(error ? undefined : stdout.trim() || undefined));
+  const call = hostGit(cwd, args);
+  execFile("git", ["-C", cwd, ...call.args], { timeout: 10000, env: call.env }, (error, stdout) => resolve(error ? undefined : stdout.trim() || undefined));
 });
 const real = (path: string | undefined) => {
   if (!path || !existsSync(path)) return undefined;
@@ -30,11 +34,11 @@ export function cacheRoot(env = process.env) {
 // The Git top level of the working directory, or the directory itself.
 export async function findRoot(cwd: string) {
   const start = real(cwd) ?? cwd;
-  return real(await git(start, ["rev-parse", "--show-toplevel"])) ?? start;
+  return real(findLayout(start)?.workTree) ?? start;
 }
 
 /** The Git directory shared by every checkout of the repository at `root`, if it is one. */
-export const commonDirOf = async (root: string) => real(await git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+export const commonDirOf = async (root: string) => real(findLayout(root)?.commonDir);
 
 export async function probe(cwd: string, agentDir: string, packageDir: string, env = process.env): Promise<Probe> {
   const home = real(homedir()) ?? homedir();

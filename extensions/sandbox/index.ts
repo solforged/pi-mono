@@ -19,6 +19,7 @@ import { imageTag, Sandbox, type Phase } from "./sandbox.ts";
 import { chooseEnabled, inheritedSwitch, resolveSettings } from "./settings.ts";
 import { savedToggle, saveToggle, togglesFile } from "./toggles.ts";
 import { GUEST_COMMAND, SANDBOX_CHANGED, type GuestCommandRequest } from "./guest.ts";
+import { hostGit, pinLayout, trustedLayout } from "./hostgit.ts";
 import { repath, shareOutput } from "./output.ts";
 import { bashOps, editOps, findOps, grep, lsOps, readOps, writeOps } from "./tools.ts";
 
@@ -216,6 +217,8 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     browserAllowed ??= pi.getActiveTools().includes("browser");
     browserProblem = findBrowserProblem(ctx);
     let choice;
+    // Before any tool can run in the guest: host Git keeps to the repository that is here now.
+    pinLayout(ctx.cwd);
     projectRoot = await findRoot(ctx.cwd);
     repository = await commonDirOf(projectRoot);
     const carried = !!repository && handoff.__piSolSandboxOn === repository;
@@ -413,7 +416,10 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     parameters: Type.Object({ message: Type.String({ description: "Complete commit message: header line, then an optional blank line and body" }) }),
     async execute(_id, params, signal, _onUpdate, ctx) {
       if (!enabled) throw new Error("The sandbox is off; run git commit with bash.");
-      const result = await runProcess("git", ["-C", ctx.cwd, "commit", "--file", "-"], { input: params.message, signal, timeoutMs: 120000 });
+      // Its config and hooks would be the guest's own, and committing would run them here.
+      if (!trustedLayout(ctx.cwd)) throw new Error("This directory had no Git repository when the sandbox started, so one made since is not trusted on the host. Restart Pi to commit here.");
+      const call = hostGit(ctx.cwd, ["commit", "--file", "-"]);
+      const result = await runProcess("git", ["-C", ctx.cwd, ...call.args], { input: params.message, signal, timeoutMs: 120000, hostEnv: call.env });
       const text = `${result.stdout.toString("utf8")}${result.stderr}`.trim();
       if (result.aborted) throw new Error("aborted");
       if (result.code !== 0) throw new Error(text || `git commit exited with code ${result.code}`);

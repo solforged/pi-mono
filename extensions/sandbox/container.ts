@@ -12,6 +12,8 @@ export interface RunOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   maxBytes?: number;
+  /** The environment of the host process; `env` on an exec is the guest command's. */
+  hostEnv?: NodeJS.ProcessEnv;
   /** Called once when the process is first told to stop: on abort, timeout, or reaching `maxBytes`. */
   onStop?: () => void;
 }
@@ -31,7 +33,7 @@ const GUEST_GRACE_MS = 6000;
 
 export const runProcess: Runner = (command, args, options = {}) => new Promise((resolve, reject) => {
   if (options.signal?.aborted) return resolve({ code: null, stdout: Buffer.alloc(0), stderr: "", aborted: true, timedOut: false, truncated: false });
-  const child = spawn(command, args, { stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
+  const child = spawn(command, args, { env: options.hostEnv, stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
   const chunks: Buffer[] = [];
   let size = 0, stderr = "", aborted = false, timedOut = false, truncated = false;
   let killTimer: NodeJS.Timeout | undefined;
