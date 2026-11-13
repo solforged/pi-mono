@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import install from "../../extensions/sandbox/index.ts";
 import { containerName } from "../../extensions/sandbox/plan.ts";
+import { resolveSettings } from "../../extensions/sandbox/settings.ts";
 import { savedToggle, togglesFile } from "../../extensions/sandbox/toggles.ts";
 
 // Removes the throwaway repository's saved toggle, even after a failure.
@@ -82,6 +83,19 @@ export default function (pi: ExtensionAPI) {
         assert.match(text(await call("find", { pattern: "*.txt" })), /src\/hello\.txt/);
         assert.match(text(await call("grep", { pattern: "beta", context: 1 })), /notes\.txt:2: beta/);
         assert.match(text(await call("grep", { pattern: "absent-needle" })), /No matches found/);
+        // A glob with a slash is matched from the searched directory, as on the host.
+        assert.match(text(await call("grep", { pattern: "hello", glob: "src/*.txt" })), /^src\/hello\.txt:1: hello/);
+        assert.match(text(await call("grep", { pattern: "hello", path: "src", glob: "./*.txt" })), /^hello\.txt:1: hello/);
+
+        // Long output is saved where the guest's own tools can read it.
+        const long = text(await call("bash", { command: "seq 1 5000" }));
+        const log = /Full output: (\S+)\]/.exec(long)?.[1] ?? "";
+        assert.match(log, /\/pi-sandbox\/output\/pi-sbx-[^/]+\/pi-bash-[0-9a-f]+\.log$/, long.slice(-300));
+        assert.equal(readFileSync(log, "utf8").split("\n").length, 5001);
+        assert.match(text(await call("read", { path: log, limit: 2 })), /^1\n2\n/);
+        assert.match(text(await call("bash", { command: `sed -n 3p ${log}; wc -l < ${log}; touch ${log}.x 2>&1 || echo read-only` })), /^3\n5000\n[\s\S]*read-only/);
+        // A failing command reports its own exit status, with no restart.
+        assert.match(text(await call("bash", { command: "echo container x not found >&2; exit 3" })), /exited with code 3/);
         await assert.rejects(call("read", { path: "/etc/hostname-nope" }), /ENOENT|not found/i);
 
         // Host-only paths are absent; guards and overlays hold.
@@ -100,6 +114,16 @@ export default function (pi: ExtensionAPI) {
         await assert.rejects(pending, /abort/i);
         await sleep(2500);
         assert.match(text(await call("bash", { command: "pgrep -f 'sleep 60[01]' || echo none-left" })), /none-left/);
+        // So does a timeout, without waiting for the client to be killed.
+        const timing = Date.now();
+        await assert.rejects(call("bash", { command: "sleep 602", timeout: 1 }), /timed out after 1 seconds/);
+        assert(Date.now() - timing < 4000, `a timeout took ${Date.now() - timing} ms`);
+        assert.match(text(await call("bash", { command: "pgrep -f 'sleep 60[2]' || echo none-left" })), /none-left/);
+        // A search that stops at its limit ends ripgrep too.
+        await call("bash", { command: "mkdir -p many && for i in $(seq 1 300); do echo needle > many/$i.txt; done" });
+        const limited = Date.now();
+        assert.match(text(await call("grep", { pattern: "needle", path: "many", limit: 5 })), /5 matches limit reached/);
+        assert(Date.now() - limited < 4000, `a limited grep took ${Date.now() - limited} ms`);
 
         // Commits: the guest refuses, the host tool commits what the guest staged.
         await call("bash", { command: "git add src/hello.txt" });
@@ -110,8 +134,10 @@ export default function (pi: ExtensionAPI) {
         assert.match(git("log", "-1", "--format=%s"), /committed from the sandbox/);
 
         // The prompt says where tools run; turning it off routes tools to the host.
-        const prompt = await events.before_agent_start({ systemPrompt: "base" }, fake);
-        assert.match(prompt.systemPrompt, /Debian Linux arm64 container/);
+        const options: { sections: Record<string, string> } = { sections: {} };
+        await events.before_agent_start({ systemPromptOptions: options }, fake);
+        assert.match(options.sections.sandbox, /Debian Linux arm64 container/);
+        assert.doesNotMatch(options.sections.sandbox, /pi-sandbox\/output/);
         await commands.sandbox.handler("off", fake);
         assert.deepEqual(marker(), { key: "sandbox" });
         assert.match(text(await call("bash", { command: "uname -s" })), /Darwin/);
@@ -139,10 +165,14 @@ export default function (pi: ExtensionAPI) {
         assert(running(name), "the container did not survive a session switch");
         assert.match(text(await call("bash", { command: "pgrep -f 'sleep 700' >/dev/null && echo survived || echo restarted" })), /survived/);
 
-        // A toggle is remembered for the project's next launch, where no flag is given.
+        // A toggle is remembered for the project's next launch, where no flag is
+        // given, and only while it differs from the settings.
         const toggles = togglesFile(getAgentDir());
+        let global: unknown;
+        try { global = JSON.parse(readFileSync(join(getAgentDir(), "settings.json"), "utf8")).sandbox; } catch {}
+        const byDefault = resolveSettings(global, repo).enabled;
         await commands.sandbox.handler("off", fake);
-        assert.equal(savedToggle(toggles, repo), false);
+        assert.equal(savedToggle(toggles, repo), byDefault ? false : undefined);
         await events.session_shutdown({ reason: "quit" }, fake);
         for (let i = 0; i < 30 && running(name); i++) await sleep(500);
         assert(!running(name), "the container outlived its last session");
@@ -151,7 +181,7 @@ export default function (pi: ExtensionAPI) {
         await events.session_start({ reason: "startup" }, fake);
         assert.match(text(await call("bash", { command: "uname -s" })), /Darwin/);
         await commands.sandbox.handler("on", fake);
-        assert.equal(savedToggle(toggles, repo), undefined, "toggling back to the settings default keeps an entry");
+        assert.equal(savedToggle(toggles, repo), byDefault ? undefined : true);
         assert.match(text(await call("bash", { command: "uname -s" })), /Linux/);
 
         await events.session_shutdown({ reason: "quit" }, fake);

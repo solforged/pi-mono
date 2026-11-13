@@ -28,7 +28,7 @@ run = "node scripts/deferred-tools-eval.ts"
 
 [tasks."sandbox:smoke"]
 description = "Exercise the tool sandbox against live Apple containers, without model calls"
-run = "pi --offline --no-extensions --no-skills --no-context-files --no-prompt-templates --no-session -e ./tests/fixtures/sandbox-smoke.ts -p /sandbox-smoke"
+run = "pi --offline --no-extensions --no-skills --no-context-files --no-prompt-templates --no-session -e ./tests/fixtures/sandbox-smoke.ts -e ./tests/fixtures/no-model.ts --provider no-model --model no-model/none -p /sandbox-smoke"
 
 [tasks."computer:test"]
 description = "Test the assistant VM controller without model calls"
