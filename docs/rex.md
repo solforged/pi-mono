@@ -37,7 +37,7 @@ then ask Pi to use `rex_agent` for a small scout task:
 Each child has a short name, unique within the parent session. Pass `name`, or
 one is assigned (`birch`, `cedar`, `fern`, …). An optional `title` (2–6 words)
 labels the pane, roster and widget; without one, panes show only name and role. Names appear in the Rex pane
-label, the child's terminal title and header, the widget, the picker, and tool
+label, the child's terminal title and header, the widget, the hub, and tool
 results; tools and `/agents` take a name instead of an ID.
 
 Children appear in the [deck and Agents window](#deck-and-agents-window);
@@ -75,7 +75,7 @@ with its file paths. The widget is a single line with the total cost, grouping
 names by state with children needing you first:
 
 ```text
-Rex 9 · $1.62  ! oak needs you   ● birch cedar fern   ✓ elm pine   ✗ ash   ctrl+shift+a
+Rex 9 · $1.62  ! oak needs you   ● birch cedar fern   ✓ elm pine   ✗ ash   ← agents
 ```
 
 Children report their current tool and its main argument, with paths relative
@@ -120,7 +120,7 @@ Children are arranged automatically, designed for up to about 14 at once:
   child in the same format. It never takes focus; switch to it like any Rex tab.
   It closes when it holds no children.
 - **Overflow:** beyond that, children stay detached and keep running. They are
-  listed in the strip and roster, and the picker reaches them.
+  listed in the strip and roster, and the hub reaches them.
 
 A child that starts waiting for you is swapped into the deck at once; others
 wait until the deck child they would replace has been there 8 seconds. Swaps
@@ -136,27 +136,68 @@ re-laid out once; otherwise only the affected pane moves. If a mutation fails or
 the layout does not settle, automation pauses (with a notice) instead of
 retrying; arrange panes as you like, then `/agents layout` resumes it.
 
-## Controls and human takeover
+## Agent hub
 
-Press `ctrl+shift+a`, or run `/agents`, to open the agent picker:
+Press `←` on an empty prompt (or `ctrl+shift+a`, or run `/agents`) to open the
+hub. It lists this session's children grouped by state, needing you first, and
+then the other live Pi sessions on this machine, from their
+[intercom](intercom.md) cards. The list updates live; `•` marks a result the
+parent has not read yet, `▪` a pin.
+
+```text
+Agents · 3 children · 1 other session · $0.71
+Needs you
+› !·oak          scout   Waiting for user: Allow bash?   1m02s  $0.21  Check CI config
+Working
+  ● fern         worker  bash npm test                     48s  $0.40  Fix flaky retry test
+Done
+  ✓•elm          advisor done                                   $0.10  Review retry design
+Other Pi sessions
+  ◆ rex-app      pi      working                                       Fix iOS scrollback
+```
 
 | Key | Action |
 |---|---|
-| Enter | Pin to the deck, or unpin (at most one pin per slot) |
-| `z` | Zoom the child to fill its window (and switch there) until focus moves |
-| `f` / `g` | Focus the child's terminal / switch to the Agents window |
-| `p` / `a` | Park (detach, keeps running) / return to automatic placement |
-| `m` | Steer the active task, or start a follow-up when idle |
-| `r` | Show the latest task result and file paths |
-| `t` / `x` / `c` | Take control / cancel the task / close the terminal |
+| `↑` `↓` | Move; an open peek follows the selection. While you type a reply they move within it |
+| Space | Peek: a working child's or session's screen, read live from Rex; a finished child's result |
+| `→` / Enter | Open its pane: zoom it in this window or the Agents window, float it over the parent if detached, else just focus it |
+| Typing | Steer the selected child's running task, or start a follow-up when it is idle (Enter sends) |
+| `ctrl+t` | Pin to the deck, or unpin (at most one pin per slot) |
+| `ctrl+x` twice | Cancel the running task; on an idle child, close its terminal (files are kept) |
+| `ctrl+p` / `ctrl+a` | Park (detach, keeps running) / return to automatic placement |
+| `ctrl+g` / `ctrl+r` | Show the Agents window / print the latest result into the transcript |
+| `ctrl+o` twice | Take human control of an idle child |
+| `?` / `←` / Esc | All keys / back to the prompt (Esc first clears the reply, help or peek) |
 
-Rows are sorted with children needing you first; `▪` marks a pin. The same
-controls are available by name for scripts:
+Commands act only while the reply box is empty, so typing never triggers one.
+A reply belongs to the child it was started for, in the mode it was started in.
+If that child's task ends (or another starts) before you press Enter, the hub
+says so and a second Enter sends it the new way; a failed send keeps the text.
+A second `ctrl+x` acts only if it would still do what the first one announced.
+
+Opening a child leaves the hub open behind it. In the child, `←` on an empty
+prompt focuses the parent again, which ends a zoom. If the hub floated a
+detached child over the parent to open it, the child is detached again; a float
+you made yourself is left alone. So `←` `→` `←` is a round trip. Other sessions
+are focused where they are (a detached one must be shown in Rex first), and
+replies go only to children: type in a session's own pane, where `←` opens that
+session's hub. Peeks and replies never add entries to the parent transcript.
+The hub fits the pane: in a short one the list scrolls and the peek shrinks.
+
+`←` on a prompt you just emptied (by deleting text or leaving history) needs a
+second press, so a held backspace cannot jump away. The hub replaces Pi's
+editor with a subclass that adds only this key; if another extension has
+replaced the editor, `←` is left alone and `ctrl+shift+a` still works.
+
+## Controls and human takeover
+
+The hub's controls are also available by name for scripts:
 
 ```text
 /agents list              List children by name with recent task IDs
 /agents check             Check local Rex and configured workflow roles
 /agents layout            Resume paused automatic layout
+/agents open NAME         Open the child's pane as the hub's → does
 /agents pin NAME          Pin to the deck, or unpin
 /agents zoom NAME         Zoom the child to fill its window until focus moves
 /agents focus NAME        Focus the child's terminal
@@ -254,7 +295,7 @@ terminals and worker directories remain until explicitly removed.
 
 ## Checks
 
-`mise run test` covers deck/grid planning and a layout simulator at 14 children, names, `next` ordering, widget/picker formatting, protocol framing, persistent tasks, steering boundaries,
+`mise run test` covers deck/grid planning and a layout simulator at 14 children, names, `next` ordering, widget and hub formatting, the `←` gate, protocol framing, persistent tasks, steering boundaries,
 cancellation races, ownership arbitration, durable results, native layout checks,
 and cleanup with fake Rex and local sockets. It makes no model calls or live Rex
 mutations.
@@ -267,6 +308,8 @@ node tests/fixtures/rex-smoke.ts --dispatch
 node tests/fixtures/rex-smoke.ts --ask        # --dispatch plus a question answered in the child
 node tests/fixtures/rex-deck-smoke.ts 14
 node tests/fixtures/rex-deck-smoke.ts 6 --show   # needs Rex.app Remote Control
+node tests/fixtures/rex-hub-smoke.ts
+node tests/fixtures/rex-hub-smoke.ts --open      # also → into a child and ← back
 ```
 
 Both check native peek/toggle/keep/park, preserved focus, and takeover. The
@@ -281,6 +324,14 @@ switches back: in a displayed window, `session.move_block` splits 50/50 and the
 app may reset a split shortly afterwards, so the manager holds the parent's
 share with `session.resize_pane` for a few seconds after creating the deck.
 
+The hub check starts a real parent, a peer and two real children in a
+background window, from an isolated agent directory whose roles point at a
+fixed-response provider. It types into the parent: `←`, peeks at a running
+child, a finished one and the peer, steers, pins and cancels. `--open` also
+zooms into a child and comes back with `←` from its prompt; it switches Rex.app
+to the test window briefly and then back to the window that was active.
+
 Capabilities are checked against the running server's schemas through the
 [Rex CLI/server API](https://www.superlogical.com/rex/docs/automate/server-api).
-Terminal keystrokes and screen scraping are not the control protocol.
+Terminal keystrokes and screen scraping are not the control protocol; the hub
+reads terminal text only to display it.

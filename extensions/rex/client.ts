@@ -117,6 +117,11 @@ export class BlockGone extends Error {
   constructor(blockId: string) { super(`Rex block ${blockId} is missing: it no longer exists`); this.blockId = blockId; }
 }
 
+function layerOf(view: ObjectValue, blockId: string): any {
+  for (const window of view.windows ?? []) for (const layer of window.layers ?? [])
+    if ((layer.blocks ?? []).some((b: any) => b.block_id === blockId)) return layer;
+}
+
 /** Local-only CLI adapter. No command is interpreted by a shell; mutations are never retried. */
 export class RexClient {
   private identity?: { hostId: string; instanceId: string };
@@ -429,6 +434,46 @@ export class RexClient {
     if (target.block) { id(target.block, "block"); await this.mutate(sessionId, "session.focus_block", { block_id: target.block }, signal); }
     else if (target.window?.startsWith("window:")) await this.mutate(sessionId, "session.focus_window", { window_id: target.window }, signal);
     else throw new Error("Nothing to focus");
+  }
+  /** The last `bytes` of a terminal's text (screen plus scrollback), without reading the whole scrollback. */
+  async tail(sessionId: string, blockId: string, bytes = 6000, signal?: AbortSignal): Promise<string> {
+    id(sessionId, "session"); id(blockId, "block");
+    const first = await this.call(sessionId, "block.method", { block_id: blockId, method: "format", args: { trim: true, max_bytes: bytes } }, signal);
+    if (typeof first.content !== "string") throw new Error("Rex terminal text unavailable");
+    if (first.id === undefined || typeof first.total !== "number" || first.total <= bytes) return first.content;
+    // max_bytes counts JSON-escaped bytes, so read from the offset with room to spare.
+    const rest = await this.call(sessionId, "block.method", { block_id: blockId, method: "blob_read",
+      args: { id: first.id, offset: first.total - bytes, max_bytes: bytes * 4 } }, signal);
+    if (typeof rest.data !== "string") throw new Error("Rex terminal text unavailable");
+    return rest.data.slice(rest.data.indexOf("\n") + 1); // Drop the partial first line.
+  }
+  /**
+   * A child's way back: focus the parent pane (which ends a zoom). `openedLayer`
+   * is the floating layer the parent's hub put the child in to open it; if the
+   * child is still alone there, it is detached again so the deck can place it.
+   * Any other placement, including a float the user made, is left alone.
+   */
+  async returnTo(sessionId: string, self: string, parent: string, openedLayer?: string, signal?: AbortSignal): Promise<boolean> {
+    id(sessionId, "session"); id(self, "block"); id(parent, "block");
+    const who = await this.cli(["whoami", "--json"], signal);
+    if (typeof who.endpoint !== "string" || !who.endpoint.startsWith("unix://")) throw new Error("Rex requires the local unix:// server; remote routing is refused");
+    const view = await this.call(sessionId, "session.view", {}, signal);
+    const layer = layerOf(view, self);
+    const ours = !!openedLayer && layer?.kind === "floating" && layer.layer_id === openedLayer && layer.blocks?.length === 1;
+    await this.mutate(sessionId, "session.focus_block", { block_id: parent }, signal);
+    if (ours) await this.mutate(sessionId, "session.detach_block", { block_id: self }, signal);
+    return ours;
+  }
+  /** Where a block is right now: detached, or its layer's kind and ID. Requires a prior probe. */
+  async whereIs(sessionId: string, blockId: string, signal?: AbortSignal): Promise<{ kind: "detached" | "tiled" | "floating" | "missing"; layer?: string; window?: string }> {
+    id(blockId, "block");
+    const { view, blocks } = await this.snapshot(sessionId, signal);
+    const block = blocks.find(b => b.block_id === blockId);
+    if (!block) return { kind: "missing" };
+    if (block.placement === "detached") return { kind: "detached" };
+    for (const window of view.windows ?? []) for (const layer of window.layers ?? [])
+      if ((layer.blocks ?? []).some((b: any) => b.block_id === blockId)) return { kind: layer.kind === "floating" ? "floating" : "tiled", layer: layer.layer_id, window: window.window_id };
+    return { kind: "missing" };
   }
   async rows(sessionId: string, blockId: string, signal?: AbortSignal): Promise<{ columns: number; rows: number }> {
     id(blockId, "block");

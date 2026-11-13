@@ -420,3 +420,41 @@ test("method schemas are described once per client; identity and placement are r
   await bad.client.probe(SESSION, PARENT);
   assert.equal(bad.calls.filter((call) => call.words[1] === "describe").length, count + 7);
 });
+
+test("tail reads only the end of a long terminal, dropping the partial first line", async () => {
+  const h = harness();
+  h.intercept = call => {
+    if (call.method !== "block.method") return undefined;
+    if (call.payload.method === "format") return result({ content: "start", id: 7, total: 20_000, eof: false });
+    assert.deepEqual(call.payload.args, { id: 7, offset: 14_000, max_bytes: 24_000 });
+    return result({ id: 7, data: "artial line\nlast screen\nprompt", total: 20_000, eof: true });
+  };
+  const client = new RexClient(async (_command, args) => {
+    assert.equal(args[7], "block.method");
+    return h.intercept!({ method: "block.method", payload: JSON.parse(args[8]) } as any, undefined) as RexExecutionResult;
+  });
+  assert.equal(await client.tail(SESSION, BLOCK), "last screen\nprompt");
+  h.intercept = call => call.method === "block.method" ? result({ content: "short\n" }) : undefined;
+  assert.equal(await client.tail(SESSION, BLOCK), "short\n");
+});
+
+test("returnTo focuses the parent, and detaches the child only from the float the hub recorded", async () => {
+  const h = nativeHarness();
+  const methods: string[] = [];
+  const client = new RexClient(async (command, args, options) => {
+    if (["session.focus_block", "session.detach_block"].includes(args[7])) { methods.push(`${args[7]} ${JSON.parse(args[8]).block_id}`); return result({ revision: 2 }); }
+    return h.executor(command, args, options);
+  });
+  assert.equal(await client.returnTo(SESSION, BLOCK, PARENT, h.floating.layer_id), false);
+  assert.deepEqual(methods, [`session.focus_block ${PARENT}`], "a tiled child stays put");
+  methods.length = 0; h.float();
+  assert.equal(await client.returnTo(SESSION, BLOCK, PARENT), false);
+  assert.deepEqual(methods, [`session.focus_block ${PARENT}`], "a float without the hub's record is the user's");
+  methods.length = 0;
+  assert.equal(await client.returnTo(SESSION, BLOCK, PARENT, "layer:99999999-9999-4999-8999-999999999999"), false, "a different layer is not ours");
+  methods.length = 0;
+  assert.equal(await client.returnTo(SESSION, BLOCK, PARENT, h.floating.layer_id), true);
+  assert.deepEqual(methods, [`session.focus_block ${PARENT}`, `session.detach_block ${BLOCK}`], "focus first, then the hub's float goes back to the deck");
+  h.who.endpoint = "tcp://remote:1";
+  await assert.rejects(client.returnTo(SESSION, BLOCK, PARENT), /local unix/);
+});

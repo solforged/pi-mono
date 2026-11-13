@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { displayTaskPrompt, taskPrompt } from "../extensions/rex/protocol.ts";
-import { activityLine, callLine, childFooter, KEYS, money, fitResults, pickerRow, rows, splitResult, taskLine, waitingLine, widgetLine, type TaskMeta } from "../extensions/rex/ui.ts";
+import { COMMANDS, CONFIRM, entries, entryLine, LeftGate, listLines, replyTarget, tailLines, type Peer } from "../extensions/rex/hub-model.ts";
+import { activityLine, callLine, childFooter, money, fitResults, rows, splitResult, taskLine, waitingLine, widgetLine, type TaskMeta } from "../extensions/rex/ui.ts";
 
 const run = (name: string, extra: object = {}) => ({ id: `${name}-id`, name, agent: "scout", owner: "managed", status: "idle", taskIds: [], ...extra }) as any;
 const task = (id: string, status: string, text = "Read AGENTS.md and report") => [id, { id, status, task: text }] as const;
@@ -28,8 +29,7 @@ test("the widget stays one line at 14 children, grouping names by state", () => 
   const items = rows(names.map((n, i) => run(n, i < 9 ? { status: "running", activeTask: "r", taskIds: ["r"] } : { taskIds: ["s"] })), tasks);
   const line = widgetLine(items, theme);
   assert(!line.includes("\n"));
-  assert.match(line, /^Rex 14 {2}● birch cedar .* reed {3}✓ sage .* alder {3}ctrl\+shift\+a$/);
-  assert.match(pickerRow(items[0], true, theme), /^› ● birch {5}scout/);
+  assert.match(line, /^Rex 14 {2}● birch cedar .* reed {3}✓ sage .* alder {3}← agents$/);
 });
 
 test("task lines, call lines and result splitting are compact and ID-free", () => {
@@ -75,5 +75,60 @@ test("rows carry cost (settled usage, else live) and running time; widget and ac
   assert.match(widgetLine(items, theme), /^Rex 2 · \$0\.85 {2}/);
   const line = activityLine(items[0]);
   assert.match(line, /^● alpha {8}scout {3}read docs\/rex\.md +2m10s +\$0\.75 {2}Find auth entry points$/);
-  assert.equal(money(12.345), "$12.3"); assert.equal(KEYS.z, "zoom");
+  assert.equal(money(12.345), "$12.3");
+});
+
+const peer = (id: string, extra: Partial<Peer> = {}): Peer => ({ id, pid: 1, cwd: `/src/${id}`, title: null, busy: false, started: 0, rex: { session: "session:x", block: "block:y" }, ...extra });
+
+test("hub entries: children by attention, then other sessions busy first; unread results are marked", () => {
+  const tasks = new Map<string, any>([task("a", "running"), task("b", "succeeded")]);
+  const kids = rows([run("birch", { taskIds: ["b"] }), run("oak", { status: "running", activeTask: "a", taskIds: ["a"], note: "Waiting for user: Allow bash?" })], tasks);
+  const list = entries(kids, new Set(["birch-id"]), [peer("calm", { started: 1 }), peer("app", { busy: true, title: "Fix scrollback", started: 2 }), peer("nowhere", { rex: null })]);
+  assert.deepEqual(list.map(e => [e.name, e.section]), [["oak", "attention"], ["birch", "done"], ["app", "peers"], ["calm", "peers"], ["nowhere", "peers"]]);
+  assert.equal(list[1].unread, true); assert.equal(list[2].title, "Fix scrollback"); assert.equal(list[4].state, "not in Rex");
+  assert.match(entryLine(list[0], true, theme), /^› !·?\s?oak {10}scout {3}Waiting for user: Allow bash\?/);
+  assert.match(entryLine(list[1], false, theme), /^  ✓•birch /);
+  const narrow = entryLine({ ...list[2], name: "pi-mono--improve-subagent-session" }, false, theme, 70);
+  assert.match(narrow, /^  ◆ pi-mono--im… pi {6}working {18}Fix scrollback$/, "narrow panes clip names and drop time and cost");
+});
+
+test("hub list scrolls to keep the selection and its section header in view", () => {
+  const tasks = new Map<string, any>([task("r", "running"), task("s", "succeeded")]);
+  const names = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8"];
+  const list = entries(rows(names.map((n, i) => run(n, i < 4 ? { status: "running", activeTask: "r", taskIds: ["r"] } : { taskIds: ["s"] })), tasks), new Set(), []);
+  assert.equal(listLines(list, 0, 20).lines.length, 10, "two headers and eight rows fit");
+  const view = listLines(list, 7, 5);
+  assert.equal(view.lines.length, 5); assert.equal(view.below, 0); assert.equal(view.above, 5);
+  assert(view.lines.some(l => l.kind === "entry" && l.index === 7));
+  const first = listLines(list, 4, 3);
+  assert.equal(first.lines[0].kind, "section", "the selected row's header stays visible");
+});
+
+test("hub replies steer running children, start follow-ups for idle ones, and refuse the rest", () => {
+  const e = { kind: "child", name: "oak" } as any;
+  assert.deepEqual(replyTarget(e, { owner: "managed", activeTask: "t", status: "running" }), { mode: "steer", label: "Steer oak's task" });
+  assert.deepEqual(replyTarget(e, { owner: "managed", status: "idle" }), { mode: "followup", label: "New task for oak" });
+  assert.equal(replyTarget(e, { owner: "human", status: "idle" }).mode, "none");
+  assert.equal(replyTarget(e, { owner: "retired", status: "idle" }).mode, "none");
+  assert.equal(replyTarget(e, { owner: "managed", status: "closed" }).mode, "none");
+  assert.equal(replyTarget({ kind: "peer", name: "app" } as any).mode, "none");
+  assert.deepEqual(tailLines("a\r\n ─────\nb  \n\n  \n", 5), ["a", "b"], "blanks and editor borders are dropped");
+  assert.deepEqual(tailLines("1\n2\n3\n4", 2), ["3", "4"]);
+  assert.equal(COMMANDS["ctrl+x"], "stop"); assert.equal(CONFIRM.stop, true); assert.equal(CONFIRM.pin, undefined);
+});
+
+test("← opens the hub only from an empty prompt, and needs a second press right after emptying it", () => {
+  const gate = new LeftGate(1000, 2000);
+  assert.equal(gate.left(false, 0), "pass", "with text, ← moves the cursor");
+  assert.equal(gate.left(true, 5000), "open");
+  gate.edited(true, 10_000);
+  assert.equal(gate.left(true, 10_300), "arm", "just emptied: arm first");
+  assert.equal(gate.left(true, 10_800), "open", "second press opens");
+  gate.edited(true, 20_000);
+  assert.equal(gate.left(true, 20_100), "arm");
+  gate.edited(false, 20_200);
+  assert.equal(gate.left(true, 20_300), "arm", "another key disarms");
+  assert.equal(gate.left(true, 25_000), "open", "an expired arm, once settled, opens directly");
+  gate.edited(false, 30_000);
+  assert.equal(gate.left(true, 30_001), "open", "keys on an empty prompt do not count as edits");
 });

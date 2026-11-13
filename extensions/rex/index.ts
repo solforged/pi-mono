@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { realpath, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -11,8 +11,12 @@ import { registerChildUi } from "./child-ui.ts";
 import { RexRunner, yieldingWait, type Run, type TaskRun } from "./runner.ts";
 import { RexClient } from "./client.ts";
 import { DeckManager, type LayoutState } from "./layout.ts";
-import { scopeRoot } from "../workflows/state.ts";
-import { pick, widget } from "./picker.ts";
+import { atomicWrite, scopeRoot } from "../workflows/state.ts";
+import { OPENED } from "./protocol.ts";
+import { cards } from "../intercom/station.ts";
+import { entries as hubEntries, short, type Entry, type HubAction, type Peer } from "./hub-model.ts";
+import { openHub, widget, type HubHost } from "./hub.ts";
+import { installLeftArrow } from "./left-editor.ts";
 import { completionRenderer, toolRenderers } from "./render.ts";
 import { switchTools, TOOLS_ENTRY } from "./tools.ts";
 import { registerRexTitle } from "./title.ts";
@@ -55,6 +59,7 @@ export default async function (pi: ExtensionAPI) {
     if (lifetime.signal.aborted || currentCtx?.mode !== "tui") return;
     const items = rows(runner.runs.values(), runner.tasks);
     currentCtx.ui.setWidget("rex-agents", items.length ? widget(items) : undefined);
+    for (const fn of hubListeners) fn();
     if (!deck) return;
     const key = JSON.stringify(deckChildren().map(({ line: _line, ...placement }) => placement));
     if (key !== layoutKey) { layoutKey = key; deck.schedule(); }
@@ -73,7 +78,7 @@ export default async function (pi: ExtensionAPI) {
   });
   const rosterLines = () => {
     const items = rows(runner.runs.values(), runner.tasks);
-    return [`Rex agents · ${items.length} · ctrl+shift+a in the parent to pin, focus or message`, "",
+    return [`Rex agents · ${items.length} · ← on the parent's empty prompt opens the hub`, "",
       ...items.map(activityLine)];
   };
   // Completions are batched: with many children, one receipt per burst instead of one each.
@@ -122,6 +127,8 @@ export default async function (pi: ExtensionAPI) {
     await runner.restore(refs, ctx);
     const session = process.env.REX_SESSION, parent = process.env.REX_BLOCK;
     if (ctx.mode === "tui" && session && parent) {
+      installLeftArrow(ctx, () => void hub(currentCtx ?? ctx).catch(error => currentCtx?.ui.notify(String(error), "error")),
+        () => currentCtx?.ui.notify("Press ← again for agents", "info"));
       const saved = (ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "rex-layout").at(-1) as any)?.data;
       const dir = join(await scopeRoot(runner.agentDir, config.profile, ctx.cwd), "rex"), sid = ctx.sessionManager.getSessionId();
       deck = new DeckManager({ rex, session, parent, cwd: ctx.cwd,
@@ -263,8 +270,8 @@ export default async function (pi: ExtensionAPI) {
     else if (ctx.hasUI) ctx.ui.notify(message, "info");
     else console.log(message);
   }
-  /** Shared by the picker and ID subcommands. */
-  async function control(ctx: ExtensionContext, run: Run, action: PickAction, message?: string) {
+  /** Shared by the hub and the /agents subcommands. `confirmed`: the hub already asked. */
+  async function control(ctx: ExtensionContext, run: Run, action: PickAction, message?: string, confirmed = false) {
     if (action === "result") {
       const task = runner.tasks.get(run.activeTask ?? run.taskIds.at(-1) ?? "");
       if (!task) throw new Error("This child has no tasks yet");
@@ -280,23 +287,40 @@ export default async function (pi: ExtensionAPI) {
     }
     if (action === "take") {
       if (run.activeTask) throw new Error("Finish or cancel the task before taking control");
-      if (!await ctx.ui.confirm("Take control of this child?", "Parent delegation will stop for this child. Its role tools and routing remain; the parent will not close it automatically.")) return;
-      await runner.take(run.id); ctx.ui.notify("Child is yours; type into its terminal", "info"); return;
+      if (!confirmed && !await ctx.ui.confirm("Take control of this child?", "Parent delegation will stop for this child. Its role tools and routing remain; the parent will not close it automatically.")) return;
+      await runner.take(run.id); if (!confirmed) ctx.ui.notify("Child is yours; type into its terminal", "info"); return;
     }
     if (action === "cancel") { await runner.cancel(run.id); return; }
     if (action === "close") {
-      if (run.owner === "managed" && !await ctx.ui.confirm("Close this child?", "Its terminal stops; files and worktree are retained.")) return;
+      if (!confirmed && run.owner === "managed" && !await ctx.ui.confirm("Close this child?", "Its terminal stops; files and worktree are retained.")) return;
       await runner.action(run, "close"); return;
     }
     if (!run.block || run.status === "closed") throw new Error("This child has no terminal");
     const session = process.env.REX_SESSION!;
-    if (action === "spotlight") {
+    if (action === "open") {
+      // Placement is read fresh: the user may have moved the pane since the deck last looked.
+      // Zoom it in the parent's window or the Agents window; float a detached child over
+      // the parent and record that float, so ← in the child undoes only what this did.
+      const parent = process.env.REX_BLOCK!, marker = join(run.dir, OPENED);
+      await rm(marker, { force: true });
+      await rex.probe(session, parent);
+      const [where, home] = [await rex.whereIs(session, run.block), await rex.whereIs(session, parent)];
+      if (where.kind === "missing") throw new Error(`${run.name}'s terminal is gone`);
+      if (where.kind === "tiled" && (where.window === home.window || where.window === deck?.grid?.window)) await rex.zoom(session, run.block);
+      else if (where.kind !== "detached") await rex.focus(session, { block: run.block });
+      else {
+        await runner.action(run, "peek");
+        const floated = await rex.whereIs(session, run.block);
+        if (floated.kind === "floating" && floated.layer) await atomicWrite(marker, JSON.stringify({ block: run.block, layer: floated.layer }));
+        await rex.focus(session, { block: run.block });
+      }
+    } else if (action === "spotlight") {
       // Pin into the deck (toggle). Pins never exceed one per slot: the oldest yields.
       run.pinned = run.pinned ? undefined : Date.now(); run.view = "auto";
       const pinned = [...runner.runs.values()].filter(r => r.pinned && r.status !== "closed").sort((a, b) => a.pinned! - b.pinned!);
       for (const old of pinned.slice(0, Math.max(0, pinned.length - 3))) { old.pinned = undefined; await runner.update(old); }
       await runner.update(run);
-      ctx.ui.notify(run.pinned ? `${run.name} pinned to the deck` : `${run.name} unpinned`, "info");
+      if (!confirmed) ctx.ui.notify(run.pinned ? `${run.name} pinned to the deck` : `${run.name} unpinned`, "info");
     } else if (action === "zoom") {
       // Fills the child's window with it (and switches there) until focus moves.
       if (!deck?.where.has(run.block)) throw new Error(`${run.name} is not on screen (detached or parked); Enter pins it to the deck`);
@@ -307,7 +331,7 @@ export default async function (pi: ExtensionAPI) {
       await rex.focus(session, { window: deck.grid.window });
     } else if (action === "park") {
       run.view = "background"; run.pinned = undefined; await runner.update(run);
-      await runner.action(run, "park"); ctx.ui.notify(`${run.name} parked; it keeps running`, "info");
+      await runner.action(run, "park"); if (!confirmed) ctx.ui.notify(`${run.name} parked; it keeps running`, "info");
     } else if (action === "auto") {
       run.view = "auto"; await runner.update(run);
       // Re-adopt a child the user moved elsewhere: detach it and let the deck place it.
@@ -315,22 +339,86 @@ export default async function (pi: ExtensionAPI) {
       deck?.resume();
     }
   }
-  async function picker(ctx: ExtensionContext) {
-    if (ctx.mode !== "tui") throw new Error("Rex controls require interactive Pi");
-    const choice = await pick(ctx, rows(runner.runs.values(), runner.tasks));
-    if (!choice) return;
-    const run = runner.runs.get(choice.id);
-    if (run) await control(ctx, run, choice.action);
+  // ---- The agent hub: this session's children plus other live Pi sessions (intercom cards).
+  let peers: Peer[] = [], hubOpen = false;
+  const hubListeners = new Set<() => void>();
+  const unreadChildren = () => new Set([...runner.runs.values()].filter(run => {
+    const last = runner.tasks.get(run.taskIds.at(-1) ?? ""); return !!last && !running(last) && !last.collected;
+  }).map(run => run.id));
+  const childOf = (e: Entry) => { const run = e.childId ? runner.runs.get(e.childId) : undefined; if (!run) throw new Error("That child is gone"); return run; };
+  const lastTask = (run: Run) => runner.tasks.get(run.activeTask ?? run.taskIds.at(-1) ?? "");
+  const hubHost = (ctx: ExtensionContext): HubHost => ({
+    list: () => hubEntries(rows(runner.runs.values(), runner.tasks), unreadChildren(), peers),
+    subscribe(fn) { hubListeners.add(fn); return () => hubListeners.delete(fn); },
+    async refreshPeers() {
+      peers = (await cards(join(runner.agentDir, "intercom"))).filter(c => c.pid !== process.pid)
+        .map(c => ({ id: c.id, pid: c.pid, cwd: c.cwd, title: c.title, busy: c.busy, started: c.started, rex: c.rex }));
+    },
+    run: e => e.childId ? runner.runs.get(e.childId) : undefined,
+    detail(e) {
+      if (e.peer) return { facts: [`${short(e.peer.cwd)} · ${e.peer.busy ? "working" : "idle"} · pid ${e.peer.pid}`], live: !!e.peer.rex };
+      const run = childOf(e), task = lastTask(run);
+      const facts = [`${run.name} · ${run.agent} · ${run.provider}/${run.model} · ${run.owner === "managed" ? "parent-managed" : run.owner}`];
+      if (task) facts.push(`Task: ${oneLine(task.title ?? task.task, 160)}`);
+      // The row already shows short activity; a question or a long command is worth a line.
+      if (run.activeTask && run.note && (/^Waiting for user/.test(run.note) || run.note.length > 30)) facts.push(`Now: ${oneLine(run.note, 200)}`);
+      if (run.worktree) facts.push(`Worktree (not integrated): ${short(run.worktree)}`);
+      const live = !!run.activeTask && !!run.block && run.status !== "closed";
+      return { facts, live, result: !live && task?.text ? task.text : undefined };
+    },
+    tail(e, signal) {
+      if (e.peer?.rex) return rex.tail(e.peer.rex.session, e.peer.rex.block, 6000, signal);
+      const run = childOf(e);
+      if (!run.block) throw new Error("No terminal");
+      return rex.tail(run.rexSession, run.block, 6000, signal);
+    },
+    async send(e, text) {
+      const run = childOf(e);
+      checkBranch(run, ctx);
+      if (run.activeTask) { await runner.steer(run.id, run.activeTask, text, lifetime.signal); return `Sent to ${run.name}; it arrives at its next step`; }
+      await runner.submit(run.id, text, "", lifetime.signal); return `Started a follow-up in ${run.name}`;
+    },
+    async act(e, action: HubAction) {
+      if (e.peer) {
+        if (action !== "open") throw new Error("Other sessions can only be opened and peeked from here");
+        if (!e.peer.rex) throw new Error(`${e.name} is not running in Rex`);
+        // Focus it where it is; a detached session has no place to show.
+        await rex.probe(process.env.REX_SESSION!, process.env.REX_BLOCK!);
+        const where = await rex.whereIs(e.peer.rex.session, e.peer.rex.block);
+        if (where.kind === "missing") throw new Error(`${e.name}'s pane is gone`);
+        if (where.kind === "detached") throw new Error(`${e.name} is detached; show it in Rex first`);
+        await rex.focus(e.peer.rex.session, { block: e.peer.rex.block });
+        return `Opened ${e.name} · ← on its empty prompt opens its own hub`;
+      }
+      const run = childOf(e);
+      const map: Record<HubAction, PickAction> = { open: "open", pin: "spotlight", cancel: "cancel", close: "close", park: "park", auto: "auto", grid: "grid", take: "take", result: "result" };
+      await control(ctx, run, map[action], undefined, true);
+      if (action === "open") return `Opened ${run.name} · ← on its empty prompt comes back here`;
+      if (action === "pin") return run.pinned ? `${run.name} pinned to the deck` : `${run.name} unpinned`;
+      if (action === "park") return `${run.name} parked; it keeps running`;
+      if (action === "auto") return `${run.name} is placed automatically again`;
+      if (action === "take") return `${run.name} is yours; → opens its pane`;
+      if (action === "cancel") return `Cancelled ${run.name}'s task`;
+      if (action === "close") return `Closed ${run.name}; its files are kept`;
+      if (action === "result") return `${run.name}'s result is in the transcript`;
+    },
+  });
+  async function hub(ctx: ExtensionContext) {
+    if (ctx.mode !== "tui") throw new Error("The agent hub requires interactive Pi");
+    if (!process.env.REX_SESSION || !process.env.REX_BLOCK) throw new Error("The agent hub requires Pi running inside Rex");
+    if (hubOpen) return;
+    hubOpen = true;
+    try { await openHub(ctx, hubHost(ctx), lifetime.signal); } finally { hubOpen = false; }
   }
   pi.registerShortcut(SHORTCUT, {
-    description: "Rex agents: pin to the deck, focus, message, take, cancel or close a child",
-    handler: async ctx => { try { await picker(ctx); } catch (error) { ctx.ui.notify(String(error), "error"); } },
+    description: "Agent hub: Rex children and other Pi sessions (also ← on an empty prompt)",
+    handler: async ctx => { try { await hub(ctx); } catch (error) { ctx.ui.notify(String(error), "error"); } },
   });
   pi.registerCommand("agents", {
-    description: "Rex agents picker; or check, list, peek|hide|keep|park|send|result|take|cancel|close NAME",
+    description: "Agent hub; or check, list, peek|hide|keep|park|send|result|take|cancel|close NAME",
     handler: async (args, ctx) => {
       const [action = "pick", prefix, ...rest] = args.trim().split(/\s+/).filter(Boolean);
-      if (action === "pick") { if (ctx.mode === "tui") await picker(ctx); else report(ctx, list()); return; }
+      if (action === "pick") { if (ctx.mode === "tui" && process.env.REX_SESSION) await hub(ctx); else report(ctx, list()); return; }
       if (action === "check" && !prefix) {
         const config = await loadConfig(root, runner.agentDir, ctx.sessionManager.getBranch());
         for (const role of ["advisor", "task"] as const) resolveRole(config, role, ctx.modelRegistry);
@@ -349,13 +437,13 @@ export default async function (pi: ExtensionAPI) {
         if (byName) await control(ctx, byName, "result"); else report(ctx, describe(findTask(prefix)));
         return;
       }
-      if (!prefix || !["show", "peek", "hide", "keep", "park", "pin", "zoom", "focus", "auto", "close", "cancel", "take", "send"].includes(action) || (action !== "send" && rest.length)) throw new Error("Usage: /agents [check|list|layout|pin NAME|zoom NAME|focus NAME|park NAME|auto NAME|peek NAME|hide NAME|keep NAME|send NAME message|result NAME|take NAME|cancel NAME|close NAME]");
+      if (!prefix || !["open", "show", "peek", "hide", "keep", "park", "pin", "zoom", "focus", "auto", "close", "cancel", "take", "send"].includes(action) || (action !== "send" && rest.length)) throw new Error("Usage: /agents [check|list|layout|open NAME|pin NAME|zoom NAME|focus NAME|park NAME|auto NAME|peek NAME|hide NAME|keep NAME|send NAME message|result NAME|take NAME|cancel NAME|close NAME]");
       if (ctx.mode !== "tui") throw new Error("Rex controls require interactive Pi");
       const run = find(prefix);
       if (action === "send") {
         if (!rest.length) throw new Error("Message text is required");
         await control(ctx, run, "message", rest.join(" "));
-      } else if (["take", "cancel", "close", "park", "zoom", "focus", "auto"].includes(action)) await control(ctx, run, action as PickAction);
+      } else if (["open", "take", "cancel", "close", "park", "zoom", "focus", "auto"].includes(action)) await control(ctx, run, action as PickAction);
       else if (action === "pin") await control(ctx, run, "spotlight");
       else await runner.action(run, action as "show" | "peek" | "hide" | "keep" | "park");
     },

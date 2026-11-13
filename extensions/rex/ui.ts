@@ -1,7 +1,7 @@
 // Pure presentation helpers: no Pi imports, so the regression suite can load them.
 import type { Run, TaskRun } from "./runner.ts";
 
-export type PickAction = "spotlight" | "zoom" | "focus" | "grid" | "park" | "auto" | "message" | "result" | "take" | "cancel" | "close";
+export type PickAction = "open" | "spotlight" | "zoom" | "focus" | "grid" | "park" | "auto" | "message" | "result" | "take" | "cancel" | "close";
 type Tone = "accent" | "success" | "error" | "warning" | "muted" | "dim";
 type Theme = { fg(tone: Tone, text: string): string; bold?(text: string): string };
 export type Group = "attention" | "running" | "done" | "failed" | "idle" | "yours";
@@ -13,9 +13,8 @@ export interface Row {
   elapsedMs?: number;
 }
 
-export const KEYS: Record<string, PickAction> = { enter: "spotlight", z: "zoom", f: "focus", g: "grid", p: "park", a: "auto", m: "message", r: "result", t: "take", x: "cancel", c: "close" };
+/** Opens the agent hub from anywhere; ← on an empty prompt does too. */
 export const SHORTCUT = "ctrl+shift+a";
-export const HINT = "↑↓ · enter pin to deck · z zoom · f focus · g agents window · p park · a auto · m message · r result · t take · x cancel · c close · esc";
 const ORDER: Group[] = ["attention", "running", "failed", "done", "idle", "yours"];
 const STYLE: Record<Group, [string, Tone]> = {
   attention: ["!", "warning"], running: ["●", "accent"], failed: ["✗", "error"], done: ["✓", "success"], idle: ["○", "muted"], yours: ["◆", "muted"],
@@ -56,16 +55,13 @@ export function widgetLine(items: Row[], theme: Theme) {
     return `${theme.fg(tone, glyph)} ${names.join(" ")}${group === "attention" ? theme.fg("warning", " needs you") : ""}`;
   }).filter(Boolean);
   const total = items.reduce((sum, r) => sum + r.cost, 0);
-  return `${theme.fg("accent", "Rex")} ${theme.fg("dim", `${items.length}${total ? ` · ${money(total)}` : ""}`)}  ${groups.join("   ")}   ${theme.fg("dim", SHORTCUT)}`;
+  return `${theme.fg("accent", "Rex")} ${theme.fg("dim", `${items.length}${total ? ` · ${money(total)}` : ""}`)}  ${groups.join("   ")}   ${theme.fg("dim", "← agents")}`;
 }
 export const money = (dollars: number) => `$${dollars < 10 ? dollars.toFixed(2) : dollars.toFixed(1)}`;
 /** Plain-text roster/strip line: `● alpha   scout  read docs/x.md   2m10s  $0.18  Find auth entry points`. */
 export function activityLine(r: Row) {
   const time = r.elapsedMs !== undefined ? duration(r.elapsedMs) : "";
   return `${r.glyph}${r.pinned ? "▪" : " "}${r.name.padEnd(13)}${r.agent.padEnd(8)}${oneLine(r.state, 34).padEnd(36)}${time.padStart(6)}  ${(r.cost ? money(r.cost) : "").padStart(6)}  ${r.title}`;
-}
-export function pickerRow(r: Row, selected: boolean, theme: Theme) {
-  return `${selected ? theme.fg("accent", "›") : " "} ${theme.fg(r.tone, r.glyph)}${r.pinned ? theme.fg("accent", "▪") : " "}${r.name.padEnd(9)} ${theme.fg("muted", r.agent.padEnd(7))} ${r.title}  ${theme.fg("muted", r.state)}`;
 }
 
 /** A JSON-safe snapshot for tool details; never a live TaskRun reference. */

@@ -1,7 +1,11 @@
+import { readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { registerChild } from "./child.ts";
-import { displayTaskPrompt, type Manifest } from "./protocol.ts";
+import { RexClient } from "./client.ts";
+import { installLeftArrow } from "./left-editor.ts";
+import { displayTaskPrompt, OPENED, validateManifest, type Manifest } from "./protocol.ts";
 import { childFooter } from "./ui.ts";
 
 /** Child presentation only. Policy stays in child.ts and is unaffected by display. */
@@ -15,7 +19,7 @@ export function registerChildUi(pi: ExtensionAPI, manifestPath: string) {
     ctx.ui.setHeader((_tui, theme) => ({
       render: (width: number) => [
         truncateToWidth(`${theme.fg("accent", theme.bold(`${m.name ?? "Rex"} · ${agent}`))} ${theme.fg("dim", `· ${m.role.provider}/${m.role.model} · ${cwd}`)}`, width),
-        truncateToWidth(theme.fg("dim", `Managed by the parent agent · tools: ${m.tools.join(", ")} · approvals answer here · /take when idle`), width),
+        truncateToWidth(theme.fg("dim", `Managed by the parent agent · ← on an empty prompt returns to it · approvals answer here · /take when idle · tools: ${m.tools.join(", ")}`), width),
       ],
       invalidate() {},
     }));
@@ -47,6 +51,23 @@ export function registerChildUi(pi: ExtensionAPI, manifestPath: string) {
         },
       };
     });
+  });
+  // ← on an empty prompt goes back to the parent pane, whoever owns the child now:
+  // the round trip for the parent hub's "open". Display only; no protocol message.
+  pi.on("session_start", async (_event, ctx) => {
+    if (ctx.mode !== "tui" || !process.env.REX_BLOCK) return;
+    let m: Manifest;
+    try { m = validateManifest(JSON.parse(await readFile(manifestPath, "utf8")), true); } catch { return; }
+    const self = process.env.REX_BLOCK, rex = new RexClient(), marker = join(m.dir, OPENED);
+    const back = async () => {
+      // Only a float the parent's hub recorded is undone; the marker is consumed either way.
+      let layer: string | undefined;
+      try { const opened = JSON.parse(await readFile(marker, "utf8")); if (opened.block === self && typeof opened.layer === "string") layer = opened.layer; } catch {}
+      await rex.returnTo(m.rexSession, self, m.parentBlock, layer, AbortSignal.timeout(10_000));
+      await rm(marker, { force: true });
+    };
+    installLeftArrow(ctx, () => void back().catch(error => ctx.ui.notify(`Could not return to the parent: ${error instanceof Error ? error.message : String(error)}`, "error")),
+      () => ctx.ui.notify("Press ← again to return to the parent", "info"));
   });
   // Display-only: the model still receives the exact delegated framing.
   pi.registerMarkdownTransformer((markdown, { messageType }) => messageType === "user" ? displayTaskPrompt(markdown, label) : markdown);

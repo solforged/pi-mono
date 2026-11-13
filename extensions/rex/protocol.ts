@@ -12,6 +12,8 @@ export const MAX_MESSAGES = 64;
 export const isId = (value: unknown): value is string => typeof value === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 export const FRAME_BYTES = 256 * 1024;
 export const LEASE_MS = 15_000;
+/** In a child's directory: the floating layer the parent's hub put it in to open it (see RexClient.returnTo). */
+export const OPENED = "opened.json";
 export type Outcome = "succeeded" | "failed" | "cancelled";
 export interface Manifest {
   version: 2; id: string; token: string; socket: string; dir: string; cwd: string;
