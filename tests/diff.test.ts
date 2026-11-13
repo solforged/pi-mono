@@ -204,6 +204,10 @@ test("measures wide characters and wraps styled text without losing content", ()
   assert.equal(width("abc"), 3);
   assert.equal(width("新しい"), 6);
   assert.equal(width("🎉"), 2);
+  // Emoji outside the blocks East Asian width covers, a flag, a joined family and a keycap.
+  for (const emoji of ["🚀", "✅", "❌", "⚡", "⭐", "🟢", "🪄", "⌚", "🇺🇸", "👨‍👩‍👧", "1️⃣", "❤️"]) assert.equal(width(emoji), 2, emoji);
+  // Symbols that terminals draw as text stay one cell.
+  for (const symbol of ["✓", "→", "☺", "©", "#"]) assert.equal(width(symbol), 1, symbol);
   assert.equal(width("e\u0301"), 1);
   assert.equal(sanitize("a\tb"), "a   b");
   assert.equal(sanitize("x\x1b"), "x␛");

@@ -11,7 +11,8 @@ export interface Row { spans: Span[]; fill?: string }
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const ZERO = /^(?:\p{Mn}|\p{Me}|\p{Cf})+$/u;
-const EMOJI = /\p{Extended_Pictographic}/u;
+/** Drawn as a picture by default; flags are pairs of these too. */
+const EMOJI = /^\p{Emoji_Presentation}/u;
 
 function wide(code: number): boolean {
   return (code >= 0x1100 && code <= 0x115f) || (code >= 0x2e80 && code <= 0x303e) || (code >= 0x3041 && code <= 0x33ff)
@@ -25,7 +26,8 @@ export function graphemeWidth(grapheme: string): number {
   if (ZERO.test(grapheme)) return 0;
   const code = grapheme.codePointAt(0)!;
   if (code < 0x20 || (code >= 0x7f && code < 0xa0)) return 0;
-  if (grapheme.includes("\u{FE0F}") || (EMOJI.test(grapheme) && wide(code))) return 2;
+  // Emoji take two cells wherever they sit in Unicode; `wide` only knows the East Asian blocks.
+  if (grapheme.includes("\u{FE0F}") || EMOJI.test(grapheme)) return 2;
   return wide(code) ? 2 : 1;
 }
 
