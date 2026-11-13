@@ -185,3 +185,8 @@ worktrees into the shared `/cache` can conflict; rerun the install if one fails.
 in a throwaway repository, without model calls. Start and build failures are
 logged under `~/.cache/pi-sandbox/state/` (`sandbox.log`, `build.log`).
 Containers are named `pi-sbx-<project>-<hash>`; `container list` shows them.
+
+A container's state, browser profile, Linux build output and command logs
+under `~/.cache/pi-sandbox` are deleted once its project folder no longer
+exists, checked whenever a sandbox starts. Directories from before the folder
+was recorded go after 30 days without use.

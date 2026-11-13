@@ -401,6 +401,45 @@ test("a failing command is not mistaken for a missing container, and a killed on
   assert(running.has(plan.name));
 });
 
+test("what a container leaves on the host goes once its project is gone", async (t) => {
+  const dir = await temporary(t);
+  const { cli } = fakeCli();
+  const plan = livePlan(dir);
+  const cache = join(dir, "cache");
+  const make = async (name: string, root?: string) => {
+    for (const path of [join(dir, "containers", name, "leases"), join(dir, "browser", name), join(cache, "worktrees", name, "target"), join(cache, "output", name)]) await mkdir(path, { recursive: true });
+    if (root) await writeFile(join(dir, "containers", name, "root"), root);
+  };
+  const live = join(dir, "live-project");
+  await mkdir(live);
+  await make("pi-sbx-gone-0000000001", join(dir, "deleted-project"));
+  await make("pi-sbx-live-0000000002", live);
+  await make("pi-sbx-recent-0000000003");
+  await make("pi-sbx-old-0000000004");
+  const longAgo = new Date(Date.now() - 40 * 24 * 3600 * 1000);
+  for (const path of [join(dir, "containers"), join(dir, "browser"), join(cache, "worktrees"), join(cache, "output")]) await utimes(join(path, "pi-sbx-old-0000000004"), longAgo, longAgo);
+  // A session still holds the gone project's neighbour; and a name this code did not make is left alone.
+  await make("pi-sbx-held-0000000005", join(dir, "deleted-project"));
+  await writeFile(join(dir, "containers", "pi-sbx-held-0000000005", "leases", "77"), "");
+  await mkdir(join(cache, "worktrees", "notes"));
+  await mkdir(plan.outputDir, { recursive: true });
+  await writeFile(join(plan.outputDir, "pi-bash-old.log"), "old");
+  await writeFile(join(plan.outputDir, "pi-bash-new.log"), "new");
+  await utimes(join(plan.outputDir, "pi-bash-old.log"), longAgo, longAgo);
+
+  const box = new Sandbox(plan, { cli, stateRoot: dir, cacheRoot: cache, pid: 8, alive: (pid) => pid === 8 || pid === 77 });
+  await box.ensure();
+  for (let i = 0; i < 100 && existsSync(join(cache, "worktrees", "pi-sbx-old-0000000004")); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+  const left = async (path: string) => (await readdir(path)).filter((name) => name !== plan.name).sort();
+  const kept = ["pi-sbx-held-0000000005", "pi-sbx-live-0000000002", "pi-sbx-recent-0000000003"];
+  assert.deepEqual(await left(join(dir, "containers")), kept);
+  assert.deepEqual(await left(join(dir, "browser")), kept);
+  assert.deepEqual(await left(join(cache, "worktrees")), ["notes", ...kept]);
+  assert.deepEqual(await left(join(cache, "output")), kept);
+  assert.equal(await readFile(join(dir, "containers", plan.name, "root"), "utf8"), plan.root);
+  assert.deepEqual(await readdir(plan.outputDir), ["pi-bash-new.log"]);
+});
+
 test("start failures are kept so tools fail closed", async (t) => {
   const stateRoot = await temporary(t);
   const cli = new ContainerCli(async () => ({ code: 1, stdout: Buffer.alloc(0), stderr: "XPC connection error", aborted: false, timedOut: false, truncated: false }));

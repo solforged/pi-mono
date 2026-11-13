@@ -39,6 +39,8 @@ export const GUEST_CACHE = "/cache";
 const OUTPUT_LABEL = "command output";
 const OVERLAYS: Array<[manifest: string, dir: string]> = [["package.json", "node_modules"], ["Cargo.toml", "target"], ["pyproject.toml", ".venv"]];
 const hash = (value: string, length = 10) => createHash("sha256").update(value).digest("hex").slice(0, length);
+/** Folders of the cache root that hold one directory per container, named after it. */
+export const CACHE_DIRS = ["worktrees", "output"];
 
 export function containerName(root: string) {
   const slug = basename(root).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "root";

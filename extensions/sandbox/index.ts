@@ -145,7 +145,7 @@ export default function sandboxExtension(pi: ExtensionAPI) {
         await kept?.release();
         if (mine !== generation) return;
         plan = next;
-        box = new Sandbox(plan, { cli: new ContainerCli(), stateRoot: join(cacheRoot(), "state"), imageDir: settings.image ? undefined : IMAGE_DIR, onPhase });
+        box = new Sandbox(plan, { cli: new ContainerCli(), stateRoot: join(cacheRoot(), "state"), cacheRoot: cacheRoot(), imageDir: settings.image ? undefined : IMAGE_DIR, onPhase });
       }
       render(box.phase === "idle" ? "starting" : box.phase);
       // Interactive sessions start at once so failures show early; print-mode

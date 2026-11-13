@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { appendFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { EXEC_ID, type ContainerCli, type RunOptions, type RunResult } from "./container.ts";
-import { runArgs, type Plan } from "./plan.ts";
+import { CACHE_DIRS, runArgs, type Plan } from "./plan.ts";
 
 export type Phase = "idle" | "building" | "starting" | "ready" | "error";
 
@@ -23,6 +23,8 @@ export async function withLock<T>(dir: string, fn: () => Promise<T>, alive = isA
       await writeFile(join(dir, "pid"), String(process.pid));
       break;
     } catch (error: any) {
+      // The parent can go between attempts, when a sweep removes an unused container's state.
+      if (error?.code === "ENOENT") { await mkdir(dirname(dir), { recursive: true }); continue; }
       if (error?.code !== "EEXIST") throw error;
       const owner = Number(await readFile(join(dir, "pid"), "utf8").catch(() => ""));
       const age = await stat(dir).then((s) => Date.now() - s.mtimeMs, () => 0);
@@ -43,6 +45,8 @@ export async function imageTag(dir: string) {
 export interface SandboxOptions {
   cli: ContainerCli;
   stateRoot: string;
+  /** Holds the per-container build output and command logs; without it they are never swept. */
+  cacheRoot?: string;
   imageDir?: string;
   pid?: number;
   alive?: (pid: number) => boolean;
@@ -54,6 +58,9 @@ const GONE = /container[^\n]*(not ?found|not running|does not exist)|no such con
 // The exit status of a command whose container was deleted under it; the CLI prints nothing.
 const KILLED = 137;
 const STOPPED = "The sandbox container stopped while this command was running, and has been started again. Repeat the command if that is safe.";
+const NAME = /^pi-sbx-[a-z0-9-]+$/;
+const OUTPUT_AGE_MS = 7 * 24 * 3600 * 1000;
+const UNUSED_AGE_MS = 30 * 24 * 3600 * 1000;
 
 export class Sandbox {
   phase: Phase = "idle";
@@ -121,6 +128,8 @@ export class Sandbox {
       await mkdir(leases, { recursive: true });
       // The lease goes first so a concurrent sweep never deletes a starting container.
       await writeFile(join(leases, String(this.pid)), "");
+      // Lets a later sweep tell that the project is gone.
+      await writeFile(join(this.dir(), "root"), this.plan.root);
       const others = (await this.liveLeases(this.plan.name)).filter((pid) => pid !== this.pid);
       const info = await cli.inspect(this.plan.name);
       const same = info?.labels["pi.sandbox.config"] === this.plan.labels["pi.sandbox.config"];
@@ -144,7 +153,47 @@ export class Sandbox {
         if (await stat(join(this.dir(info.id), "lock")).then(() => true, () => false)) continue;
         if (!(await this.liveLeases(info.id)).length) this.options.cli.removeDetached(info.id);
       }
+      await this.sweepDirs();
     } catch (error) { void this.log(`sweep failed: ${(error as Error).message}`); }
+  }
+
+  private dirsOf(name: string) {
+    const { stateRoot, cacheRoot } = this.options;
+    return [this.dir(name), join(stateRoot, "browser", name), ...(cacheRoot ? CACHE_DIRS.map((kind) => join(cacheRoot, kind, name)) : [])];
+  }
+
+  // Removes what a container left on the host once its project folder is gone:
+  // state, the browser profile, Linux build output and command logs. Directories
+  // from before the folder was recorded go after a month without use.
+  private async sweepDirs() {
+    const { stateRoot, cacheRoot } = this.options;
+    if (!cacheRoot) return;
+    const now = Date.now();
+    for (const name of await readdir(this.plan.outputDir).catch(() => [] as string[])) {
+      const file = join(this.plan.outputDir, name);
+      const age = await stat(file).then((s) => s.isFile() ? now - s.mtimeMs : 0, () => 0);
+      if (age > OUTPUT_AGE_MS) await rm(file, { force: true });
+    }
+    const names = new Set<string>();
+    for (const parent of [join(stateRoot, "containers"), join(stateRoot, "browser"), ...CACHE_DIRS.map((kind) => join(cacheRoot, kind))]) {
+      for (const name of await readdir(parent).catch(() => [] as string[])) if (NAME.test(name) && name !== this.plan.name) names.add(name);
+    }
+    for (const name of names) {
+      const stale = async () => {
+        const root = (await readFile(join(this.dir(name), "root"), "utf8").catch(() => "")).trim();
+        if (root) return stat(root).then(() => false, (error) => error?.code === "ENOENT");
+        const used = await Promise.all(this.dirsOf(name).map((dir) => stat(dir).then((s) => s.mtimeMs, () => 0)));
+        return now - Math.max(...used) > UNUSED_AGE_MS;
+      };
+      if (!(await stale())) continue;
+      // A session starting there takes this lock and a lease first. Taking the
+      // lock touches the state directory, so its age is not read again.
+      await withLock(join(this.dir(name), "lock"), async () => {
+        if ((await this.liveLeases(name)).length) return;
+        for (const dir of this.dirsOf(name)) await rm(dir, { recursive: true, force: true });
+        void this.log(`removed the cache and state of ${name}: its project is gone or unused`);
+      }, this.alive, 2000).catch(() => {});
+    }
   }
 
   private async buildWiki() {
