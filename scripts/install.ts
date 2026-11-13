@@ -11,7 +11,7 @@ import { buildHandler } from "../extensions/diff/handler/build.ts";
 
 const OPT_IN = new Set(["herdr-title"]);
 
-const usage = `Usage: mise run install -- [--dry-run] [--with <${[...OPT_IN].join("|")}>]...`;
+const usage = `Usage: pm-install [--dry-run] [--with <${[...OPT_IN].join("|")}>]...`;
 const fail = (message: string): never => {
   console.error(`${message}\n${usage}`);
   process.exit(2);

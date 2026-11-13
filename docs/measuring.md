@@ -7,9 +7,9 @@ model's behavior helps.
 ## Session profile
 
 ```sh
-mise run profile
-mise run profile -- --since 2026-11-01 --json
-mise run profile -- --dir /path/to/sessions
+pm-profile
+pm-profile --since 2026-11-01 --json
+pm-profile --dir /path/to/sessions
 ```
 
 `scripts/profile.ts` reads saved sessions (by default those of the active agent
@@ -45,9 +45,9 @@ To size a new candidate, add a row in `profile()` and a case to
 ## Fault injection
 
 ```sh
-mise run faults
-mise run faults -- empty-stop tool-loop
-mise run faults -- --with extensions/recover/index.ts --json
+pm-faults
+pm-faults empty-stop tool-loop
+pm-faults --with extensions/recover/index.ts --json
 ```
 
 `tests/fixtures/fault-smoke.ts` runs the installed Pi in JSON print mode
@@ -71,9 +71,9 @@ code (failed turns dropped, missing results added); it is not an observation.
 ## Paired runs
 
 ```sh
-mise run paired -- --check
-mise run paired -- --with path/to/extension/index.ts --runs 3 --budget 20
-mise run paired -- --report /path/to/results
+pm-paired --check
+pm-paired --with path/to/extension/index.ts --runs 3 --budget 20
+pm-paired --report /path/to/results
 ```
 
 `scripts/paired.ts` costs money: every run is a real session on the default
@@ -104,5 +104,5 @@ interval of −$0.005 to +$0.016 on runs averaging $0.29, so the rule was droppe
 
 ## Deferred tool discovery
 
-`mise run deferred-tools:eval` is a separate paid check of whether each preset
+`pm-deferred-tools-eval` is a separate paid check of whether each preset
 model finds deferred tools on demand; see [Deferred tools](deferred-tools.md#measured).

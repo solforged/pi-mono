@@ -1,9 +1,9 @@
 # Setup
 
 Use an existing Pi installation and keep this checkout in a stable location,
-usually `~/src/pi-mono`. Pi and Node can be managed with mise; this repository
-needs no npm installation. Run the [checks](development.md#checks) before
-loading the extensions.
+usually `~/src/pi-mono`. The devenv shell provides Node and the `pm-*`
+commands (`direnv allow` once); this repository needs no npm installation. Run
+the [checks](development.md#checks) before loading the extensions.
 
 ## Link the extensions
 
@@ -12,13 +12,13 @@ the repository root, link every extension directory that has one, plus the
 role defaults:
 
 ```sh
-mise run install              # or: node scripts/install.ts
-mise run install -- --dry-run # preview only
-mise run install -- --with herdr-title # include an opt-in extension
+pm-install                    # or: node scripts/install.ts
+pm-install --dry-run          # preview only
+pm-install --with herdr-title # include an opt-in extension
 ```
 
 The [Herdr TUI title bridge](herdr.md#tui-agent-titles) is opt-in; every other
-extension is linked by default. On macOS the task also builds `Pi Open.app` in
+extension is linked by default. On macOS the command also builds `Pi Open.app` in
 `apps/` under the agent directory, which opens
 [Markdown links](diff.md#markdown-documents) beside Pi; it rebuilds only when
 its sources change.
@@ -28,8 +28,8 @@ documentation changes. Correct links are kept. Dangling links into this
 checkout, such as a renamed extension, are removed. An extension link that
 points to another extension directory with an `index.ts`, such as a
 machine-specific variant kept in a separate checkout, is reported as
-`external` and kept without failing the task. Any other existing
-destination is reported as `review` and left untouched, and the task exits
+`external` and kept without failing the command. Any other existing
+destination is reported as `review` and left untouched, and the command exits
 nonzero until you resolve it. Then `/reload` in Pi or start a new session. Do
 not link the whole repository into the extensions directory or load internal
 modules and test fixtures separately.
@@ -59,6 +59,5 @@ installed links with duplicate `-e` paths or a local package installation. If
 migrating from the package setup, remove its settings entry with
 `pi remove /absolute/path/to/pi-mono` before enabling the links.
 
-To remove an extension, remove only its symlink and any corresponding mise
-mapping, then reload Pi. Remove the `roles.json` link separately if no longer
+To remove an extension, remove only its symlink, then reload Pi. Remove the `roles.json` link separately if no longer
 needed. Preserve credentials, settings, `roles.local.json`, and private state.

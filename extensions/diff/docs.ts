@@ -12,7 +12,7 @@ import { agentDir, ipcDir, keepShare, RATIO, readSettings, rexCall, rexSetup, ru
 import type { Palette } from "./render.ts";
 
 const DOC_VIEWER = join(import.meta.dirname, "doc.ts");
-/** The app that receives pi-open:// links; `mise run install` builds it on macOS. */
+/** The app that receives pi-open:// links; `pm-install` builds it on macOS. */
 export const handlerApp = (dir = agentDir()) => join(dir, "apps", "Pi Open.app");
 /** How long to wait for Rex to drop the closed document before giving the diff its place back. */
 const SETTLE_MS = 2_000;

@@ -94,7 +94,7 @@ Pi's working directory. ⌘-click one to show it, at its `#anchor` if it has one
 Another ⌘-click, or another `/md`, switches the open pane to that document.
 
 The links use a `pi-open://` URL that names the Pi process, and macOS hands it
-to `Pi Open.app`, which `mise run install` builds in the agent directory's
+to `Pi Open.app`, which `pm-install` builds in the agent directory's
 `apps/`. The app writes the request into the IPC directory below, and only the
 Pi it names acts on it. Rex asks before opening a link that launches an app;
 choose Always Open to stop it asking. Links are only made inside Rex, with that

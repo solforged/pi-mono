@@ -148,7 +148,7 @@ function runOne(model: Model, arm: Arm, task: Task, run: number, out: string, ke
 }
 
 async function main() {
-  const usage = "Usage: mise run deferred-tools:eval -- [--models provider/model[:thinking],...] [--arms deferred,index,direct] [--tasks id,...] [--runs 1] [--jobs 8] [--budget 15] [--out DIR] [--keep]\n       mise run deferred-tools:eval -- --report DIR";
+  const usage = "Usage: pm-deferred-tools-eval [--models provider/model[:thinking],...] [--arms deferred,index,direct] [--tasks id,...] [--runs 1] [--jobs 8] [--budget 15] [--out DIR] [--keep]\n       pm-deferred-tools-eval --report DIR";
   const fail = (message: string): never => { console.error(`${message}\n${usage}`); process.exit(2); };
   const argv = process.argv.slice(2), options: Record<string, string> = {};
   let keep = false;

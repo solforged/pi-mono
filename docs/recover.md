@@ -22,13 +22,13 @@ cut at the output limit is already handled by Pi.
 
 `/recover` shows how often each case occurred since the extension loaded;
 `/recover off` and `on` switch it for this runtime. Notes are stored as
-`recover` custom messages, so `mise run profile` counts them across sessions.
+`recover` custom messages, so `pm-profile` counts them across sessions.
 
 The behavior is checked against real Pi with scripted faults:
 
 ```sh
-mise run faults                                        # what Pi does alone
-mise run faults -- --with extensions/recover/index.ts  # with recovery loaded
+pm-faults                                     # what Pi does alone
+pm-faults --with extensions/recover/index.ts  # with recovery loaded
 ```
 
 See [measuring](measuring.md#fault-injection) for the scenarios.

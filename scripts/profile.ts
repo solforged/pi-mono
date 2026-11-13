@@ -367,7 +367,7 @@ export function sessionFiles(dir: string, since = 0): string[] {
 }
 
 if (import.meta.main) {
-  const usage = "Usage: mise run profile -- [--dir <sessions>] [--since YYYY-MM-DD] [--json]";
+  const usage = "Usage: pm-profile [--dir <sessions>] [--since YYYY-MM-DD] [--json]";
   let dir = process.env.PI_CODING_AGENT_SESSION_DIR || join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "sessions"), since = 0, json = false;
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {

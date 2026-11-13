@@ -1,5 +1,5 @@
 // Tasks for scripts/paired.ts: past changes in this repository, each prompted by its intent and scored by
-// the tests its commit added. `mise run paired -- --check` confirms every entry still builds. Fixes are
+// the tests its commit added. `pm-paired --check` confirms every entry still builds. Fixes are
 // small edits to existing code; features (`api-` names) add an extension or event and need Pi's API.
 export type Task = { id: string; commit: string; prompt: string };
 

@@ -27,7 +27,7 @@ if that fails, Pi's default runs with a warning. Virtual models stay with Pi.
 A background summary is paid for when it starts, so a replanned one, or one
 from a session abandoned inside the band, is wasted.
 
-`mise run compaction:smoke` runs the installed Pi against a scripted slow agent
+`pm-compaction-smoke` runs the installed Pi against a scripted slow agent
 and summarizer, with and without the extension, and reports how long each
 compaction blocked the run.
 

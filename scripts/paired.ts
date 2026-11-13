@@ -134,7 +134,7 @@ function runArm(task: Task, tests: string[], template: string, out: string, n: n
 }
 
 if (import.meta.main) {
-  const usage = "Usage: mise run paired -- --with <extension> [--both <extension>] [--runs 3] [--budget 10] [--jobs 2] [--out <dir>] [task]...\n       mise run paired -- --check | --report <dir>";
+  const usage = "Usage: pm-paired --with <extension> [--both <extension>] [--runs 3] [--budget 10] [--jobs 2] [--out <dir>] [task]...\n       pm-paired --check | --report <dir>";
   const fail = (message: string): never => { console.error(`${message}\n${usage}`); process.exit(2); };
   const argv = process.argv.slice(2), extensions: string[] = [], shared: string[] = [], names: string[] = [];
   let runs = 3, budget = 10, jobs = 2, out = "", check = false, reportDir = "";

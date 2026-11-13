@@ -8,8 +8,10 @@ user's global agent instructions.
 
 ## Development
 
-- Use Node 26 and Git. Run `mise run test` for the regression suite and
-  `mise run computer:test` for the VM controller suite. Neither makes model calls.
+- devenv provides Node 26 and the `pm-*` commands. Run `pm-test` for the
+  regression suite and `pm-computer-test` for the VM controller suite; neither
+  makes model calls. Where the environment is not loaded, prefix them with
+  `direnv exec .`, not `devenv shell --`, which unsets `TMPDIR`.
   Offline Pi configuration checks are in `docs/development.md`.
 - Read the installed Pi documentation and examples before changing extension
   APIs. Check TUI, print, and child-agent behavior when applicable.

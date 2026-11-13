@@ -1,6 +1,6 @@
 // Builds Pi Open.app, the macOS handler for pi-open:// links, from open.sh and
 // open.applescript beside this file, and registers it with Launch Services.
-// Run by `mise run install`; rebuilds only when the sources change.
+// Run by `pm-install`; rebuilds only when the sources change.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";

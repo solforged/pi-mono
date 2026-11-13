@@ -213,7 +213,7 @@ worktrees into the shared `/cache` can conflict; rerun the install if one fails.
 
 ## Checks and troubleshooting
 
-`mise run sandbox:smoke` exercises every routed tool against a live container
+`pm-sandbox-smoke` exercises every routed tool against a live container
 in a throwaway repository, without model calls. Start and build failures are
 logged under `~/.cache/pi-sandbox/state/` (`sandbox.log`, `build.log`).
 Containers are named `pi-sbx-<project>-<hash>`; `container list` shows them.

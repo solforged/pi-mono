@@ -3,7 +3,7 @@
 `extensions/rex/` runs persistent interactive Pi children in local Rex terminals.
 Delegation is asynchronous by default. Each child can accept follow-up tasks,
 receive parent messages, and become a human-controlled session. No dependencies
-are added; `mise run install` links it with the other extensions.
+are added; `pm-install` links it with the other extensions.
 
 Each session gets one delegation tool. Inside Rex, the Rex tools replace the
 headless `subagent` tool, which stays available as `/subagent`. Outside Rex,
@@ -332,7 +332,7 @@ terminals and worker directories remain until explicitly removed.
 
 ## Checks
 
-`mise run test` covers deck/grid planning and a layout simulator at 14 children, names, `next` ordering, widget and hub formatting, the `←` gate, protocol framing, persistent tasks, steering boundaries,
+`pm-test` covers deck/grid planning and a layout simulator at 14 children, names, `next` ordering, widget and hub formatting, the `←` gate, protocol framing, persistent tasks, steering boundaries,
 cancellation races, ownership arbitration, durable results, native layout checks,
 and cleanup with fake Rex and local sockets. It makes no model calls or live Rex
 mutations.

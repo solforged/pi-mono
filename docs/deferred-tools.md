@@ -41,7 +41,7 @@ or if models should use it without being asked to, as with `figure`.
 
 ## Measured
 
-`mise run deferred-tools:eval` runs 13 one-turn tasks against 29 mock tools in
+`pm-deferred-tools-eval` runs 13 one-turn tasks against 29 mock tools in
 12 groups (Jira, Slack, calendar, Datadog, staging DB, PagerDuty, email,
 diagrams, past sessions, ...). Some tasks name the system ("Jira ticket
 PLAT-4821"), some don't ("who's on the hook for production pages tonight?"),
@@ -82,9 +82,9 @@ effect on the prompt cache.
 ## Rerun
 
 ```sh
-mise run deferred-tools:eval -- --budget 5
-mise run deferred-tools:eval -- --models openai/gpt-6-luna:medium --arms deferred,index --runs 3
-mise run deferred-tools:eval -- --report /path/to/results
+pm-deferred-tools-eval --budget 5
+pm-deferred-tools-eval --models openai/gpt-6-luna:medium --arms deferred,index --runs 3
+pm-deferred-tools-eval --report /path/to/results
 ```
 
 It costs money: every run is a real session. Models default to every main and

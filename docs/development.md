@@ -17,13 +17,17 @@ Host setup must not provision, start, or grant credentials to a guest.
 
 ## Checks
 
-Use Node 26 and Git on `PATH`; no npm installation is required. Run from the
-repository root:
+The devenv shell provides Node 26 and the `pm-*` commands; Git comes from the
+host, and no npm installation is required. Run `direnv allow` once, or prefix
+a command with `direnv exec .` where the environment is not loaded. Avoid
+`devenv shell --`: it unsets `TMPDIR`, which moves the diff extension's IPC
+directory away from the one its link handler uses. The commands run from the
+checkout that contains the working directory, so a worktree tests itself.
 
 ```sh
-mise run test
-mise run computer:test
-# Or directly:
+pm-test
+pm-computer-test
+# Or directly, from the repository root:
 node --test --import ./tests/git-env.ts tests/*.test.ts
 node --test computer/tests/*.test.mjs
 ```
@@ -31,10 +35,10 @@ node --test computer/tests/*.test.mjs
 The suites make no model calls. `--offline` stops only background network
 traffic, not prompts, so smoke runs add `noModel` from `tests/helpers.ts`: its
 provider fails any request, and a smoke command that is not registered fails
-the test instead of reaching the default model. `mise run profile` and `mise run faults` are
+the test instead of reaching the default model. `pm-profile` and `pm-faults` are
 the offline [measuring](measuring.md) tools; the second runs the installed Pi
-against a scripted provider, as does `mise run compaction:smoke` for
-[compaction timing](context.md#compaction-summaries). `mise run sandbox:smoke` is a separate live
+against a scripted provider, as does `pm-compaction-smoke` for
+[compaction timing](context.md#compaction-summaries). `pm-sandbox-smoke` is a separate live
 check of the [sandbox](sandbox.md) that needs Apple container services. Git hooks are isolated only in throwaway test
 repositories; production hooks remain active. `tests/git-env.ts` clears
 `GIT_DIR` and the other variables that would point those repositories at
@@ -83,8 +87,8 @@ pi --offline --no-extensions --no-skills --no-context-files \
 ```
 
 To see what your installed extensions, instructions and skills add to every
-request, run `pi --offline --no-session -p /prompt-size` once `mise run
-install` has linked the extensions.
+request, run `pi --offline --no-session -p /prompt-size` once `pm-install`
+has linked the extensions.
 
 The opt-in [Rex prototype checks](rex.md#checks) include live terminal smoke
 tests with a fixed-response provider; they make no external model requests.

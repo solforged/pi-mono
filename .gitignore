@@ -1,2 +1,8 @@
 .DS_Store
 node_modules/
+
+# devenv and direnv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+.direnv/

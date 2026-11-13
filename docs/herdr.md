@@ -30,7 +30,7 @@ and name changes, including `/name` and `/autoname`. An unnamed or newly cleared
 session clears the metadata title instead of inventing a directory-based name.
 Workspace, worktree, tab, and manual pane labels are never changed.
 
-It is opt-in: `mise run install -- --with herdr-title` links it, and later
+It is opt-in: `pm-install --with herdr-title` links it, and later
 plain installs keep the link.
 
 Reports use `pane report-metadata` with source `user:pi-title` and an

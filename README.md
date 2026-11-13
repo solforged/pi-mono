@@ -7,7 +7,7 @@ roles never switch the main conversation model or copy credentials.
 ## Install
 
 The extensions load by symlink from this checkout, using an existing Pi
-installation. No npm installation is required. Run `mise run install` to link
+installation. No npm installation is required. Run `pm-install` to link
 or refresh them; see the [setup guide](docs/setup.md) for agent-directory
 overrides and removal.
 
@@ -19,7 +19,8 @@ pi --no-extensions -e ./extensions/workflows/index.ts
 
 ## Develop
 
-Run `mise run test` with Node 26 and Git available; it makes no model calls.
+Run `pm-test` in the devenv shell (`direnv allow` once); it makes no model
+calls.
 See the [development guide](docs/development.md) for the computer suite, offline
 configuration checks, and API references.
 

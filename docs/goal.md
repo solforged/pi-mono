@@ -8,7 +8,7 @@ objective names the end state, the evidence that proves it and what must not
 regress:
 
 ```text
-/goal Make `mise run test` pass on this branch without skipping tests or changing public behavior
+/goal Make `pm-test` pass on this branch without skipping tests or changing public behavior
 ```
 
 The goal is stored in the session, so it survives restarts and `/resume`,

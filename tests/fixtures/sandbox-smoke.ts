@@ -1,5 +1,5 @@
 // Live acceptance check for extensions/sandbox: needs Apple container services
-// and may build the image on first use. Run with `mise run sandbox:smoke`.
+// and may build the image on first use. Run with `pm-sandbox-smoke`.
 // Uses a throwaway repository; no model calls.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
