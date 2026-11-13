@@ -44,8 +44,8 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
   let home: string | undefined; // The main checkout's directory when cwd is in a linked worktree.
   let render = () => {};
   // Read from the directory, not asked of Git: nothing a sandbox guest left in the repository runs.
-  const layout = trustedLayout(cwd);
-  if (layout) home = worktreeHome(cwd, [layout.workTree, layout.gitDir, layout.commonDir].join("\n"));
+  const repo = trustedLayout(cwd);
+  if (repo) home = worktreeHome(cwd, [repo.workTree, repo.gitDir, repo.commonDir].join("\n"));
   // pi.exec takes no environment, which is what names the repository for Git.
   const status = () => new Promise<string | undefined>((resolve) => {
     const call = hostGit(cwd, ["--no-optional-locks", "status", "--porcelain=v2", "--branch"]);
