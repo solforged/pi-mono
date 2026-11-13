@@ -77,12 +77,14 @@ export function errorDetail(body: string): string {
 
 export function addSource(sources: Source[], source: Source): void {
   const url = cleanSourceUrl(source.url);
+  // A page known only by its URL keeps that as its title, in the spelling stored here.
+  const title = source.title === source.url ? url : source.title;
   const existing = sources.find((candidate) => candidate.url === url);
   if (!existing) {
-    sources.push({ ...source, url });
+    sources.push({ ...source, title, url });
     return;
   }
-  if (existing.title === existing.url && source.title !== source.url) existing.title = source.title;
+  if (existing.title === existing.url && title !== url) existing.title = title;
   if (!existing.snippet && source.snippet) existing.snippet = source.snippet;
 }
 

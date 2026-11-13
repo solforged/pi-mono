@@ -1,6 +1,7 @@
 import {
   errorDetail,
   addSource,
+  cleanSourceUrl,
   preferFirst,
   ProviderError,
   SYSTEM_PROMPT,
@@ -46,7 +47,8 @@ function collectAnnotation(
     const snippet = annotation.cited_text ?? annotation.text;
     const source = { title, url, snippet: typeof snippet === "string" && snippet.trim() ? snippet.trim() : undefined };
     addSource(sources, source);
-    citations.push({ title, url, citedText: source.snippet });
+    // The URL as addSource keeps it; a citation under another spelling is listed as a second page.
+    citations.push({ title, url: cleanSourceUrl(url), citedText: source.snippet });
   }
 }
 
@@ -74,7 +76,7 @@ export function parseXaiResponse(response: XaiJson, resultCap = DEFAULT_CAP): Se
         seen.add(url.trim());
         const title = source.title ?? source.caption ?? url;
         addSource(sources, { title, url });
-        citations.push({ title, url: url.trim() });
+        citations.push({ title, url: cleanSourceUrl(url.trim()) });
       }
     }
   }
@@ -82,7 +84,7 @@ export function parseXaiResponse(response: XaiJson, resultCap = DEFAULT_CAP): Se
     if (typeof url === "string" && url.trim() && !seen.has(url.trim())) {
       seen.add(url.trim());
       addSource(sources, { title: url, url });
-      citations.push({ title: url, url: url.trim() });
+      citations.push({ title: url, url: cleanSourceUrl(url.trim()) });
     }
   }
   const cap = Math.min(Math.max(resultCap, 1), MAX_CAP);

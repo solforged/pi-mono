@@ -213,6 +213,23 @@ test("xAI and Exa parsers keep sources and synthesize answers", () => {
   assert.match(exa.answer ?? "", /Hello/);
 });
 
+test("an xAI page is listed once however its URL was written", () => {
+  const urls = ["https://nodejs.org", "https://en.wikipedia.org/wiki/Café", "https://example.com/a?utm_source=openai"];
+  const response = parseXaiResponse({
+    output_text: "Answer.",
+    output: [
+      { type: "web_search_call", action: { sources: [{ title: "Read only", url: "https://example.org" }] } },
+      { type: "message", content: [{ type: "output_text", text: "Answer.", annotations: urls.map((url, i) => ({ type: "url_citation", url, title: `Page ${i}` })) }] },
+    ],
+    citations: ["https://example.net"],
+  });
+  assert.equal(formatForLLM(response), [
+    "Answer.", "", "Sources:",
+    "[1] Page 0 https://nodejs.org/", "[2] Page 1 https://en.wikipedia.org/wiki/Caf%C3%A9", "[3] Page 2 https://example.com/a",
+    "[4] Read only https://example.org/", "[5] https://example.net/",
+  ].join("\n"));
+});
+
 test("search chain skips missing backends, then falls through failures", async () => {
   const auth: SearchAuth = {
     codex: async () => undefined,
