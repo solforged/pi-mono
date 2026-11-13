@@ -198,6 +198,8 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("tool_call", async (event, ctx) => {
+    // Without the tool there is no move to guard and no hint to give, and finding the turn walks the session.
+    if (!pending && !pi.getActiveTools().includes(TOOL)) return;
     const turn = latestAssistant(ctx);
     const moving = turn?.message.content?.some?.((block: any) => block.type === "toolCall" && block.name === TOOL);
     if (event.toolName !== TOOL && (pending || moving)) return { block: true, reason: "The session is moving to its worktree; continue there after the move.", terminate: true };
