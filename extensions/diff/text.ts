@@ -39,7 +39,11 @@ export function width(text: string): number {
   return total;
 }
 
-/** Expands tabs and makes control characters visible, so every grapheme has a known width. */
+/**
+ * Expands tabs and makes control characters visible, so every grapheme has a
+ * known width and nothing in the text can act as an escape sequence. Anything
+ * that Git, a file or an error supplies goes through here before it is painted.
+ */
 export function sanitize(text: string, tab = 4): string {
   let out = "";
   let column = 0;
@@ -47,6 +51,8 @@ export function sanitize(text: string, tab = 4): string {
     if (grapheme === "\t") { const pad = tab - (column % tab); out += " ".repeat(pad); column += pad; continue; }
     const code = grapheme.codePointAt(0)!;
     if (code < 0x20 || code === 0x7f) { out += String.fromCodePoint(0x2400 + (code === 0x7f ? 0x21 : code)); column++; continue; }
+    // The C1 controls, which some terminals obey like their ESC forms, have no pictures.
+    if (code >= 0x80 && code < 0xa0) { out += "�"; column++; continue; }
     out += grapheme;
     column += graphemeWidth(grapheme);
   }
@@ -160,7 +166,7 @@ export function sgr(style: Style | undefined): string {
 }
 
 /** Link targets may not carry control characters into the escape sequence. */
-const safeLink = (url: string) => url.replace(/[\x00-\x1f\x7f]/g, "");
+const safeLink = (url: string) => url.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
 
 /** Serializes a row to exactly `columns` cells; every row ends reset, with no link left open. */
 export function paint(row: Row, columns: number): string {

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { changedHunks, collect, gitRunner, parseDiff, unquote } from "../extensions/diff/git.ts";
 import { bundledHighlighter, DEFAULT_SETTINGS, paneSize, readPanes, readSettings, registerDiff, run, tick, treeState, which } from "../extensions/diff/pane.ts";
+import { layoutDoc } from "../extensions/diff/markdown.ts";
 import { body, DEFAULT_PALETTE, emphasis, fileBody, hunkAt, layout, type View } from "../extensions/diff/render.ts";
 import { createHighlighter, loadHighlighter, piecesFromHtml, tokenFor } from "../extensions/diff/syntax.ts";
 import { decoder } from "../extensions/diff/terminal.ts";
@@ -234,6 +235,23 @@ test("paints every row to exactly the pane width", () => {
       for (const row of screen.rows) assert.equal(width(plain(paint(row, columns))), columns, `${columns} ${wrap}`);
     }
   }
+});
+
+test("a file name, note or error cannot write escape sequences to the terminal", () => {
+  // Git quotes such a name in its diff and `unquote` turns it back into these bytes.
+  const nasty = "dir/x\x1b]0;PWNED\x07\n\u009b2J.txt";
+  const file = { ...parseDiff(SAMPLE)[0], path: nasty, oldPath: nasty, status: "renamed" as const, notes: ["mode \x1b[31m"] };
+  const snapshot = { source: "branch" as const, label: "since \x1b[7mmain", files: [file, file] };
+  const screens = [
+    layout(view({ snapshot, rows: 30, columns: 120 })),
+    layout(view({ snapshot, error: "fatal: \x1b[2J\u0085", rows: 30, columns: 120 })),
+    layoutDoc({ title: nasty, error: `Cannot read ${nasty}`, scroll: 0, columns: 120, rows: 30, palette: DEFAULT_PALETTE, help: false, back: false }),
+  ];
+  for (const screen of screens) for (const row of screen.rows) for (const span of row.spans) assert.doesNotMatch(span.text, /[\x00-\x1f\x7f-\x9f]/);
+  const text = screens.map((screen) => screen.rows.map((row) => plain(paint(row, 120))).join("\n"));
+  assert.ok(text[0].includes("dir/x␛]0;PWNED␇␊�2J.txt") && text[0].includes("from dir/x␛]0;PWNED") && text[0].includes("mode ␛[31m") && text[0].includes("since ␛[7mmain"));
+  assert.ok(text[1].includes("fatal: ␛[2J�"));
+  assert.ok(text[2].includes("x␛]0;PWNED␇␊�2J.txt") && text[2].includes("Cannot read dir/x␛]0;PWNED"));
 });
 
 test("a file added in one very large hunk still lays out", () => {

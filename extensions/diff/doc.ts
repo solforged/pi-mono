@@ -135,7 +135,7 @@ function watchFile() {
 }
 
 function setTitle() {
-  out.write(`\x1b]2;${basename(path).replace(/[\x00-\x1f\x7f]/g, "")}\x1b\\`);
+  out.write(`\x1b]2;${basename(path).replace(/[\x00-\x1f\x7f-\x9f]/g, "")}\x1b\\`);
 }
 
 /** Shows another document, or another place in this one. */

@@ -376,12 +376,14 @@ export function layoutDoc(view: DocView): DocLayout {
   const showKeys = height >= 10 && columns >= 20;
   const bodyHeight = Math.max(0, height - 2 - (showKeys ? 1 : 0));
 
-  const slash = view.title.lastIndexOf("/") + 1;
+  // A file's name can hold anything, escape sequences included.
+  const title = sanitize(view.title);
+  const slash = title.lastIndexOf("/") + 1;
   const limit = Math.max(0, total - Math.max(1, bodyHeight - 2));
   const where = !total || total <= bodyHeight ? "" : view.scroll <= 0 ? "top" : view.scroll >= limit ? "end" : `${Math.round(view.scroll / limit * 100)}%`;
   const right = where ? ` ${where} ` : " ";
   const room = Math.max(1, columns - width(right) - 1);
-  let dir = view.title.slice(0, slash), base = view.title.slice(slash);
+  let dir = title.slice(0, slash), base = title.slice(slash);
   if (width(dir) + width(base) > room) {
     const keep = Math.max(0, room - width(base) - 1);
     dir = keep > 0 ? `…${[...dir].slice(-keep).join("")}` : "";
@@ -403,7 +405,7 @@ export function layoutDoc(view: DocView): DocLayout {
       { text: `  ${keys.padEnd(16)}`, style: { fg: p.accent } }, { text: action, style: { fg: p.text } },
     ] })), { spans: [] }, { spans: [{ text: "  ? closes this help", style: { fg: p.dim } }] }];
   } else if (view.error) {
-    content = [{ spans: [] }, { spans: [{ text: `  ${view.error}`, style: { fg: p.error } }] }];
+    content = [{ spans: [] }, { spans: [{ text: `  ${sanitize(view.error)}`, style: { fg: p.error } }] }];
   } else if (!view.doc) {
     content = [{ spans: [] }, { spans: [{ text: "  Loading…", style: { fg: p.dim } }] }];
   } else {

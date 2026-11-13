@@ -277,7 +277,7 @@ function fileRow(file: FileDiff, selected: boolean, hovered: boolean, columns: n
   const [mark, color] = STATUS[file.status];
   const right = [...counts(file, p, bg), { text: " ", style: { bg } }];
   const room = Math.max(4, columns - 4 - spanWidth(right));
-  const path = truncateStart(file.path, room);
+  const path = truncateStart(sanitize(file.path), room);
   const slash = path.lastIndexOf("/") + 1;
   return split([
     { text: ` ${mark} `, style: { fg: p[color], bg, bold: selected } },
@@ -358,7 +358,7 @@ export function layout(view: View): Layout {
   const summary: Span[] = files.length
     ? [{ text: ` ${files.length} ${files.length === 1 ? "file" : "files"} changed `, style: { fg: p.text, bold: true } }, ...counts(totals, p)]
     : [{ text: view.loading && !view.snapshot ? " Loading…" : " No changes", style: { fg: p.muted, bold: true } }];
-  const sourceText = view.snapshot?.label ?? "";
+  const sourceText = sanitize(view.snapshot?.label ?? "");
   const right: Span[] = [
     { text: view.follow ? "● " : "○ ", style: { fg: view.follow ? p.success : p.dim } },
     { text: `${sourceText} ▾ `, style: view.hover?.area === "source" ? { fg: p.text, bg: p.selectedBg, bold: true } : { fg: p.accent } },
@@ -397,14 +397,15 @@ export function layout(view: View): Layout {
     return `change ${hunkAt(full.hunks, view.scroll, full.rows.length, space)}/${full.hunks.length} · `;
   };
   if (file && rows.length < height) {
-    const notes = [
+    // Paths, notes and errors come from Git and the file system, so they are sanitized like diff lines.
+    const notes = sanitize([
       file.oldPath ? `from ${file.oldPath}` : "",
       file.status === "untracked" ? "untracked" : file.status === "added" ? "new file" : file.status === "deleted" ? "deleted" : "",
       ...file.notes,
-    ].filter(Boolean).join(" · ");
+    ].filter(Boolean).join(" · "));
     rows.push(split([
       { text: " ", style: undefined },
-      { text: file.path, style: { fg: p.text, bold: true } },
+      { text: sanitize(file.path), style: { fg: p.text, bold: true } },
       { text: notes ? `  ${notes}` : "", style: { fg: p.dim } },
     ], [
       { text: changes(), style: { fg: p.dim } },
@@ -423,7 +424,7 @@ export function layout(view: View): Layout {
       { text: `   ${keys.padEnd(14)}`, style: { fg: p.accent } }, { text: action, style: { fg: p.text } },
     ] })), { spans: [] }, { spans: [{ text: "   ? closes this help", style: { fg: p.dim } }] }];
   } else if (view.error) {
-    content = message(view.error, p.error);
+    content = message(sanitize(view.error), p.error);
   } else if (!file) {
     content = view.snapshot ? message(view.snapshot.source === "staged" ? "Nothing is staged." : "The working tree is clean.", p.dim) : [];
   } else if (file.binary) {
