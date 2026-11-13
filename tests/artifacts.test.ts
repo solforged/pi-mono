@@ -48,12 +48,14 @@ test("successful large output is saved before replacement without duplicating ra
   assert.equal((await stat(archived.artifact.path)).mode & 0o777, 0o600);
 });
 
-test("line count and byte thresholds are independent", async (t) => {
+test("bytes alone trigger archival, however many lines", async (t) => {
   const store = new ArtifactStore(join(await temporary(t), "artifacts"));
   assert.equal(await archiveResult(result("x".repeat(8192)), store), undefined);
   assert.ok(await archiveResult(result("x".repeat(8193)), store));
-  assert.equal(await archiveResult(result(Array(160).fill("x").join("\n")), store), undefined);
-  assert.ok(await archiveResult(result(Array(161).fill("x").join("\n")), store));
+  // Archived at 161 lines, a 6 KB listing cost a 2.5 KB receipt and three reads to recover.
+  const listing = Array.from({ length: 161 }, (_, i) => `src/components/widgets/item-${String(i).padStart(4, "0")}.tsx`).join("\n");
+  assert.equal(await archiveResult(result(listing, { toolName: "find" }), store), undefined);
+  assert.equal(await archiveResult(result(Array(4096).fill("x").join("\n")), store), undefined);
 });
 
 test("preview includes head, tail and middle diagnostics within its budget", () => {

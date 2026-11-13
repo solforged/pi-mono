@@ -70,8 +70,10 @@ reserve applies, so give models you use heavily an exact override as well.
 ## Output artifacts
 
 Successful top-level `bash`, `powershell`, `grep`, `find`, `ls`, `web_search`,
-and `codemode` results exceeding 8 KiB of text or 160 lines are saved under
-`<agent-dir>/tool-artifacts/`. The result entering history contains an artifact
+and `codemode` results exceeding 8 KiB of text are saved under
+`<agent-dir>/tool-artifacts/`. Line count alone never archives a result: a long
+listing of short lines costs less inline than its receipt and the reads that
+recover it. The result entering history contains an artifact
 UUID and bounded, verbatim start/end excerpts plus selected diagnostic lines.
 These are explicitly incomplete, not a generated summary. There are no model
 calls or edits to older history, so existing cached prefixes are not deliberately

@@ -3,8 +3,9 @@ import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
+// Bytes alone decide: a long listing of short lines costs less inline than its
+// receipt plus the reads that recover it.
 export const MAX_INLINE_BYTES = 8192;
-export const MAX_INLINE_LINES = 160;
 export const MAX_EXCERPT_BYTES = 6000;
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
 const TOOLS = new Set(["bash", "powershell", "grep", "find", "ls", "web_search", "codemode"]);
@@ -150,7 +151,7 @@ export async function archiveResult(event: Result, store: ArtifactStore) {
   const text = event.content.filter((block) => block.type === "text").map((block) => block.text).join("\n\n");
   const bytes = Buffer.byteLength(text);
   const lines = text.split("\n").length;
-  if (bytes <= MAX_INLINE_BYTES && lines <= MAX_INLINE_LINES) return;
+  if (bytes <= MAX_INLINE_BYTES) return;
   // Persist before returning a replacement. A failed save must never lose evidence.
   const artifact = await store.save(text);
   const excerpt = preview(text);

@@ -59,7 +59,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       const text = [
-        `Output artifacts: ${enabled ? "on" : "off"}; threshold 8192 bytes or 160 lines.`,
+        `Output artifacts: ${enabled ? "on" : "off"}; threshold 8192 bytes.`,
         `Since load: ${saved} results archived, ${omittedBytes} text bytes kept out of history, ${failures} storage failures.`,
         `Storage: ${store.root} (private; retained until manually removed).`,
         "Failed calls, read/edit/write, and nested calls are unchanged. No model calls or history rewriting.",
