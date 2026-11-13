@@ -91,6 +91,29 @@ export function parseGitStatus(stdout: string): Git {
   return git;
 }
 
+/**
+ * Runs `check` every `first` ms, and doubles the wait up to `max` each time it
+ * reports nothing new. `reset` starts over at `first`.
+ */
+export function backoff(check: () => Promise<boolean>, first: number, max: number) {
+  let wait = first, stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+    clearTimeout(timer);
+    if (stopped) return;
+    const armed = timer = setTimeout(async () => {
+      const changed = await check().catch(() => false);
+      // A reset during the check has armed the next one already.
+      if (timer !== armed) return;
+      wait = changed ? first : Math.min(wait * 2, max);
+      arm();
+    }, wait);
+    armed.unref?.();
+  };
+  arm();
+  return { reset() { wait = first; arm(); }, stop() { stopped = true; clearTimeout(timer); } };
+}
+
 type Usage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } };
 export type Stats = { cost: number; cacheHit?: number };
 

@@ -18,7 +18,9 @@ From left to right:
   `(wt)`; the branch names the task.
 - Git branch (or short commit when detached) with conflicted `!`, staged `+`,
   unstaged `*`, and untracked `?` counts, then commits ahead `⇡` and behind `⇣`
-  of upstream. Counts refresh after tool calls and runs and every 10 seconds.
+  of upstream. Counts refresh after tool calls and runs. A poll catches
+  changes made outside Pi: every 10 seconds, slowing to once a minute while
+  it finds nothing new, and not at all outside a repository.
 - Context use of the window, with 󰁨 when automatic compaction is enabled.
   It turns yellow past 70% and red past 90%.
 - Cache hit rate of the latest request: cache reads over all prompt tokens.

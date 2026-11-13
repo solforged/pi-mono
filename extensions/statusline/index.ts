@@ -2,12 +2,13 @@ import { execFile } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
-  displayPath, fitSegments, formatCost, formatTokens, icons, layout, parseGitStatus, readContribution, rightStatuses, sessionStats,
+  backoff, displayPath, fitSegments, formatCost, formatTokens, icons, layout, parseGitStatus, readContribution, rightStatuses, sessionStats,
   modelLabel, thinkingColor, thinkingIcon, thinkingLabel, worktreeHome, SEGMENT_EVENT, type Contribution, type Git, type Segment, type Stats,
 } from "./format.ts";
 import { hostGit, trustedLayout } from "../sandbox/hostgit.ts";
 
 const POLL_MS = 10_000; // Catches changes made outside Pi.
+const IDLE_POLL_MS = 60_000; // The poll slows to this while it finds nothing new.
 const DEBOUNCE_MS = 300;
 const measure = { width: visibleWidth, truncate: (text: string, width: number) => truncateToWidth(text, width, "…") };
 
@@ -53,12 +54,17 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
   });
   let running = false, again = false, closed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let seen: string | undefined;
 
-  async function refreshGit() {
-    if (running) { again = true; return; }
+  /** Whether the status differs from the last one read. */
+  async function refreshGit(): Promise<boolean> {
+    if (running) { again = true; return true; }
     running = true;
+    let changed = false;
     try {
       const output = await status();
+      changed = output !== seen;
+      seen = output;
       git = output === undefined ? undefined : parseGitStatus(output);
       if (!closed) render();
     } catch { git = undefined; }
@@ -66,14 +72,19 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
       running = false;
       if (again && !closed) { again = false; void refreshGit(); }
     }
+    return changed;
   }
+  // Every open pane has a session, most of them idle, and a status scans the
+  // work tree for untracked files. The poll therefore slows down while it
+  // finds nothing new, and does not run Git where there is no repository.
+  const poll = backoff(async () => !closed && trustedLayout(cwd) ? refreshGit() : false, POLL_MS, IDLE_POLL_MS);
+  // What Pi does starts the poll over: the next change outside it is likely soon.
   const scheduleGit = () => {
     if (closed) return;
+    poll.reset();
     clearTimeout(timer);
     timer = setTimeout(refreshGit, DEBOUNCE_MS);
   };
-  const poll = setInterval(scheduleGit, POLL_MS);
-  poll.unref?.();
 
   // The footer draws on every frame, and each of these walks the whole session,
   // so they are recomputed only when the branch or the model changes, as Pi's own footer does.
@@ -163,7 +174,7 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
     close() {
       closed = true;
       clearTimeout(timer);
-      clearInterval(poll);
+      poll.stop();
     },
   };
 }

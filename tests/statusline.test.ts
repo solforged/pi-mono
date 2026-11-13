@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { displayPath, fitSegments, formatCost, formatTokens, layout, parseGitStatus, readContribution, rightStatuses, sessionStats, modelLabel, thinkingColor, thinkingIcon, thinkingLabel, worktreeHome } from "../extensions/statusline/format.ts";
+import { backoff, displayPath, fitSegments, formatCost, formatTokens, layout, parseGitStatus, readContribution, rightStatuses, sessionStats, modelLabel, thinkingColor, thinkingIcon, thinkingLabel, worktreeHome } from "../extensions/statusline/format.ts";
 
 const measure = { width: (text: string) => [...text].length, truncate: (text: string, width: number) => [...text].slice(0, width).join("") };
 const usage = (input: number, cacheRead: number, cacheWrite: number, total: number) => ({ input, output: 10, cacheRead, cacheWrite, cost: { total } });
@@ -44,6 +44,31 @@ test("parses porcelain v2 status with branch, tracking, and change counts", () =
   ].join("\n"));
   assert.deepEqual(git, { branch: "main", oid: "0123456789abcdef", ahead: 2, behind: 1, staged: 3, unstaged: 2, untracked: 2, conflicts: 1 });
   assert.deepEqual(parseGitStatus("# branch.oid (initial)\n# branch.head (detached)\n"), { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicts: 0 });
+});
+
+test("the poll slows down while nothing changes and starts over on a change or a reset", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let changed = false;
+  const checks: number[] = [];
+  let now = 0;
+  const poll = backoff(async () => { checks.push(now); return changed; }, 10, 60);
+  // The check is asynchronous, so the next wait is armed a moment after each one.
+  const advance = async (ms: number) => { for (let i = 0; i < ms; i++) { now++; t.mock.timers.tick(1); await new Promise((resolve) => setImmediate(resolve)); } };
+  await advance(200);
+  assert.deepEqual(checks, [10, 30, 70, 130, 190]);
+  changed = true;
+  await advance(60);
+  changed = false;
+  await advance(40);
+  assert.deepEqual(checks.slice(5), [250, 260, 270, 290]);
+  // Activity in Pi resets the wait, and replaces the check that was due at 330.
+  await advance(29);
+  poll.reset();
+  await advance(20);
+  assert.deepEqual(checks.slice(9), [339]);
+  poll.stop();
+  await advance(200);
+  assert.equal(checks.length, 10);
 });
 
 test("totals billed usage and keeps the latest real cache hit rate", () => {
