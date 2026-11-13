@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { delimiter } from "node:path";
+import { homedir, userInfo } from "node:os";
+import { delimiter, join } from "node:path";
 import { rms } from "./audio.ts";
 
 // Records the default macOS input with ffmpeg, streaming raw 16 kHz PCM over a
@@ -28,8 +29,15 @@ export interface RecorderEvents {
   onError(message: string): void;
 }
 
-// Pi started from a GUI or launchd may lack Homebrew on PATH.
-const PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin"].filter(Boolean).join(delimiter);
+// Pi started from a GUI or launchd may lack the Nix profiles on PATH; the
+// system flake's voice module installs ffmpeg into the per-user one.
+const PATH = [
+  process.env.PATH,
+  `/etc/profiles/per-user/${userInfo().username}/bin`,
+  join(homedir(), ".nix-profile/bin"),
+  "/run/current-system/sw/bin",
+  "/nix/var/nix/profiles/default/bin",
+].filter(Boolean).join(delimiter);
 
 export function record(events: RecorderEvents, command = "ffmpeg"): Recorder {
   const child = spawn(command, [

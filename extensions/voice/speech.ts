@@ -1,6 +1,6 @@
 // Client for the local speech-to-text server, a long-running process that keeps
-// the model loaded for every Pi session (desktop/voice/server.py in the
-// dotfiles, run by launchd).
+// the model loaded for every Pi session (config/voice/server.py in the system
+// flake, run by the launchd agent its `modules.voice` defines).
 
 export const DEFAULT_URL = "http://127.0.0.1:8178";
 
@@ -9,7 +9,7 @@ export interface Transcript { text: string; ms: number }
 export class SpeechError extends Error {}
 
 const unreachable = (url: string) =>
-  new SpeechError(`no speech server at ${url}; start it with \`mise run voice:serve\` or check \`launchctl print gui/$(id -u)/dev.mise.voice-stt\``);
+  new SpeechError(`no speech server at ${url}; enable \`modules.voice\` in the system flake, run \`voice-serve\`, or check \`launchctl print gui/$(id -u)/org.nixos.voice-stt\``);
 
 /** Transcribes a WAV clip. `partial` marks a recording still in progress, which the server neither keeps nor logs. */
 export async function transcribe(url: string, clip: Buffer, options: { partial?: boolean; signal?: AbortSignal } = {}): Promise<Transcript> {

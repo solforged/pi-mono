@@ -11,12 +11,15 @@ the microphone takes about 0.2 s to open.
 
 ## Requirements
 
-- macOS, with ffmpeg on `PATH` or in Homebrew's prefix. The terminal running
-  Pi needs microphone permission; macOS asks on first use.
-- The local speech server from the dotfiles' `voice` module, which keeps
-  Parakeet loaded for every session and transcribes a five-second clip in
-  about 50 ms. `/voice` checks that it is reachable. Its vocabulary fixes and
-  `voice:bench` comparison live with it, in `desktop/voice/` of the dotfiles.
+- macOS on Apple silicon with `modules.voice.enable = true` in the system
+  flake (`~/src/system`). It installs ffmpeg and runs the local speech server
+  as the `org.nixos.voice-stt` launch agent, which keeps Parakeet loaded for
+  every session and transcribes a five-second clip in about 50 ms. `/voice`
+  checks that it is reachable; its log is `~/Library/Logs/voice-stt.log`. The
+  server, its vocabulary fixes and `voice-bench` live in `config/voice/` there.
+- ffmpeg is found on `PATH` or in the Nix profiles, for a Pi started without
+  them. The terminal running Pi needs microphone permission; macOS asks on
+  first use.
 - For hold-to-talk, a terminal that reports key releases through the Kitty
   keyboard protocol: Rex, Ghostty, kitty or WezTerm. Elsewhere the key
   toggles recording.
