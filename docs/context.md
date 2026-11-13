@@ -111,7 +111,9 @@ before any conversation. `/prompt-size` shows both: the prompt by section
 declarations grouped by the extension that registered them. Sizes are
 characters of text or JSON, with tokens estimated at four characters each.
 Repo tools that are registered but inactive, such as ask in print mode, are
-listed separately and not counted.
+listed separately and not counted. Extensions add some sections only when a
+prompt starts (memory, the sandbox note, the deferred tool list), so the report
+uses the prompt the last run sent, and says so when nothing has run yet.
 
 The extension also drops Pi rules that only repeat their tool's description
 (currently edit's `oldText` rule). It matches Pi's exact wording, and the smoke
@@ -120,5 +122,7 @@ test fails if Pi rewords a rule, so the trim cannot silently stop working.
 This repository's tools keep their declarations small. Each description says
 when to use the tool; parameter limits are enforced in code, with errors that
 explain them, rather than in the schema. Tools add no rule or tool-list lines,
-except the ask tool's two deliberate guidelines. `tests/fixtures/prompt-size-smoke.ts`
-holds a size budget for every repo tool and fails when one grows past it.
+except where a model must act unasked: the ask tool's two guidelines, and one
+each for `enter_worktree` and the sandbox's `browser`.
+`tests/fixtures/prompt-size-smoke.ts` holds a size budget for every repo tool
+except the sandbox's and fails when one grows past it.

@@ -54,12 +54,14 @@ export function measure(prompt: string, tools: ToolInfo[], inactive: ToolInfo[] 
 
 const kb = (n: number) => `${(n / 1000).toFixed(1)} KB`.padStart(8);
 
-export function report(m: ReturnType<typeof measure>) {
+/** `ran` says the prompt is the one the last run sent, not the one Pi holds between runs. */
+export function report(m: ReturnType<typeof measure>, ran = true) {
   const lines = [`Fixed prompt: ${kb(m.total).trim()} (~${Math.round(m.total / 4).toLocaleString("en")} tokens) = system prompt ${kb(m.promptChars).trim()} + ${m.tools.length} tool declarations ${kb(m.toolChars).trim()}`, "", "System prompt sections:"];
   for (const s of m.sections) lines.push(`${kb(s.chars)}  ${s.name}`);
   lines.push("", "Tool declarations by extension:");
   for (const o of m.owners) lines.push(`${kb(o.chars)}  ${o.name}: ${m.tools.filter(t => t.owner === o.name).map(t => `${t.name} ${t.chars}`).join(", ")}`);
   if (m.inactive.length) lines.push("", `Inactive here, not counted: ${m.inactive.map(t => `${t.name} ${t.chars}`).join(", ")}`);
+  if (!ran) lines.push("", "No prompt has run in this session yet, so sections that extensions add when one starts are not counted. Send a prompt, then run this again.");
   lines.push("", "Sizes are characters of JSON or text; tokens are estimated at 4 characters each.");
   return lines.join("\n");
 }

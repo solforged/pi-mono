@@ -16,7 +16,8 @@ test("prompts are measured by section and tools by owning extension", () => {
   const m = measure("<rules>r</rules>", [tool, { ...tool, name: "u", sourceInfo: { source: "builtin" } }]);
   assert.deepEqual([m.promptChars, m.toolChars, m.total, m.owners.map(o => o.name)], [16, 2 * declarationSize(tool), 16 + 2 * declarationSize(tool), ["unknown", "pi"]]);
   assert.match(report(m), /^Fixed prompt: 0\.1 KB \(~\d+ tokens\)[\s\S]*Tool declarations by extension:[\s\S]* {2}unknown: t \d+/);
-  assert.doesNotMatch(report(m), /Inactive/);
+  assert.doesNotMatch(report(m), /Inactive|No prompt has run/);
+  assert.match(report(m, false), /No prompt has run in this session yet/);
   assert.match(report(measure("", [], [{ ...tool, name: "ask_user_question" }])), /Inactive here, not counted: ask_user_question \d+/);
 });
 
@@ -49,7 +50,7 @@ test("one delegation tool per session, restoring only what the switch removed", 
 test("installed Pi keeps every repo tool declaration within budget", t => {
   const env = { ...process.env };
   for (const key of ["PI_REX_CHILD", "PI_WORKFLOW_CHILD_CONFIG", "REX_SESSION", "REX_BLOCK"]) delete env[key];
-  const extensions = ["artifacts", "ask", "figure", "goal", "intercom", "rex", "sessions", "todo", "web-search", "workflows", "workflowz"].flatMap(name => ["-e", join(root, "extensions", name, "index.ts")]);
+  const extensions = ["artifacts", "ask", "figure", "goal", "intercom", "memory", "rex", "sessions", "todo", "web-search", "workflows", "workflowz", "worktree"].flatMap(name => ["-e", join(root, "extensions", name, "index.ts")]);
   const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", ...extensions, "-e", join(root, "tests/fixtures/prompt-size-smoke.ts"), ...noModel, "-p", "/prompt-size-smoke"], { cwd: root, encoding: "utf8", timeout: 30000, env });
   if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
   assert.equal(check.status, 0, check.stderr || check.stdout);
