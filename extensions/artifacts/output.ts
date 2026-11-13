@@ -6,7 +6,9 @@ import { join, resolve } from "node:path";
 // Bytes alone decide: a long listing of short lines costs less inline than its
 // receipt plus the reads that recover it.
 export const MAX_INLINE_BYTES = 8192;
-export const MAX_EXCERPT_BYTES = 6000;
+// One artifact_read page. Pi's own tools deliver at most 50 KB, so three pages
+// recover any of their results; 6 KB pages took nine turns for the same.
+export const MAX_PAGE_BYTES = 24_000;
 const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
 const TOOLS = new Set(["bash", "powershell", "grep", "find", "ls", "web_search", "codemode"]);
 const DIAGNOSTIC = /\b(error|fail(?:ed|ure)?|warning|exception|traceback|assert(?:ion)?|fatal|panic)\b/i;
@@ -107,10 +109,11 @@ function fromColumn(text: string, column: number): string {
 }
 export function readExcerpt(text: string, options: ReadOptions = {}): string {
   const offset = options.offset ?? 1;
-  // Asking for more than a page returns one page and its continuation offset; refusing cost a turn each time.
-  const limit = Math.min(options.limit ?? 40, 80);
+  // Bytes bound a page; limit only narrows it. A line cap as well made a long
+  // diff cost a turn for every 80 lines.
+  const limit = options.limit ?? Number.MAX_SAFE_INTEGER;
   if (!Number.isSafeInteger(offset) || offset < 1) throw new Error("offset must be a positive line number");
-  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("limit must be between 1 and 80 lines");
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("limit must be a positive number of lines");
   if (options.query !== undefined && (!options.query || options.query.length > 500)) throw new Error("query must be 1–500 characters");
   const column = options.column ?? 1;
   if (!Number.isSafeInteger(column) || column < 1) throw new Error("column must be a positive character number");
@@ -125,7 +128,7 @@ export function readExcerpt(text: string, options: ReadOptions = {}): string {
     const source = count === 0 ? fromColumn(lines[i], column) : lines[i];
     const line = `${prefix}${source}\n`;
     // Reserve space for a continuation notice; never silently skip a long line.
-    const available = MAX_EXCERPT_BYTES - Buffer.byteLength(output) - 300;
+    const available = MAX_PAGE_BYTES - Buffer.byteLength(output) - 300;
     if (Buffer.byteLength(line) > available) {
       if (count === 0) {
         const clipped = headBytes(source, Math.max(0, available - Buffer.byteLength(prefix)));
@@ -144,7 +147,8 @@ export function readExcerpt(text: string, options: ReadOptions = {}): string {
   return output;
 }
 
-export async function archiveResult(event: Result, store: ArtifactStore) {
+/** `readable` says whether the model has artifact_read; without it the receipt names the file instead. */
+export async function archiveResult(event: Result, store: ArtifactStore, readable = true) {
   // Scripts need original structured values to compute their own filtered result.
   // Failed calls and explicit reads retain their complete evidence by default.
   if (event.parentToolCallId || event.isError || !TOOLS.has(event.toolName)) return;
@@ -155,7 +159,11 @@ export async function archiveResult(event: Result, store: ArtifactStore) {
   // Persist before returning a replacement. A failed save must never lose evidence.
   const artifact = await store.save(text);
   const excerpt = preview(text);
-  const receipt = `[Output archived: ${event.toolName}, ${bytes} bytes, ${lines} lines. Excerpts below are incomplete, not a summary.\nArtifact: ${artifact.id}\nUse artifact_read({id: "${artifact.id}", offset: 1, limit: 40}) or add a literal query to locate omitted evidence.\nSaved delivered text: ${artifact.path}; upstream tool truncation still applies.]`;
+  // Every archived result carries this, so it is one line with the id once. The
+  // host path is left out while the tool can read: the sandbox cannot open it,
+  // and elsewhere it invites a `cat` that is archived again.
+  const rest = readable ? `Read the rest with artifact_read, id ${artifact.id}.` : `The full text is in ${artifact.path}.`;
+  const receipt = `[Output archived: ${event.toolName}, ${bytes} bytes, ${lines} lines; the excerpts below are incomplete, not a summary. ${rest}]`;
   let inserted = false;
   const content = event.content.flatMap((block): Content[] => {
     if (block.type !== "text") return [block];

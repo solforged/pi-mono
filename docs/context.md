@@ -73,11 +73,13 @@ Successful top-level `bash`, `powershell`, `grep`, `find`, `ls`, `web_search`,
 and `codemode` results exceeding 8 KiB of text are saved under
 `<agent-dir>/tool-artifacts/`. Line count alone never archives a result: a long
 listing of short lines costs less inline than its receipt and the reads that
-recover it. The result entering history contains an artifact
-UUID and bounded, verbatim start/end excerpts plus selected diagnostic lines.
-These are explicitly incomplete, not a generated summary. There are no model
-calls or edits to older history, so existing cached prefixes are not deliberately
-rewritten.
+recover it. The result entering history contains a one-line receipt with the
+artifact UUID and bounded, verbatim start/end excerpts plus selected diagnostic
+lines. These are explicitly incomplete, not a generated summary. The receipt
+names the saved file instead of the UUID only when `artifact_read` is not
+active: the sandbox cannot open a host path, and elsewhere it invites a `cat`
+that is archived again. There are no model calls or edits to older history, so
+existing cached prefixes are not deliberately rewritten.
 
 Use the model-callable `artifact_read` tool to retrieve omitted evidence:
 
@@ -86,8 +88,9 @@ Use the model-callable `artifact_read` tool to retrieve omitted evidence:
 ```
 
 Queries are case-sensitive literal substrings, not regexes. `offset` selects a
-1-based starting line; `limit` defaults to 40; a larger request returns 80 lines. Each response
-is also bounded to 6,000 bytes and supplies a continuation offset. Long lines
+1-based starting line and `limit` asks for fewer lines. A response holds up to
+24,000 bytes and supplies a continuation offset when more remains, so three
+calls recover the 50 KB that Pi's own tools deliver at most. Long lines
 supply a `column` cursor so their entire text can be recovered without splitting
 Unicode characters. Retrieval accepts only artifact UUIDs, never arbitrary host
 paths; this also works when ordinary `read` is sandboxed.
@@ -100,8 +103,8 @@ structured output is not retained alongside a replaced top-level text result.
 A storage failure leaves the original result intact and reports a warning.
 
 Artifacts contain the text delivered by the upstream tool; this cannot recover
-anything that tool had already truncated. Receipts and tool details retain
-upstream full-output paths when available. Multiple text blocks are joined with
+anything that tool had already truncated. The end excerpt and tool details
+retain upstream full-output paths when available. Multiple text blocks are joined with
 blank lines; images stay in the result rather than being archived as text.
 
 Files/directories are private (0600/0700), with no network transmission by this

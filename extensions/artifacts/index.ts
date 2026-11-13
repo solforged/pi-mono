@@ -13,7 +13,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_result", async (event, ctx) => {
     if (!enabled) return;
     try {
-      const result = await archiveResult(event, store);
+      const result = await archiveResult(event, store, pi.getActiveTools().includes("artifact_read"));
       if (!result) return;
       saved++;
       omittedBytes += Math.max(0, result.artifact.originalBytes - result.artifact.returnedBytes);
@@ -33,7 +33,7 @@ export default function (pi: ExtensionAPI) {
     name: "artifact_read",
     label: "Artifact read",
     // Sent with every request: keep it short. readExcerpt validates arguments.
-    description: "Read lines omitted from an archived tool result, by the artifact id in its receipt (not a file path). Use when omitted evidence could matter. offset, limit (max 80 lines); query: literal substring filter; column continues a clipped line.",
+    description: "Read lines omitted from an archived tool result, by the artifact id in its receipt. Use when omitted evidence could matter. Returns up to 24 KB from line offset; limit caps the lines; query: literal substring filter; column continues a clipped line.",
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     parameters: Type.Object({
       id: Type.String(),

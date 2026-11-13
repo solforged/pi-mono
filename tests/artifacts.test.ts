@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, stat, symlink, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { ArtifactStore, archiveResult, headBytes, MAX_EXCERPT_BYTES, preview, readExcerpt, type Result } from "../extensions/artifacts/output.ts";
+import { ArtifactStore, archiveResult, headBytes, MAX_PAGE_BYTES, preview, readExcerpt, type Result } from "../extensions/artifacts/output.ts";
 import { temporary } from "./helpers.ts";
 
 function result(text: string, extra: Partial<Result> = {}): Result {
@@ -41,11 +41,24 @@ test("successful large output is saved before replacement without duplicating ra
   if (returned.type !== "text") return;
   assert.ok(Buffer.byteLength(returned.text) < 8192);
   assert.match(returned.text, /incomplete, not a summary/);
-  assert.match(returned.text, /artifact_read/);
-  assert.match(returned.text, /upstream tool truncation still applies/);
   assert.ok(!returned.text.includes("line 125:"));
   assert.equal((await stat(store.root)).mode & 0o777, 0o700);
   assert.equal((await stat(archived.artifact.path)).mode & 0o777, 0o600);
+});
+
+test("the receipt is one line naming the id once, or the file when artifact_read is unavailable", async (t) => {
+  const store = new ArtifactStore(join(await temporary(t), "artifacts"));
+  const text = (archived: Awaited<ReturnType<typeof archiveResult>>) => (archived!.content[0] as { text: string }).text;
+  const withTool = await archiveResult(result(output()), store);
+  const receipt = text(withTool).split("\n")[0];
+  assert.equal(receipt, `[Output archived: bash, ${Buffer.byteLength(output())} bytes, 250 lines; the excerpts below are incomplete, not a summary. Read the rest with artifact_read, id ${withTool!.artifact.id}.]`);
+  assert.equal(text(withTool).split(withTool!.artifact.id).length, 2);
+  // A host path is unreadable from the sandbox and elsewhere invites a `cat` that is archived again.
+  assert.ok(!text(withTool).includes(store.root));
+  const without = await archiveResult(result(output()), store, false);
+  assert.match(text(without).split("\n")[0], /not a summary\. The full text is in /);
+  assert.ok(text(without).includes(without!.artifact.path));
+  assert.doesNotMatch(text(without), /artifact_read/);
 });
 
 test("bytes alone trigger archival, however many lines", async (t) => {
@@ -65,7 +78,7 @@ test("preview includes head, tail and middle diagnostics within its budget", () 
   assert.match(text, /line 1:/);
   assert.match(text, /line 250:/);
   assert.match(text, /L125: warning: hidden diagnostic/);
-  assert.ok(Buffer.byteLength(text) < MAX_EXCERPT_BYTES);
+  assert.ok(Buffer.byteLength(text) < 6000);
 });
 
 test("Unicode clipping never creates replacement characters", () => {
@@ -73,7 +86,7 @@ test("Unicode clipping never creates replacement characters", () => {
   assert.equal(headBytes("é", 1), "");
   const text = preview("🙂".repeat(5000));
   assert.ok(!text.includes("\ufffd"));
-  assert.ok(Buffer.byteLength(text) < MAX_EXCERPT_BYTES);
+  assert.ok(Buffer.byteLength(text) < 6000);
 });
 
 test("images are preserved and multiple text blocks are archived together", async (t) => {
@@ -136,20 +149,20 @@ test("line ranges and literal queries return original source line numbers", () =
 });
 
 test("retrieval stays bounded and never skips a line at the byte boundary", () => {
-  const text = Array.from({ length: 20 }, (_, i) => `${i}: ${"é".repeat(400)}`).join("\n");
-  const excerpt = readExcerpt(text, { limit: 80 });
-  assert.ok(Buffer.byteLength(excerpt) <= MAX_EXCERPT_BYTES);
-  assert.match(excerpt, /offset=8/);
+  const text = Array.from({ length: 40 }, (_, i) => `${i}: ${"é".repeat(400)}`).join("\n");
+  const excerpt = readExcerpt(text);
+  assert.ok(Buffer.byteLength(excerpt) <= MAX_PAGE_BYTES);
+  assert.match(excerpt, /L29: 28: é+\n\[More available: continue with offset=30\.\]\n$/);
   assert.ok(!excerpt.includes("\ufffd"));
 });
 
 test("long lines can be retrieved completely via Unicode-safe column continuation", () => {
-  const text = "🙂".repeat(4000);
+  const text = "🙂".repeat(20000);
   let column = 1;
   let restored = "";
   for (let attempt = 0; attempt < 10; attempt++) {
     const excerpt = readExcerpt(text, { column, limit: 1 });
-    assert.ok(Buffer.byteLength(excerpt) <= MAX_EXCERPT_BYTES);
+    assert.ok(Buffer.byteLength(excerpt) <= MAX_PAGE_BYTES);
     assert.ok(!excerpt.includes("\ufffd"));
     const line = excerpt.split("\n").find((line) => line.startsWith("L1"))!;
     restored += line.slice(line.indexOf(": ") + 2);
@@ -161,13 +174,21 @@ test("long lines can be retrieved completely via Unicode-safe column continuatio
   assert.equal(restored, text);
 });
 
-test("retrieval rejects invalid ranges and caps the page size", () => {
+test("retrieval rejects invalid ranges; a limit narrows the page and bytes alone bound it", () => {
   for (const options of [{ offset: 0 }, { offset: 1.5 }, { limit: 0 }, { limit: 1.5 }, { query: "" }, { query: "x".repeat(501) }, { column: 0 }]) {
     assert.throws(() => readExcerpt("text", options));
   }
   const text = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join("\n");
   const page = readExcerpt(text, { limit: 135 });
-  assert.match(page, /L80: line 80\n/);
-  assert.doesNotMatch(page, /L81:/);
-  assert.match(page, /offset=81/);
+  assert.match(page, /L135: line 135\n/);
+  assert.doesNotMatch(page, /L136:/);
+  assert.match(page, /offset=136/);
+  const whole = readExcerpt(text);
+  assert.match(whole, /L200: line 200\n$/);
+  assert.doesNotMatch(whole, /More available/);
+  // A 600-line diff comes back in two calls; 80-line pages took eight.
+  const diff = Array.from({ length: 600 }, (_, i) => `+  const value${i} = compute(input${i});`).join("\n");
+  let calls = 0;
+  for (let offset: number | undefined = 1; offset; calls++) offset = Number(readExcerpt(diff, { offset }).match(/offset=(\d+)/)?.[1]) || undefined;
+  assert.equal(calls, 2);
 });
