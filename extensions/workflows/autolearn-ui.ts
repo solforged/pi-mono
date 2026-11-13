@@ -1,5 +1,5 @@
-import { stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { isTransientError, MAX_TRANSIENT_FAILURES } from "./autoname.ts";
 import { alreadyReviewed, documented, recurrence, recurringPatterns, runs, similarCore, segments, skillUse, summarizeRun, type PatternReview, type Recurrence, type Run } from "./autolearn.ts";
@@ -106,12 +106,13 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
   let running = false;
   let warned = false;
   let outages = 0;
+  let sessionDir: string | undefined;
   // Where the previous task ended. A task is everything since, so steering
   // messages mid-run do not split it.
   let boundary: string | null | undefined;
   const considered = new Set<string>();
   pi.on("session_start", (_event, ctx) => {
-    session.abort(); session = new AbortController(); considered.clear(); warned = false; outages = 0;
+    session.abort(); session = new AbortController(); considered.clear(); warned = false; outages = 0; sessionDir = undefined;
     boundary = ctx.sessionManager.getLeafId();
   });
   pi.on("session_shutdown", () => { session.abort(); });
@@ -156,7 +157,7 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
     // so the pending-proposal check below stays true until staging.
     await withLock(root, "review", async () => {
       const state = await readState(root);
-      const listed = await sessions.list(ctx.cwd);
+      const listed = await sessionPaths(ctx.cwd);
       signal.throwIfAborted();
       const { others, sessions: population } = await indexSessions(state, listed, {
         file: ctx.sessionManager.getSessionFile(),
@@ -192,6 +193,18 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
         ctx.ui.notify(`Autolearn: you've repeated a workflow in ${found.sessions} sessions; it suggests ${what}. See /learn-review.`, "info");
       }
     });
+  }
+
+  // Listing parses every session of the project in full. Once it has shown where
+  // they are kept, later tasks only read that directory.
+  async function sessionPaths(cwd: string): Promise<Array<{ path: string }>> {
+    if (sessionDir) {
+      const dir = sessionDir;
+      return (await readdir(dir)).filter((name) => name.endsWith(".jsonl")).map((name) => ({ path: join(dir, name) }));
+    }
+    const listed = await sessions.list(cwd);
+    if (listed.length) sessionDir = dirname(listed[0].path);
+    return listed;
   }
 
   async function skillInput(config: Config, root: string): Promise<{ inventory: SkillSnapshot[]; text: string; budget: number }> {

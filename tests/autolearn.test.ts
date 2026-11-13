@@ -154,6 +154,15 @@ test("autolearn stays idle until enabled, then stages one proposal for a recurri
   setBranch([...branch, ...release("v4")]);
   await settle();
   assert.equal(prompts.length, 1);
+  // Listing parses every session in full, so it runs once; later tasks read the directory,
+  // which also finds sessions started since.
+  assert.equal(sessions.listed, 1);
+  const later = join(dir, "three.jsonl");
+  await writeFile(later, "x"); history.set(later, release("v5"));
+  setBranch([...branch, ...release("v6")]);
+  await settle();
+  assert.equal(sessions.listed, 1);
+  assert.deepEqual(Object.keys((await readState(root)).files).sort(), [...files, later].sort());
 });
 
 test("an over-budget skill inventory warns without marking the pattern reviewed", async (t) => {
