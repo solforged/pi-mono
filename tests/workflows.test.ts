@@ -92,6 +92,25 @@ test("transient naming failures retry on the next message; permanent ones use th
   assert.match(permanent.notices[0], /skipped/);
 });
 
+test("an unset tiny role turns automatic naming off quietly; /autoname still reports it", async () => {
+  const events: Record<string, (...args: any[]) => any> = {};
+  const notices: string[] = [], markers: unknown[] = [];
+  let command: any;
+  const pi = { on: (event: string, fn: any) => { events[event] = fn; }, registerCommand: (_name: string, spec: any) => { command = spec; },
+    appendEntry: (_type: string, data: unknown) => { markers.push(data); }, getSessionName: () => undefined, setSessionName() {} } as any;
+  const ctx = { mode: "tui", hasUI: true, ui: { notify: (text: string) => notices.push(text) }, modelRegistry: registry(), sessionManager: {
+    getSessionId: () => "one", getEntries: () => [],
+    getBranch: () => [{ type: "message", message: { role: "user", content: "Fix the naming race" } }],
+  } } as any;
+  registerAutoname(pi, { ...config, roles: { ...config.roles, tiny: null } }, "Name the task", new AbortController().signal);
+  events.session_start({}, ctx); events.message_end({ message: { role: "user" } }, ctx);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise(setImmediate);
+  assert.deepEqual([notices, markers], [[], []], "no warning, and nothing spent: a role configured later still names the session");
+  await command.handler("", ctx);
+  assert.match(notices[0], /Configure personal\.tiny .* no fallback is allowed/);
+});
+
 test("skill drafts stay inactive until the exact diff is approved; stale edits and symlinks fail closed", async (t) => {
   const dir = await temporary(t);
   const candidate = parseCandidates(JSON.stringify([{ action: "create", name: "testing-skills", reason: "Demonstrated procedure", content: skill("testing-skills"), sources: ["s:entry"] }]), new Set(["s:entry"]), 5)[0];

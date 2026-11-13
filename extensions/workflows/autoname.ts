@@ -56,6 +56,8 @@ export function registerAutoname(pi: ExtensionAPI, source: ConfigSource, prompt:
   async function generate(ctx: ExtensionContext, force: boolean) {
     if (busy || lifetime.aborted || (!force && (attempted || pi.getSessionName()))) return;
     const config = configSnapshot(source);
+    // An unset role turns automatic naming off; only an explicit /autoname reports it.
+    if (!force && !config.roles.tiny) return;
     const text = firstUserText(ctx.sessionManager.getBranch());
     if (!text) return;
     busy = true;
