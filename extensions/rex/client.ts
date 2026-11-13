@@ -37,6 +37,8 @@ const LAYOUT_METHODS: Record<string, string[]> = {
   "session.swap_blocks": ["session_id", "block_id", "other_block_id"],
   "session.detach_block": ["session_id", "block_id"],
   "session.new_window": ["session_id", "layout", "focus", "window_label"],
+  "session.move_window": ["session_id", "window_id", "before_window_id"],
+  "session.set_window_label": ["session_id", "window_id", "label"],
   "session.focus_block": ["session_id", "block_id"],
   "session.focus_window": ["session_id", "window_id"],
   "session.zoom_block": ["session_id", "block_id", "zoom"],
@@ -52,7 +54,7 @@ function uuid(value: unknown, name: string): asserts value is string {
     throw new Error(`Rex ${name}: expected a full, nonzero UUID`);
   }
 }
-function id(value: unknown, kind: "session" | "block" | "layer"): asserts value is string {
+function id(value: unknown, kind: "session" | "block" | "layer" | "window"): asserts value is string {
   if (typeof value !== "string" || !value.startsWith(`${kind}:`)) throw new Error(`Rex requires a full ${kind} ID`);
   uuid(value.slice(kind.length + 1), `${kind} ID`);
 }
@@ -424,6 +426,16 @@ export class RexClient {
     if (typeof result.window_id !== "string" || !result.window_id.startsWith("window:")) throw new Error("Rex session.new_window returned no window; outcome may be unknown");
     id(blockId, "block");
     return { windowId: result.window_id, blockId };
+  }
+  /** Reorders a tab; without `before` it goes last. Never changes the active window or focus. */
+  async moveWindow(sessionId: string, windowId: string, before?: string, signal?: AbortSignal) {
+    id(windowId, "window"); if (before !== undefined) id(before, "window");
+    await this.mutate(sessionId, "session.move_window", { window_id: windowId, ...(before ? { before_window_id: before } : {}) }, signal);
+  }
+  async labelWindow(sessionId: string, windowId: string, label: string, signal?: AbortSignal) {
+    id(windowId, "window");
+    if (!label || [...label].length > 128 || label.includes("\0")) throw new Error("Rex label must contain 1–128 characters without NUL");
+    await this.mutate(sessionId, "session.set_window_label", { window_id: windowId, label }, signal);
   }
   /** Fills the block's window with it (focusing it and activating its window) until focus moves. */
   async zoom(sessionId: string, blockId: string, signal?: AbortSignal) {

@@ -1,5 +1,5 @@
 import { realpath, rm } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -20,6 +20,7 @@ import { installLeftArrow } from "./left-editor.ts";
 import { completionRenderer, toolRenderers } from "./render.ts";
 import { switchTools, TOOLS_ENTRY } from "./tools.ts";
 import { registerRexTitle } from "./title.ts";
+import { agentsTabLabel } from "./tabs.ts";
 
 const str = () => Type.Optional(Type.String());
 import { activityLine, fitResults, oneLine, priority, rows, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
@@ -76,6 +77,11 @@ export default async function (pi: ExtensionAPI) {
     return [{ block: run.block, name: run.name, priority: priority(row, !!last && !last.collected && !running(last)),
       pinned: !!run.pinned, background: run.view === "background", line: activityLine(row) }];
   });
+  /** Names the parent as its tab does: the session name, else the directory. */
+  const agentsTab = () => {
+    const kids = deckChildren();
+    return agentsTabLabel(pi.getSessionName() || basename(currentCtx?.cwd ?? process.cwd()), kids.length, kids.filter(k => k.priority === 4).length);
+  };
   const rosterLines = () => {
     const items = rows(runner.runs.values(), runner.tasks);
     return [`Rex agents · ${items.length} · ← on the parent's empty prompt opens the hub`, "",
@@ -133,7 +139,7 @@ export default async function (pi: ExtensionAPI) {
       const dir = join(await scopeRoot(runner.agentDir, config.profile, ctx.cwd), "rex"), sid = ctx.sessionManager.getSessionId();
       deck = new DeckManager({ rex, session, parent, cwd: ctx.cwd,
         rosterFile: join(dir, `roster-${sid}.txt`), stripFile: join(dir, `strip-${sid}.txt`),
-        children: deckChildren, roster: rosterLines,
+        children: deckChildren, roster: rosterLines, tabLabel: agentsTab,
         onState: (state: LayoutState) => pi.appendEntry("rex-layout", { grid: state.grid ?? null, strip: state.strip ?? null }),
         onPause: reason => currentCtx?.ui.notify(`Rex layout paused: ${reason}. Arrange panes in Rex, then /agents layout to resume.`, "warning") });
       deck.grid = saved?.grid ?? undefined;

@@ -178,12 +178,12 @@ function simulator(slotsRows = 63, ignoreRatio = false) {
     return false;
   };
   const swapIn = (spec: Spec, a: string, b: string): Spec => typeof spec === "string" ? (spec === a ? b : spec === b ? a : spec) : { ...spec, a: swapIn(spec.a, a, b), b: swapIn(spec.b, a, b) };
-  const all = new Set<string>([P]);
+  const all = new Set<string>([P]), labels = new Map<string, string>();
   const rex: any = {
     calls: [] as string[],
     async probe() {}, async rows() { return { columns: 240, rows: slotsRows }; },
     async snapshot() {
-      const view = { active_window_id: "window:home", windows: [...windows].map(([id, spec]) => win(id, spec, focus.get(id))) };
+      const view = { active_window_id: "window:home", windows: [...windows].map(([id, spec]) => ({ ...win(id, spec, focus.get(id)), label: labels.get(id) ?? id })) };
       const placed = new Set(view.windows.flatMap(w => cells(w.layers[0].layout).map(c => c.block)));
       return { view, blocks: [...all].map(block_id => ({ block_id, placement: placed.has(block_id) ? "placed" : "detached" })) };
     },
@@ -195,10 +195,16 @@ function simulator(slotsRows = 63, ignoreRatio = false) {
     async resizePane(_s: string, a: string, b: string, d: string, r: number) { rex.calls.push("resize"); for (const spec of windows.values()) resize(spec, a, b, d, r); },
     async swap(_s: string, a: string, b: string) { rex.calls.push("swap"); for (const [id, spec] of windows) windows.set(id, swapIn(spec, a, b)); },
     async detach(_s: string, block: string) { rex.calls.push("detach"); detach(block); },
-    async newWindow() { rex.calls.push("window"); windows.set("window:grid", R); focus.set("window:grid", R); all.add(R); return { windowId: "window:grid", blockId: R }; },
+    async newWindow(_s: string, label: string) { rex.calls.push("window"); windows.set("window:grid", R); labels.set("window:grid", label); focus.set("window:grid", R); all.add(R); return { windowId: "window:grid", blockId: R }; },
+    async moveWindow(_s: string, id: string, before?: string) {
+      rex.calls.push("move-window");
+      const entries = [...windows].filter(([w]) => w !== id), at = before ? entries.findIndex(([w]) => w === before) : entries.length;
+      entries.splice(at, 0, [id, windows.get(id)!]); windows.clear(); for (const [w, spec] of entries) windows.set(w, spec);
+    },
+    async labelWindow(_s: string, id: string, label: string) { rex.calls.push("label-window"); labels.set(id, label); },
     async close(_s: string, block: string) { rex.calls.push("close"); detach(block); all.delete(block); },
   };
-  return { rex, windows, all, focus };
+  return { rex, windows, all, focus, labels };
 }
 
 test("the manager converges 14 children into a 3-slot deck under a strip, a 3×3 grid and 3 detached, then promotes and cleans up", async t => {
@@ -207,14 +213,19 @@ test("the manager converges 14 children into a 3-slot deck under a strip, a 3×3
   const dir = await mkdtemp("/tmp/rex-deck-"); t.after(() => rm(dir, { recursive: true, force: true }));
   // Like a window the Rex app is showing: move_block ignores ratio; resize_pane does not.
   const sim = simulator(63, true), kids = new Map<number, DeckChild>(), states: any[] = [], pauses: string[] = [];
+  const O = B("o"); sim.windows.set("window:other", O); sim.all.add(O); // Another tab, already open after the parent's.
   const manager = new DeckManager({ rex: sim.rex, session: "session:x", parent: P, cwd: dir, rosterFile: `${dir}/roster.txt`, stripFile: `${dir}/strip.txt`,
-    children: () => [...kids.values()], roster: () => ["Rex agents", ...[...kids.values()].map(k => k.name)],
+    children: () => [...kids.values()], roster: () => ["Rex agents", ...[...kids.values()].map(k => k.name)], tabLabel: () => `↳ ${kids.size} agents · parent`,
     onState: g => states.push(g), onPause: r => pauses.push(r) });
   for (let n = 1; n <= 14; n++) { kids.set(n, child(n, { priority: 3, line: `line ${n}` })); sim.all.add(B(n)); await manager.run(); }
   assert.deepEqual(pauses, []);
   const home = cells(tree(sim.windows.get("window:home")!)), gridCells = cells(tree(sim.windows.get("window:grid")!));
   assert.equal(home.length, 5, "parent, strip and 3 slots"); assert.equal(gridCells.length, 9, "roster + 8");
-  assert.equal(sim.all.size - home.length - gridCells.length, 3, "three children stay detached");
+  assert.equal(sim.all.size - home.length - gridCells.length - 1, 3, "three children stay detached");
+  // The Agents tab sits right after the parent's, labelled; the other tab moves along one.
+  assert.deepEqual([...sim.windows.keys()], ["window:home", "window:grid", "window:other"]);
+  assert.equal(sim.labels.get("window:grid"), "↳ 14 agents · parent");
+  assert.equal(sim.rex.calls.filter((c: string) => c === "move-window").length, 1);
   assert.equal((sim.windows.get("window:home") as any).r, 0.55, "the parent keeps its share");
   const strip = home.find(c => c.block === S)!, slots = home.filter(c => c.block !== P && c.block !== S);
   assert(Math.abs(strip.rect[3] - 9 / 63) < 0.025, `the strip keeps a header, five lines and pane chrome (got ${strip.rect[3]})`);
@@ -232,6 +243,11 @@ test("the manager converges 14 children into a 3-slot deck under a strip, a 3×3
   assert.deepEqual(pauses, []);
   assert(cells(tree(sim.windows.get("window:home")!)).some(c => c.block === B(overflow)));
   assert.equal(cells(tree(sim.windows.get("window:grid")!)).length, 9, "the grid stays capped");
+  // Once the user drags the Agents tab away or renames it, it stays as they left it.
+  await sim.rex.moveWindow("", "window:grid"); sim.labels.set("window:grid", "mine");
+  kids.delete(14); sim.rex.detach("", B(14)); sim.all.delete(B(14)); await manager.run();
+  assert.deepEqual([...sim.windows.keys()], ["window:home", "window:other", "window:grid"]); assert.equal(sim.labels.get("window:grid"), "mine");
+  assert.equal(states.at(-1).grid.unfollowed, true); assert.equal(states.at(-1).grid.renamed, true);
   // When every child closes, the strip and the grid's roster close.
   for (const k of [...kids.keys()]) { sim.rex.detach("", B(k)); sim.all.delete(B(k)); kids.delete(k); }
   await manager.run();

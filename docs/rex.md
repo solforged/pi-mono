@@ -118,7 +118,10 @@ Children are arranged automatically, designed for up to about 14 at once:
   overflows. It holds up to 8 more children in an even grid (at most 3×3,
   since smaller cells are no longer readable) with a roster pane listing every
   child in the same format. It never takes focus; switch to it like any Rex tab.
-  It closes when it holds no children.
+  It closes when it holds no children. Rex has no tab groups, so the tab sits
+  right after the parent's and is labelled after it, what needs you first:
+  `↳ !1 · 4 agents · fix-login`. It follows the parent's tab when that moves;
+  once you drag the Agents tab elsewhere or rename it, it is left as you set it.
 - **Overflow:** beyond that, children stay detached and keep running. They are
   listed in the strip and roster, and the hub reaches them.
 

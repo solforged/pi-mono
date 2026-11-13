@@ -32,6 +32,9 @@ try {
   // A stand-in parent pane in its own background window.
   const home = await rex.newWindow(session, "rex deck smoke", "parent", sleeper, dir);
   windows.push(home.windowId); created.push(home.blockId);
+  // Another tab after the parent's: the Agents tab must land between them.
+  const spacer = await rex.newWindow(session, "rex deck smoke spacer", "spacer", sleeper, dir);
+  windows.push(spacer.windowId); created.push(spacer.blockId);
   if (show) { select(home.windowId); await new Promise(r => setTimeout(r, 1000)); }
   const kids: DeckChild[] = [];
   for (let n = 1; n <= count; n++) {
@@ -43,8 +46,9 @@ try {
   const manager = new DeckManager({ rex, session, parent: home.blockId, cwd: dir, rosterFile: join(dir, "roster.txt"), stripFile: join(dir, "strip.txt"),
     // Background windows report a default 80×24 until viewed; size the deck from this pane.
     size: signal => rex.rows(session, self, signal), children: () => kids, roster: () => ["Rex deck smoke", ...kids.map(k => `${k.name} ${k.priority}`)],
+    tabLabel: () => `↳ ${kids.length} agents · rex deck smoke`,
     onState: s => {
-      if (s.grid && s.grid !== grid) { windows.push(s.grid.window); created.push(s.grid.roster); }
+      if (s.grid && s.grid.window !== grid?.window) { windows.push(s.grid.window); created.push(s.grid.roster); }
       if (s.strip && s.strip !== strip) created.push(s.strip);
       grid = s.grid; strip = s.strip;
     }, onPause: r => pauses.push(r) });
@@ -63,6 +67,10 @@ try {
   const gridCells = cells(v.windows.find((w: any) => w.window_id === grid!.window).layers[0].layout);
   assert.equal(gridCells.length, Math.min(GRID_CELLS, count - deck.length + 1));
   const detached = count - deck.length - (gridCells.length - 1);
+  const order = v.windows.map((w: any) => w.window_id);
+  assert.equal(order[order.indexOf(home.windowId) + 1], grid.window, "the Agents tab follows the parent's");
+  assert.equal(order[order.indexOf(grid.window) + 1], spacer.windowId, "and precedes the tab that was there");
+  assert.equal(v.windows.find((w: any) => w.window_id === grid!.window).label, `↳ ${count} agents · rex deck smoke`);
   const cols = columns(gridCells);
   assert(Math.max(...cols.map(c => c.length)) - Math.min(...cols.map(c => c.length)) <= 1, "grid columns are even");
   console.log(`Arranged ${count}: strip ${Math.round(stripCell.rect[3] * 100)}% + deck ${deck.length}, grid ${cols.map(c => c.length).join("+")} (incl. roster), ${detached} detached, in ${Date.now() - started} ms`);
@@ -89,7 +97,7 @@ try {
   const settled = (await view()).windows.find((w: any) => w.window_id === home.windowId).layers[0].layout.split.ratio;
   assert(Math.abs(settled - 0.55) < 0.02, `parent keeps 55% after settling (got ${settled})`);
   await manager.stop();
-  console.log("Passed: deck slots, strip, capped grid overflow, even sizes, attention promotion; focus preserved. No Pi or model calls.");
+  console.log("Passed: deck slots, strip, capped grid overflow, even sizes, attention promotion, Agents tab order and label; focus preserved. No Pi or model calls.");
 } finally {
   if (show && original) { try { select(original); } catch {} }
   for (const block of created.reverse()) await rex.close(session, block).catch(() => {});

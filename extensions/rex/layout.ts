@@ -1,9 +1,11 @@
 import { atomicWrite } from "../workflows/state.ts";
 import type { RexClient } from "./client.ts";
 import { classify, PARENT_SHARE, plan, rosterCommand, rosterText, stripText, type DeckChild, type Op } from "./deck.ts";
+import { tabPlan, windowOrder, type TabOp, type TabState } from "./tabs.ts";
 
-export type LayoutBackend = Pick<RexClient, "probe" | "snapshot" | "place" | "resizePane" | "swap" | "detach" | "newWindow" | "rows" | "close" | "create">;
-export interface Grid { window: string; roster: string }
+export type LayoutBackend = Pick<RexClient, "probe" | "snapshot" | "place" | "resizePane" | "swap" | "detach" | "newWindow" | "rows" | "close" | "create" | "moveWindow" | "labelWindow">;
+/** `unfollowed`/`renamed`: the user moved or renamed the Agents tab, so it is left alone. */
+export interface Grid { window: string; roster: string; unfollowed?: true; renamed?: true }
 /** Persisted across /reload so panes created by this parent are reused, not duplicated. */
 export interface LayoutState { grid?: Grid; strip?: string }
 const MAX_STEPS = 80, SHARE_MS = 5000;
@@ -24,9 +26,14 @@ export class DeckManager {
   private probed = false;
   private shareUntil = 0;
   private written = new Map<string, string>();
+  /** Agents tab bookkeeping not worth persisting: the settled window order and the label last applied. */
+  private tabOrder?: string[];
+  private tabLabel?: string;
   private readonly opts: {
     rex: LayoutBackend; session: string; parent: string; cwd: string; rosterFile: string; stripFile: string;
     children: () => DeckChild[]; roster: () => string[];
+    /** The Agents tab's label, naming the parent; recomputed every settle. */
+    tabLabel?: () => string;
     /** Defaults to the parent pane's terminal size (stale if its window was never viewed). */
     size?: (signal: AbortSignal) => Promise<{ columns: number; rows: number }>; onState: (state: LayoutState) => void; onPause: (reason: string) => void;
   };
@@ -76,8 +83,9 @@ export class DeckManager {
         const now = Date.now();
         const input = { ...snap, parent, grid: this.grid, strip: this.strip, children: this.opts.children(), size, now, dwell: this.dwell,
           ...(now < this.shareUntil ? { share: PARENT_SHARE } : {}) };
-        const op = plan(input);
+        const op: Op | TabOp | undefined = plan(input) ?? this.tabs(snap.view);
         if (!op) {
+          this.tabOrder = windowOrder(snap.view);
           const c = classify(input);
           this.where = new Map([...c.deck.map(d => [d.block, "deck"] as const), ...c.inGrid.map(g => [g.block, "grid"] as const),
             ...input.children.filter(k => snap.blocks.some(b => b.block_id === k.block && b.placement !== "detached") && !c.deck.some(d => d.block === k.block) && !c.inGrid.some(g => g.block === k.block))
@@ -97,9 +105,29 @@ export class DeckManager {
     }
   }
 
-  private async apply(op: Op, signal: AbortSignal) {
+  /** Once panes settle: the Agents tab follows the parent's tab and carries its label. */
+  private tabs(view: Record<string, any>): TabOp | undefined {
+    if (!this.grid) return undefined;
+    const before: TabState = { order: this.tabOrder, label: this.tabLabel, unfollowed: this.grid.unfollowed, renamed: this.grid.renamed };
+    const { state, op } = tabPlan({ view, parent: this.opts.parent, grid: this.grid.window, label: this.opts.tabLabel?.(), state: before });
+    if (state.unfollowed !== before.unfollowed || state.renamed !== before.renamed) {
+      this.grid = { ...this.grid, ...(state.unfollowed ? { unfollowed: true } : {}), ...(state.renamed ? { renamed: true } : {}) };
+      this.persist();
+    }
+    return op;
+  }
+
+  private async apply(op: Op | TabOp, signal: AbortSignal) {
     const { rex, session } = this.opts;
     switch (op.kind) {
+      case "move-window":
+        // Our own move must not read as the user's on the next step.
+        this.tabOrder = undefined;
+        return rex.moveWindow(session, op.window, op.before, signal);
+      case "label-window":
+        await rex.labelWindow(session, op.window, op.label, signal);
+        this.tabLabel = op.label;
+        return;
       case "place":
         await rex.place(session, op.block, op.anchor, op.direction, op.ratio, signal, op.side);
         // In a window Rex.app is showing, move_block splits 50/50 and the app may
@@ -115,7 +143,8 @@ export class DeckManager {
       case "swap": await rex.swap(session, op.into, op.out, signal); this.dwell.set(op.into, Date.now()); return;
       case "detach": return rex.detach(session, op.block, signal);
       case "grid":
-        this.grid = await rex.newWindow(session, "Rex agents", "agents", rosterCommand(this.opts.rosterFile, process.pid), this.opts.cwd, signal)
+        this.tabLabel = this.opts.tabLabel?.() || "Rex agents"; this.tabOrder = undefined;
+        this.grid = await rex.newWindow(session, this.tabLabel, "agents", rosterCommand(this.opts.rosterFile, process.pid), this.opts.cwd, signal)
           .then(r => ({ window: r.windowId, roster: r.blockId }));
         this.persist();
         return;
