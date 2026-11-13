@@ -8,6 +8,7 @@ import { addUsage, bounded, emptyUsage } from "../workflows/process.ts";
 import { completeRole } from "../workflows/requests.ts";
 import { loadConfig, type Config, type RoleName } from "../workflows/roles.ts";
 import { createRunner } from "../workflows/subagents.ts";
+import { recordUsage } from "../workflows/usage.ts";
 import { Jobs, type Backend, type Tier } from "./jobs.ts";
 import { Kernel, type CellResult } from "./kernel.ts";
 import { budgetIn, keywordsIn, loadNotices, renderNotice } from "./notices.ts";
@@ -103,7 +104,7 @@ export default async function (pi: ExtensionAPI) {
     jobs?.dispose("Session closed");
     kernel?.dispose();
     const usage = jobs?.takeUsage();
-    if (usage) pi.appendEntry("workflow-usage", { role: "eval", usage });
+    if (usage) recordUsage(pi, undefined, { role: "eval", usage });
     if (ctxNow?.mode === "tui") ctxNow.ui.setWidget("workflowz", undefined);
   });
 

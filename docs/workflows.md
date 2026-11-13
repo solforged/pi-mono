@@ -4,7 +4,7 @@
 
 | Command | Behavior |
 | --- | --- |
-| `/roles [show\|check]` | Edit model roles, print mappings, or check registration/auth. |
+| `/roles [show\|check]` | Edit model roles, print mappings and the state directory, or check registration/auth. |
 | `/autoname` | Generate another title; confirm before replacing an existing name. |
 | `/commit [replan\|apply\|show\|clear]` | Split the working tree into commits, down to hunks; cache the plan. |
 | `/advisor <task>` | Ask the advisor with a bounded recent-conversation excerpt. |
@@ -15,7 +15,6 @@
 | `/learn-review` | Inspect, approve, or dismiss a queued proposal. |
 | `/curate-skills` | Audit changed, workflow-managed skills. |
 | `/autolearn [on\|off\|dry-run]` | Show, toggle, or preview automatic learning for this project. |
-| `/workflows` | Show private state location and auxiliary usage. |
 | `/web-search [query\|check]` | Inspect search routing or run a query. |
 | `/snapcompact` | Show whether this model archives compacted history as images. |
 | `/artifacts [on\|off\|check]` | Inspect or toggle deterministic output archival. |
@@ -72,7 +71,8 @@ hook edits the working tree mid-run, `/commit` stops and needs `replan`.
 
 ## Private state and usage
 
-State lives under `<agent-dir>/workflow-state/<profile>/<cwd-hash>/`:
+State lives under `<agent-dir>/workflow-state/<profile>/<cwd-hash>/`;
+`/roles show` prints the directory for the current one:
 
 - `drafts/`: pending, applied, and dismissed learning proposals.
 - `commits/plan.json`: cached commit groups for this working tree.
@@ -90,6 +90,7 @@ or automatically pruned. A crashed review, publisher, or commit can leave a
 `owner.json` has exited. Do not remove active worktree directories by hand;
 use the [worktree review procedure](subagents.md#worker-worktrees).
 
-Subagent tool usage is reported in Pi's normal totals. Titles, learning calls,
-and command-invoked subagents are tracked separately by `/workflows`. Costs use
-provider catalog prices and may be zero when prices are unavailable.
+Subagent tool usage is reported in Pi's normal totals. Titles, commits,
+learning calls, command-invoked subagents and workflowz evals are not, so the
+footer shows their running total as `aux <tokens> · $<cost>`. Costs use
+provider catalog prices; the dollar amount is left out when none are available.

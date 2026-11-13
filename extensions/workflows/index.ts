@@ -17,6 +17,7 @@ import { describeLineup, registerPresets } from "./presets.ts";
 import { createRunner, type Task, type ChildResult } from "./subagents.ts";
 import { cancellable } from "./ui.ts";
 import { scopeRoot } from "./state.ts";
+import { recordUsage, showAuxiliaryUsage } from "./usage.ts";
 
 export default async function (pi: ExtensionAPI) {
   const root = resolve(dirname(await realpath(fileURLToPath(import.meta.url))), "../..");
@@ -26,6 +27,7 @@ export default async function (pi: ExtensionAPI) {
   const config = getConfig();
   const lifetime = new AbortController();
   pi.on("session_shutdown", () => { lifetime.abort(new Error("Workflow session closed")); });
+  pi.on("session_start", (_event, ctx) => { showAuxiliaryUsage(ctx); });
   let approvedInstructions = "";
   const instructionsText = (files: Array<{ path: string; content: string }> = []) => files.map((f) => `Instructions from ${f.path}:\n${f.content}`).join("\n\n");
   pi.on("before_agent_start", (event) => { approvedInstructions = instructionsText(event.systemPromptOptions.contextFiles); });
@@ -55,7 +57,7 @@ export default async function (pi: ExtensionAPI) {
         return;
       }
       const current = getConfig();
-      const lines = [`Workflow profile: ${current.profile}`, ...current.sources.map((source) => `Config: ${source}`)];
+      const lines = [`Workflow profile: ${current.profile}`, ...current.sources.map((source) => `Config: ${source}`), `State: ${await scopeRoot(agentDir, current.profile, ctx.cwd)}`];
       if (current.preset !== undefined) lines.push(`Preset: ${current.preset} of ${current.presets.join(", ")} (/modelpreset switches)`, describeLineup(current)[0]);
       for (const name of roleNames) {
         const role = current.roles[name];
@@ -70,17 +72,6 @@ export default async function (pi: ExtensionAPI) {
       report(ctx, lines.join("\n"));
     },
   });
-  pi.registerCommand("workflows", {
-    description: "Show workflow state location and auxiliary model usage",
-    handler: async (_args, ctx) => {
-      const usage = emptyUsage();
-      for (const entry of ctx.sessionManager.getEntries()) {
-        if (entry.type === "custom" && entry.customType === "workflow-usage") addUsage(usage, (entry.data as any)?.usage);
-      }
-      report(ctx, `State: ${await scopeRoot(agentDir, config.profile, ctx.cwd)}\nAuxiliary calls (titles/reviews/command subagents): ${usage.totalTokens} tokens; catalog cost $${usage.cost.total.toFixed(4)}. Tool subagent usage is included in pi's normal totals. Missing provider prices may report zero.\nCommands: /roles, /modelpreset, /autoname, /commit, /advisor, /subagent, /learn, /learn-sessions, /learn-review, /curate-skills, /autolearn`);
-    },
-  });
-
   const run = createRunner(pi, getConfig, root, agentDir, lifetime.signal);
   const item = Type.Object({
     agent: StringEnum(["advisor", "scout", "researcher", "worker"] as const),
@@ -119,7 +110,7 @@ export default async function (pi: ExtensionAPI) {
         const results = await cancellable(ctx, `Running ${task.agent}`, lifetime.signal, (signal) => run([task], ctx, instructions, signal));
         if (!results || lifetime.signal.aborted) return;
         const usage = results.reduce((sum, result) => addUsage(sum, result.usage), emptyUsage());
-        pi.appendEntry("workflow-usage", { role: task.agent, usage });
+        recordUsage(pi, ctx, { role: task.agent, usage });
         pi.sendMessage({ customType: "workflow-subagent", content: summarize(results), display: true }, { triggerTurn: false });
         if (!ctx.hasUI) console.log(summarize(results));
       },

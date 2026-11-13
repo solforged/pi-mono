@@ -6,6 +6,7 @@ import { evidenceFromBranch, INVENTORY_LABEL, inventoryInput, inventorySkills, L
 import { completeRole } from "./requests.ts";
 import { configSnapshot, resolveRole, type Config, type ConfigSource } from "./roles.ts";
 import { readJson, saveJson, scopeRoot, withLock } from "./state.ts";
+import { recordUsage } from "./usage.ts";
 
 interface Indexed { mtimeMs: number; session: string; created: string; runs: Run[] }
 export interface AutoState { version: 1; enabled?: boolean; files: Record<string, Indexed>; reviews: PatternReview[] }
@@ -212,7 +213,7 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
     const result = await completeRole(ctx, config, "learn", LEARNING_SYSTEM,
       `Candidate limit: 1\nRecurring steps (in ${found.sessions} sessions): ${found.core.join(" | ")}\nFocus: ${focus}\n${INVENTORY_LABEL}:\n${inventoryText}\nEvidence, one run per session:\n${parts.map((part) => part.text).join("\n")}`, signal);
     signal.throwIfAborted();
-    pi.appendEntry("workflow-usage", { role: "learn", ...result, text: undefined });
+    recordUsage(pi, ctx, { role: "learn", ...result, text: undefined });
     const candidate = parseCandidates(result.text, new Set([...parts.flatMap((part) => part.refs), ...inventory.map(skillRef)]), 1)[0];
     if (!candidate || candidate.action === "note" || (atLimit && candidate.action === "create")) return undefined;
     return await stageCandidate(root, candidate, inventory, "autolearn");

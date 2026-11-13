@@ -5,6 +5,7 @@ import { completeRole } from "./requests.ts";
 import { hash, privateDir, readJson, saveJson, scopeRoot, withLock } from "./state.ts";
 import { applyDraft, evidenceChunks, evidenceFromBranch, INVENTORY_LABEL, inventoryInput, inventorySkills, LEARNING_SYSTEM, parseCandidates, readDrafts, renderDraft, skillRef, stageCandidate } from "./learning.ts";
 import { cancellable, pickMany } from "./ui.ts";
+import { recordUsage } from "./usage.ts";
 
 type Ledger = { sessions: Record<string, string[]>; curated: Record<string, string> };
 export function registerLearning(pi: ExtensionAPI, source: ConfigSource, agentDir: string, lifetime: AbortSignal, report: (ctx: ExtensionCommandContext, text: string) => void) {
@@ -37,7 +38,7 @@ export function registerLearning(pi: ExtensionAPI, source: ConfigSource, agentDi
           const result = await completeRole(ctx, config, "learn", LEARNING_SYSTEM,
             `Candidate limit: ${config.learning.maxCandidates}\nFocus: ${focus}\n${INVENTORY_LABEL}:\n${inventoryText}\nEvidence:\n${evidence}`, signal);
           signal.throwIfAborted();
-          pi.appendEntry("workflow-usage", { role: "learn", ...result, text: undefined });
+          recordUsage(pi, ctx, { role: "learn", ...result, text: undefined });
           const candidates = parseCandidates(result.text, new Set([...refs, ...skillRefs]), config.learning.maxCandidates);
           if (new Set(candidates.map((c) => c.name)).size !== candidates.length) throw new Error("Multiple changes proposed for the same skill; retry the review");
           for (const candidate of candidates) {

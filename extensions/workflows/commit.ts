@@ -8,6 +8,7 @@ import { bounded, runProcess } from "./process.ts";
 import { completeRole } from "./requests.ts";
 import { configSnapshot, type ConfigSource } from "./roles.ts";
 import { hash, privateDir, readJson, saveJson, scopeRoot, withLock } from "./state.ts";
+import { recordUsage } from "./usage.ts";
 
 export const COMMIT_SYSTEM = `Split the working tree into the fewest logical git commits. The author often works on several features at once, so one file may hold hunks that belong to different commits.
 The input lists change units. An ID like F3 is a whole file or rename pair; F3.2 is one hunk of file F3, and F3 alone stands for all of its hunks. Hunks show up to two lines of leading context; only lines starting with - or + are changes.
@@ -489,7 +490,7 @@ export function registerCommit(pi: ExtensionAPI, source: ConfigSource, agentDir:
             const built = await cancellable(ctx, "Planning commits", lifetime, (signal) => createPlan({ repo, signal }, current, style, async (system, prompt) => {
               const result = await completeRole(ctx, config, "commit", system, prompt, signal);
               signal.throwIfAborted();
-              pi.appendEntry("workflow-usage", { role: "commit", ...result, text: undefined });
+              recordUsage(pi, ctx, { role: "commit", ...result, text: undefined });
               return result.text;
             }));
             if (!built) return;
