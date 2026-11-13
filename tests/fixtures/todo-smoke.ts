@@ -171,6 +171,15 @@ export default function (pi: ExtensionAPI) {
         assert.match(narrow[0], /^Todo ━{10} 1\/5 done/);
         assert.match(narrow[1].replace(/\x1b\[[0-9;]*m/g, ""), /^  ▸ x+…  #1$/);
         assert.ok(narrow.every((line) => visibleWidth(line) <= 40));
+        // Frames reuse the rows until the width or the theme changes.
+        let build: any;
+        await events.session_tree({}, { ...fake, mode: "tui", ui: { setWidget: (_name: string, factory: any) => { build = factory; } } });
+        const widget = build(undefined, theme), frame = widget.render(100);
+        assert.equal(widget.render(100), frame);
+        assert.notEqual(widget.render(60), frame);
+        widget.invalidate();
+        assert.notEqual(widget.render(100), frame);
+        assert.deepEqual(widget.render(100), frame);
 
         // Navigating to an earlier point restores that branch's list.
         const later = entries.splice(branchPoint);

@@ -76,7 +76,9 @@ export default function (pi: ExtensionAPI) {
 
   // A token budget can run out mid-run; stop there instead of at the next settle.
   pi.on("turn_end", (event, ctx) => {
-    if (event.outcome !== "completed") return;
+    // Only a token budget needs the branch walked every turn, for its usage. The
+    // goal itself changes through this extension alone, so `state` already has it.
+    if (event.outcome !== "completed" || state.goal?.status !== "active" || state.goal.budget.tokens === undefined) return;
     reload(ctx);
     const goal = state.goal;
     if (!goal || goal.status !== "active" || goal.budget.tokens === undefined || prompted !== goal.objective) return;

@@ -27,10 +27,14 @@ export default function (pi: ExtensionAPI) {
     if (ctx.mode !== "tui") return;
     if (!open(list).length) { ctx.ui.setWidget("todo", undefined); return; }
     const shown = list;
-    ctx.ui.setWidget("todo", (_tui, theme) => ({
-      render: (width: number) => widgetLines(shown, width, theme),
-      invalidate() {},
-    }));
+    // Drawn every frame; the rows change only with the list, the width or the theme.
+    ctx.ui.setWidget("todo", (_tui, theme) => {
+      let drawn: { width: number; lines: string[] } | undefined;
+      return {
+        render: (width: number) => (drawn?.width === width ? drawn : drawn = { width, lines: widgetLines(shown, width, theme) }).lines,
+        invalidate() { drawn = undefined; },
+      };
+    });
   }
   function sync(ctx: ExtensionContext) { list = restore(ctx.sessionManager.getBranch()); refresh(ctx); }
   // Edits outside the tool are recorded as custom entries on the branch.

@@ -51,6 +51,11 @@ export default function (pi: ExtensionAPI) {
 
       await events.session_start({ reason: "new" }, ui);
       assert.equal(status.goal, undefined);
+      // Only a token budget makes a turn's end walk the branch.
+      let walks = 0;
+      const counted = { ...ui, sessionManager: { getBranch: () => { walks++; return entries; } } };
+      assert.equal(await events.turn_end({ outcome: "completed", entries: [] }, counted), undefined);
+      assert.equal(walks, 0);
       await goal("");
       assert.match(notes.at(-1)!, /^No goal is set/);
       await assert.rejects(goal("pause"), /No goal is set/);
