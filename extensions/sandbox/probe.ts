@@ -1,7 +1,7 @@
 // Gathers host facts for the plan: the worktree root, its Git common
 // directory, identity for guest Git, and read-only context directories.
 import { execFile } from "node:child_process";
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Probe } from "./plan.ts";
@@ -16,6 +16,8 @@ const real = (path: string | undefined) => {
 export const kind = (path: string) => {
   try { const s = statSync(path); return s.isDirectory() ? "dir" as const : s.isFile() ? "file" as const : undefined; } catch { return undefined; }
 };
+
+const readText = (path: string) => { try { return readFileSync(path, "utf8"); } catch { return ""; } };
 
 const subdirs = (path: string) => {
   try { return readdirSync(path, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => join(path, entry.name)).sort(); } catch { return []; }
@@ -44,6 +46,7 @@ export async function probe(cwd: string, agentDir: string, packageDir: string, e
     .map(real).filter((dir): dir is string => !!dir && kind(dir) === "dir");
   return {
     root, home, cacheRoot: cacheRoot(env), commonDir, contextDirs,
+    worktreeConfig: !!commonDir && /^\s*worktreeconfig\s*(=\s*(true|yes|on|1))?\s*$/im.test(readText(join(commonDir, "config"))),
     worktreeGitDirs: commonDir ? subdirs(join(commonDir, "worktrees")) : [],
     wikiDir: env.LLM_WIKI_DIR ? real(env.LLM_WIKI_DIR) : undefined,
     identity: { name, email }, kind,

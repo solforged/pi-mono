@@ -93,6 +93,36 @@ test("a worktree mounts its Git metadata and guards config, hooks, and its .git 
   assert.equal(plan.env.LLM_WIKI_DIR, undefined);
 });
 
+test("a Git directory with guarded files is a mount of its own, so the guest cannot rename it away", () => {
+  // A read-only path protects only itself: `mv .git old && mkdir .git` would leave the guards behind.
+  const git = "/Users/me/src/app/.git", wiki = "/Users/me/.local/share/wiki";
+  const plan = buildPlan(probe({ [git]: "dir", [`${git}/config`]: "file", [`${wiki}/.git`]: "dir" }), DEFAULTS, "img");
+  const own = plan.mounts.filter((m) => m.label === "Git directory");
+  assert.deepEqual(own, [git, `${wiki}/.git`].map((dir) => ({ source: dir, target: dir, readonly: false, label: "Git directory" })));
+  assert(plan.mounts.findIndex((m) => m.target === git) > plan.mounts.findIndex((m) => m.target === "/Users/me/src/app"), "a nested mount follows the one around it");
+  assert(runArgs(plan).includes(`type=bind,source=${git},target=${git}`));
+  assert.deepEqual(plan.readOnlyPaths.filter((path) => path.startsWith(git)).sort(), [`${git}/config`, `${git}/hooks`]);
+  assert.doesNotMatch(promptNote(plan), /Git directory/);
+  // A linked worktree's shared Git directory is mounted already, and a read-only wiki needs no guards.
+  const worktree = "/Users/me/.pi/wt/app--task";
+  const linked = buildPlan(probe({ [`${worktree}/.git`]: "file" }, { root: worktree, wikiDir: undefined }), DEFAULTS, "img");
+  assert.deepEqual(linked.mounts.filter((m) => m.target === git).map((m) => m.label), ["Git metadata"]);
+  const ro = buildPlan(probe({ [git]: "dir", [`${wiki}/.git`]: "dir" }), { ...DEFAULTS, wiki: "ro" }, "img");
+  assert.deepEqual(ro.mounts.filter((m) => m.label === "Git directory").map((m) => m.target), [git]);
+});
+
+test("a repository that reads config.worktree gets one the guest cannot write", () => {
+  const git = "/Users/me/src/app/.git";
+  const off = buildPlan(probe({ [git]: "dir" }, { wikiDir: undefined }), DEFAULTS, "img");
+  assert.deepEqual(off.hostFiles, []);
+  const on = buildPlan(probe({ [git]: "dir" }, { wikiDir: undefined, worktreeConfig: true }), DEFAULTS, "img");
+  assert.deepEqual(on.hostFiles, [`${git}/config.worktree`]);
+  assert(on.readOnlyPaths.includes(`${git}/config.worktree`));
+  const existing = buildPlan(probe({ [git]: "dir", [`${git}/config.worktree`]: "file" }, { wikiDir: undefined, worktreeConfig: true }), DEFAULTS, "img");
+  assert.deepEqual(existing.hostFiles, []);
+  assert(existing.readOnlyPaths.includes(`${git}/config.worktree`));
+});
+
 test("missing hooks are created on the host so the guest cannot add them", () => {
   const plan = buildPlan(probe({ "/Users/me/src/app/.git": "dir" }, { wikiDir: undefined }), DEFAULTS, "img");
   assert(plan.hostDirs.includes("/Users/me/src/app/.git/hooks"));
@@ -344,8 +374,11 @@ test("processes in one worktree share a container; the last one out removes it",
   const options = { cli, stateRoot, alive: (pid: number) => alive.has(pid) };
   const one = new Sandbox(plan, { ...options, pid: 1 });
   const two = new Sandbox(plan, { ...options, pid: 2 });
+  plan.hostFiles.push(join(stateRoot, "app", "config.worktree"));
+  await mkdir(join(stateRoot, "app"));
   await one.ensure();
   await two.ensure();
+  assert.equal(await readFile(plan.hostFiles[0], "utf8"), "", "files to guard are created before the container starts");
   assert.equal(calls.filter(([cmd]) => cmd === "run").length, 1);
   assert.deepEqual((await readdir(join(stateRoot, "containers", plan.name, "leases"))).sort(), ["1", "2"]);
   await one.release();

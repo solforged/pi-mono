@@ -12,6 +12,8 @@ export interface Probe {
   commonDir?: string;
   /** Every `<commonDir>/worktrees/<id>` directory: the private Git directories of linked worktrees. */
   worktreeGitDirs?: string[];
+  /** Whether the repository reads `config.worktree` files (`extensions.worktreeConfig`). */
+  worktreeConfig?: boolean;
   wikiDir?: string;
   contextDirs: string[];
   identity: { name?: string; email?: string };
@@ -27,6 +29,8 @@ export interface Plan {
   mounts: Mount[];
   readOnlyPaths: string[];
   hostDirs: string[];
+  /** Empty files to create on the host when missing, so that they can be read-only in the guest. */
+  hostFiles: string[];
   /** Where long bash output is kept: Pi writes it to the host's temp folder, which the guest cannot see. */
   outputDir: string;
   env: Record<string, string>;
@@ -37,6 +41,7 @@ export interface Plan {
 
 export const GUEST_CACHE = "/cache";
 const OUTPUT_LABEL = "command output";
+const GIT_LABEL = "Git directory";
 const OVERLAYS: Array<[manifest: string, dir: string]> = [["package.json", "node_modules"], ["Cargo.toml", "target"], ["pyproject.toml", ".venv"]];
 const hash = (value: string, length = 10) => createHash("sha256").update(value).digest("hex").slice(0, length);
 /** Folders of the cache root that hold one directory per container, named after it. */
@@ -109,22 +114,32 @@ export function buildPlan(probe: Probe, settings: Settings, image: string): Plan
   // files that point Git at another config (`commondir`, `config.worktree`),
   // a linked worktree's .git pointer, and project Pi resources.
   const readOnlyPaths: string[] = [];
+  const hostFiles: string[] = [];
   const writable = (path: string) => mounts.some((m) => !m.readonly && m.target === m.source && isInside(m.target, path))
     && !mounts.some((m) => m.target !== m.source && isInside(m.target, path));
   const guard = (path: string) => { if (writable(path) && !readOnlyPaths.includes(path)) readOnlyPaths.push(path); };
   // A read-only path has to exist, so these are guarded only where Git already
-  // has them: a guest can still add a `commondir` to a directory without one.
+  // has them. A guest can still add a `commondir` to a directory without one,
+  // which is why host Git calls name the common directory (see hostgit.ts).
   const guardGitFiles = (dir: string) => {
     for (const name of ["config", "commondir", "config.worktree"]) if (probe.kind(join(dir, name)) === "file") guard(join(dir, name));
   };
+  // A read-only path protects only itself: the guest could rename the directory
+  // above it and put its own in place. A Git directory with guarded files is
+  // therefore a mount of its own, which cannot be renamed or removed from inside.
   const guardGitDir = (dir: string) => {
+    if (writable(dir) && !mounts.some((m) => m.target === dir)) mounts.push({ source: dir, target: dir, readonly: false, label: GIT_LABEL });
     guardGitFiles(dir);
     if (!probe.kind(join(dir, "hooks"))) hostDirs.push(join(dir, "hooks"));
     guard(join(dir, "hooks"));
+    // Read only where the repository turns it on, and then like `config`.
+    const worktreeConfig = join(dir, "config.worktree");
+    if (probe.worktreeConfig && writable(worktreeConfig) && !probe.kind(worktreeConfig)) { hostFiles.push(worktreeConfig); guard(worktreeConfig); }
   };
+  const checkouts = mounts.filter((m) => !m.readonly && m.target === m.source);
   if (probe.commonDir) guardGitDir(probe.commonDir);
   for (const dir of probe.worktreeGitDirs ?? []) guardGitFiles(dir);
-  for (const mount of mounts.filter((m) => !m.readonly && m.target === m.source)) {
+  for (const mount of checkouts) {
     const dotGit = join(mount.source, ".git");
     const kind = probe.kind(dotGit);
     if (kind === "file") guard(dotGit);
@@ -168,7 +183,7 @@ export function buildPlan(probe: Probe, settings: Settings, image: string): Plan
 
   const plan: Plan = {
     name: containerName(root), root, image, cpus: settings.cpus, memory: settings.memory,
-    mounts, readOnlyPaths, hostDirs, outputDir, env, labels: {}, wiki, wikiBuild,
+    mounts, readOnlyPaths, hostDirs, hostFiles, outputDir, env, labels: {}, wiki, wikiBuild,
   };
   plan.labels = { "pi.sandbox": "1", "pi.sandbox.root": root, "pi.sandbox.config": configHash(plan) };
   return plan;
@@ -193,7 +208,7 @@ export function runArgs(plan: Plan): string[] {
 
 // The model sees host paths unchanged, so it only needs to know what exists.
 export function promptNote(plan: Plan): string {
-  const shown = plan.mounts.filter((m) => m.target === m.source && m.label !== "context" && m.label !== OUTPUT_LABEL);
+  const shown = plan.mounts.filter((m) => m.target === m.source && m.label !== "context" && m.label !== OUTPUT_LABEL && m.label !== GIT_LABEL);
   const lines = shown.map((m) => `- ${m.target} (${m.label}${m.readonly ? ", read-only" : ""})`);
   return [
     "Your file and shell tools run in a Debian Linux arm64 container, not on the macOS host. Host paths keep their locations; only these are available:",

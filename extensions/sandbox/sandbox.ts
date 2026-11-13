@@ -122,6 +122,7 @@ export class Sandbox {
     }
     this.set("starting");
     for (const dir of this.plan.hostDirs) await mkdir(dir, { recursive: true });
+    for (const file of this.plan.hostFiles) await appendFile(file, "");
     let fresh = false;
     await withLock(join(this.dir(), "lock"), async () => {
       const leases = join(this.dir(), "leases");

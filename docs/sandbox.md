@@ -61,7 +61,11 @@ Inside writable mounts, Git `config` and `hooks`, a worktree's `.git` file, and
 the project's `.pi/` are read-only: host Git and Pi act on those without you
 running anything. A missing `hooks` or project `.pi/` is created empty on the
 host so the guest cannot add one. Existing `commondir` and `config.worktree`
-files, which point Git at another config, are read-only too. `node_modules`, `target`, and `.venv` are replaced by
+files, which point Git at another config, are read-only too, and a repository
+that reads `config.worktree` gets an empty one where it has none. A read-only
+path protects only itself, so each Git directory with guarded files is a mount
+of its own: the guest cannot rename `.git` away and put another in its place.
+`node_modules`, `target`, and `.venv` are replaced by
 Linux-only directories per worktree when `package.json`, `Cargo.toml`, or
 `pyproject.toml` exists, so host and guest builds never mix. The wiki's `bin/`
 gets a Linux build of its CLI.
