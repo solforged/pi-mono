@@ -7,7 +7,9 @@ discards the recording.
 
 While recording, a line above the editor shows a level meter, the time, and a
 live transcript that refreshes as you speak. Speak after the red dot appears:
-the microphone takes about 0.2 s to open.
+the microphone takes about 0.2 s to open. The preview is made from the last
+30 seconds only, which keeps it quick in a long recording; the text inserted
+at the end is always of the whole recording.
 
 ## Requirements
 

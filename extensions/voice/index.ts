@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { isKeyRelease, isKeyRepeat, matchesKey, truncateToWidth, visibleWidth, type TUI } from "@earendil-works/pi-tui";
-import { meter, seconds, SILENCE, wav } from "./audio.ts";
+import { meter, pcmBytes, seconds, SILENCE, wav } from "./audio.ts";
 import { baseCode, kittyKey, Trigger, type KeyEvent } from "./keys.ts";
 import { record, type Recorder } from "./recorder.ts";
 import { DEFAULT_URL, health, joinDictation, SpeechError, transcribe } from "./speech.ts";
@@ -14,6 +14,12 @@ const MAX_SECONDS = 120;
 const MIN_SECONDS = 0.3;
 /** How often the preview transcript under the meter refreshes while recording. */
 const PARTIAL_MS = 400;
+/**
+ * The preview hears only this much of the end of a recording. The server
+ * transcribes each clip on its own, so sending all of it every time made a
+ * long recording's previews slower and slower, for one line of latest words.
+ */
+const PREVIEW_SECONDS = 30;
 const TICK_MS = 100;
 const LEVELS = 12;
 /** Pi collapses longer pastes into a `[paste #n]` marker, hiding the text to review. */
@@ -114,10 +120,11 @@ class Dictation {
     this.#partialBusy = true;
     this.#partialAt = Date.now();
     this.#partialBytes = recorded;
-    transcribe(this.url, wav(recorder.pcm()), { partial: true, signal: AbortSignal.timeout(5000) }).then(
+    const heard = pcmBytes(PREVIEW_SECONDS);
+    transcribe(this.url, wav(recorder.pcm(heard)), { partial: true, signal: AbortSignal.timeout(5000) }).then(
       ({ text }) => {
         if (generation !== this.#generation || this.phase === "transcribing") return;
-        this.#partial = text;
+        this.#partial = recorded > heard && text ? `…${text}` : text;
         this.#render();
       },
       () => {}, // The final transcription reports a missing server.

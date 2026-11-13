@@ -16,8 +16,8 @@ const KILL_MS = 1000;
 export interface Recorder {
   /** How much is recorded so far, without copying it. */
   bytes(): number;
-  /** Everything recorded so far. */
-  pcm(): Buffer;
+  /** Everything recorded so far, or only its last `tail` bytes. */
+  pcm(tail?: number): Buffer;
   /** Stops after the tail and resolves with the whole recording. */
   stop(): Promise<Buffer>;
   /** Stops at once and discards the recording. */
@@ -72,7 +72,13 @@ export function record(events: RecorderEvents, command = "ffmpeg"): Recorder {
     if (!stopping && (code !== 0 || signal)) events.onError(stderr.trim() || `${command} exited with ${signal ?? code}`);
   });
 
-  const pcm = () => Buffer.concat(chunks);
+  // A tail starts on a whole sample of the recording, wherever the pipe cut its chunks.
+  const pcm = (tail = size) => {
+    const from = Math.max(0, size - tail), start = from - (from % 2);
+    let at = size, first = chunks.length;
+    while (first > 0 && at > start) at -= chunks[--first].length;
+    return Buffer.concat(chunks.slice(first)).subarray(start - at);
+  };
   return {
     bytes: () => size,
     pcm,

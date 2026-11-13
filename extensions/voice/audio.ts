@@ -5,6 +5,8 @@ export const RATE = 16000;
 const BYTES_PER_SAMPLE = 2;
 
 export const seconds = (bytes: number) => bytes / (RATE * BYTES_PER_SAMPLE);
+/** The bytes of PCM that hold `duration` seconds. */
+export const pcmBytes = (duration: number) => Math.round(duration * RATE) * BYTES_PER_SAMPLE;
 
 /** Wraps raw PCM in a WAV header. */
 export function wav(pcm: Buffer): Buffer {

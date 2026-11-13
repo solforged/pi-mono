@@ -3,7 +3,7 @@ import { chmod, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import test from "node:test";
-import { meter, RATE, rms, seconds, wav } from "../extensions/voice/audio.ts";
+import { meter, pcmBytes, RATE, rms, seconds, wav } from "../extensions/voice/audio.ts";
 import { baseCode, kittyKey, TAP_MS, Trigger } from "../extensions/voice/keys.ts";
 import { record } from "../extensions/voice/recorder.ts";
 import { joinDictation, SpeechError, transcribe } from "../extensions/voice/speech.ts";
@@ -68,6 +68,7 @@ test("wav wraps PCM in a 16 kHz mono 16-bit header", () => {
   assert.equal(clip.readUInt32LE(40), RATE * 2);
   assert.equal(clip.length, 44 + RATE * 2);
   assert.equal(seconds(RATE * 2), 1);
+  assert.equal(seconds(pcmBytes(30)), 30);
 });
 
 test("levels measure loudness and draw as bars", () => {
@@ -125,6 +126,16 @@ test("the recorder streams PCM until stopped and reports a microphone that fails
   assert.equal(recorder.bytes(), 4 * 3200);
   assert.equal(live, 1);
   assert.ok(levels.length >= 1 && levels.every((level) => level === 0));
+
+  // The end of a recording, for the preview: whole samples, however the pipe cut the chunks.
+  const odd = join(dir, "odd");
+  await writeFile(odd, "#!/bin/sh\nprintf abcde; sleep 0.1; printf fgh; exec sleep 10\n");
+  await chmod(odd, 0o755);
+  const cut = record({ onLive: () => {}, onLevel: () => {}, onError: assert.fail }, odd);
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(cut.bytes(), 8);
+  assert.deepEqual([undefined, 100, 8, 4, 3, 2, 1, 0].map((tail) => cut.pcm(tail).toString()), ["abcdefgh", "abcdefgh", "abcdefgh", "efgh", "efgh", "gh", "gh", ""]);
+  cut.cancel();
 
   // A wrapper that ignores SIGTERM, whose child keeps the pipe open, still stops.
   const stubborn = join(dir, "stubborn");
