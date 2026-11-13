@@ -148,6 +148,15 @@ test("paints every row to exactly the pane width", () => {
   }
 });
 
+test("a file added in one very large hunk still lays out", () => {
+  // Past roughly 125,000 lines, spreading a hunk into Math.max overflows the call stack.
+  const lines = Array.from({ length: 150_000 }, (_, i) => ({ kind: "+" as const, text: "x", new: i + 1 }));
+  const file = { ...parseDiff(SAMPLE)[0], status: "added" as const, hunks: [{ oldStart: 0, newStart: 1, context: "", lines }] };
+  const big = body(file, 40, false, DEFAULT_PALETTE);
+  assert.ok(big.rows.length >= lines.length);
+  assert.match(plain(paint(big.rows.at(-1)!, 40)), /150000/);
+});
+
 test("lays out the summary, a scrolling file list and the selected diff", () => {
   const files = Array.from({ length: 12 }, (_, i) => ({ ...parseDiff(SAMPLE)[0], path: `dir/file${i}.ts` }));
   const screen = layout(view({ snapshot: { source: "uncommitted", label: "uncommitted", files }, selected: 6, rows: 24, columns: 60 }));

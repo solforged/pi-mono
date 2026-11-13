@@ -220,7 +220,7 @@ export function renderDoc(tokens: MdToken[], options: DocOptions): Doc {
         const items = token.items ?? [];
         // A task item shows its box in place of the bullet.
         const markers = items.map((item, i) => token.ordered ? `${start + i}.` : task(item) ?? BULLETS[depth % BULLETS.length]);
-        const indent = Math.max(...markers.map(width), 1) + 1;
+        const indent = markers.reduce((widest, marker) => Math.max(widest, width(marker)), 1) + 1;
         items.forEach((item, i) => {
           if (i && token.loose) rows.push({ spans: [] });
           const inner = blocks(token.ordered ? item.tokens : withoutBox(item.tokens), max - indent, base, !token.loose, depth + 1);
@@ -264,7 +264,7 @@ export function renderDoc(tokens: MdToken[], options: DocOptions): Doc {
     const count = header.length;
     if (!count) return [];
     const natural = Array.from({ length: count }, (_, i) =>
-      Math.max(1, ...[header, ...body].map((row) => row[i] ? spanWidth(row[i]) : 0)));
+      [header, ...body].reduce((widest, row) => Math.max(widest, row[i] ? spanWidth(row[i]) : 0), 1));
     // Shrink the widest columns until the table fits, keeping each at least 3 wide.
     const room = Math.max(count * 3, max - (count * 3 + 1));
     const widths = [...natural];

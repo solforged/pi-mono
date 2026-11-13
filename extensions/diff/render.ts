@@ -158,7 +158,9 @@ export function body(file: FileDiff, columns: number, wrap: boolean, palette: Pa
   const hit = cache?.get(key);
   if (hit) return hit;
   const t = tones(palette);
-  const max = file.hunks.reduce((n, hunk) => Math.max(n, ...hunk.lines.map((line) => Math.max(line.old ?? 0, line.new ?? 0))), 0);
+  // A loop, not a spread: an added file is one hunk, and a call cannot take a hundred thousand arguments.
+  let max = 0;
+  for (const hunk of file.hunks) for (const line of hunk.lines) max = Math.max(max, line.old ?? 0, line.new ?? 0);
   const digits = Math.max(3, String(max).length);
   const gutter = digits + 3;
   const textWidth = Math.max(8, columns - gutter);
