@@ -12,7 +12,9 @@ The agent calls `figure` with an SVG and an optional title. The extension:
 
 1. Checks the SVG. Scripts, animation, `<foreignObject>`, `<style>`, event
    handlers, DOCTYPEs and links outside the figure are rejected with a message
-   the agent can act on.
+   the agent can act on. Attributes are checked in tags and comments only, so
+   a label may read `online = 42` or `var(--gap)`; markup that cannot be read
+   as tags, such as a bare `<` in a label, is rejected too.
 2. Replaces `var(--token)` colors with the current theme's colors. The tokens
    are `--fg`, `--muted`, `--dim`, `--border`, `--surface`, `--accent`,
    `--success`, `--warning`, `--error`, and the series colors `--c1` to `--c6`.

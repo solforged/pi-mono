@@ -76,6 +76,32 @@ function styleDeclarations(style: string) {
     .replace(/(font-weight\s*:\s*)(normal|bold|bolder|lighter)\b/gi, (_m, head: string, value: string) => `${head}${weights[value.toLowerCase()]}`);
 }
 
+// A tag as an XML parser reads it: a quoted value may hold ">", and no part of it holds "<".
+const TAG = /<(?:[^<>"']|"[^<"]*"|'[^<']*')*>/y;
+// Markup that ends at its own terminator, whatever stands in between.
+const SPANS = [["<!--", "-->"], ["<![CDATA[", "]]>"]];
+
+/**
+ * The SVG with `change` applied to each piece of markup and the text between
+ * left alone, so a label may read "online = 42" or "var(--gap)". Comments and
+ * CDATA count as markup: they are checked like tags, however a parser would
+ * read them. A "<" that starts none of these is refused, so no tag goes by as
+ * text.
+ */
+function markup(text: string, change: (piece: string) => string): string {
+  let out = "", from = 0;
+  for (let at = text.indexOf("<"); at >= 0; at = text.indexOf("<", from)) {
+    const span = SPANS.find(([open]) => text.startsWith(open, at));
+    let end = -1;
+    if (span) { const close = text.indexOf(span[1], at + span[0].length); if (close >= 0) end = close + span[1].length; }
+    else { TAG.lastIndex = at; if (TAG.test(text)) end = TAG.lastIndex; }
+    if (end < 0) fail(`Could not read the SVG at ${JSON.stringify(text.slice(at, at + 40).replace(/\s+/g, " "))}. Close every tag, quote and comment, and write a literal < as &lt;.`);
+    out += text.slice(from, at) + change(text.slice(at, end));
+    from = end;
+  }
+  return out + text.slice(from);
+}
+
 export function prepare(source: string, palette: Palette): Prepared {
   const text = source.trim();
   if (text.length > limits.chars) fail(`The SVG is ${text.length} characters; the limit is ${limits.chars}.`);
@@ -85,12 +111,16 @@ export function prepare(source: string, palette: Palette): Prepared {
   if (/<script\b/i.test(text)) fail("Figures are static: remove <script>.");
   if (/<foreignObject\b/i.test(text)) fail("CoreSVG cannot draw <foreignObject>; use SVG text and shapes.");
   if (/<style\b/i.test(text)) fail("CoreSVG ignores <style>; use presentation attributes or style=\"…\" on elements.");
-  if (/\son[a-z]+\s*=/i.test(text)) fail("Figures are static: remove event handler attributes.");
   if (/<(animate|animateMotion|animateTransform|set)\b/i.test(text)) fail("Figures are static: remove animation elements.");
-  for (const [, link] of text.matchAll(/\bhref\s*=\s*["']\s*([^"']*)/gi)) {
+  // Attributes are looked for in markup only: text content may say anything.
+  const pieces: string[] = [];
+  markup(text, (piece) => { pieces.push(piece); return piece; });
+  const tags = pieces.join("\n");
+  if (/\son[a-z]+\s*=/i.test(tags)) fail("Figures are static: remove event handler attributes.");
+  for (const [, link] of tags.matchAll(/\bhref\s*=\s*["']\s*([^"']*)/gi)) {
     if (!link.startsWith("#") && !/^data:image\//i.test(link)) fail(`Figures must be self-contained: remove the external link ${link.slice(0, 80)}.`);
   }
-  if (/url\(\s*(?!["']?#)/i.test(text)) fail("Figures must be self-contained: url() may only point at #ids.");
+  if (/url\(\s*(?!["']?#)/i.test(tags)) fail("Figures must be self-contained: url() may only point at #ids.");
 
   const attr = (name: string) => new RegExp(`\\s${name}\\s*=\\s*(["'])(.*?)\\1`, "i").exec(root[0])?.[2];
   const box = attr("viewBox")?.trim().split(/[\s,]+/).map(Number);
@@ -107,10 +137,10 @@ export function prepare(source: string, palette: Palette): Prepared {
   head = head.replace(/^<svg\b/i, `<svg width="${width}" height="${height}" color="${palette.fg}" preserveAspectRatio="xMinYMin meet"`);
 
   // Anything before the root (an XML declaration, comments) is dropped.
-  let svg = head + text.slice(root.index + root[0].length);
-  svg = themed(svg, palette)
+  // A style value often runs over several lines, hence the s flag.
+  const svg = markup(head + text.slice(root.index + root[0].length), (piece) => themed(piece, palette)
     .replace(/(\sfont-family\s*=\s*)(["'])(.*?)\2/gi, (_m, lead: string, quote: string, value: string) => `${lead}${quote}${family(value.replace(/&quot;/g, '"'))}${quote}`)
     .replace(/(\sfont-weight\s*=\s*)(["'])(normal|bold|bolder|lighter)\2/gi, (_m, lead: string, quote: string, value: string) => `${lead}${quote}${weights[value.toLowerCase()]}${quote}`)
-    .replace(/(\sstyle\s*=\s*)(["'])(.*?)\2/gi, (_m, lead: string, quote: string, value: string) => `${lead}${quote}${styleDeclarations(value)}${quote}`);
+    .replace(/(\sstyle\s*=\s*)(["'])(.*?)\2/gis, (_m, lead: string, quote: string, value: string) => `${lead}${quote}${styleDeclarations(value)}${quote}`));
   return { svg, width, height };
 }

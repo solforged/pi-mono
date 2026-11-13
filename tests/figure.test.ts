@@ -42,6 +42,31 @@ test("prepare rejects figures CoreSVG cannot draw or that reach outside", () => 
   prepare(svg(`<defs><linearGradient id="g"/></defs><rect fill="url('#g')"/><use href="#g"/><image href="data:image/png;base64,AA"/>`), palette);
 });
 
+test("prepare reads attributes from markup only, so labels may say anything", () => {
+  const labels = ['Users online = 42', 'gap: var(--gap); image: url(logo.png)', 'link with href="/docs" > here', "font-family = 'serif'"];
+  const { svg: out } = prepare(svg(labels.map((label) => `<text fill="var(--fg)">${label}</text>`).join("")), palette);
+  for (const label of labels) assert.ok(out.includes(`<text fill="${palette.fg}">${label}</text>`), label);
+
+  const rejects = (source: string, pattern: RegExp) => assert.throws(() => prepare(source, palette), pattern);
+  // A ">" inside a quoted value does not end the tag, and one inside a comment does not hide what follows.
+  rejects(svg('<text data-note="a > b" onclick="x()">t</text>'), /event handler/);
+  rejects(svg(`<text data-note='>' fill="url(http://x/y)">t</text>`), /url\(\) may only/);
+  rejects(svg('<!-- " --><rect data-note=">" onclick="x()"/><!-- " -->'), /event handler/);
+  rejects(svg('<!--><image href="http://x/y.png"/><!-- -->'), /external link http:/);
+  rejects(svg('<![CDATA[ x < y ]]><image href="http://x/y.png"/>'), /external link http:/);
+  // Whatever cannot be told apart from a tag is refused, not passed over as text.
+  rejects(svg("<text>a < b</text>"), /Could not read the SVG at "< b<\/text>.*&lt;/);
+  rejects(svg('<rect data-note="a<b" onclick="x()"/>'), /Could not read the SVG at "<rect data-note/);
+  rejects(svg(`<rect fill="red' onclick="x()"/>`), /event handler|Could not read/);
+  rejects(svg("<!-- never closed <rect/>"), /Could not read the SVG at "<!-- never closed/);
+  prepare(svg("<!-- a > b, and <rect/> commented out --><text>a &lt; b &gt; c</text><![CDATA[ x < y ]]>"), palette);
+});
+
+test("prepare rewrites a style that runs over several lines", () => {
+  const { svg: out } = prepare(svg('<text style="font-family: system-ui, sans-serif;\n  font-weight: bold;\n  fill: var(--accent)">a</text>'), palette);
+  assert.match(out, new RegExp(`style="font-family: Helvetica Neue;\n  font-weight: 700;\n  fill: ${palette.accent}"`));
+});
+
 test("fit sizes figures in whole cells of the terminal's real shape", () => {
   const rex = { widthPx: 14, heightPx: 31 }, small = { widthPx: 8, heightPx: 16 };
   const figure = { width: 640, height: 320 };
