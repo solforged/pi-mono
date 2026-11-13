@@ -64,6 +64,14 @@ test("malformed and hostile markup is handled in linear time and never hides ord
   const started = performance.now();
   for (const hostile of ["<nav ".repeat(200_000), "<a <".repeat(200_000), "<!--".repeat(200_000), `<pre>${" ".repeat(500_000)}x</pre>`, "<title".repeat(200_000), "&".repeat(500_000), "<b>word</b> next ".repeat(300_000)]) htmlToText(hostile);
   assert.ok(performance.now() - started < 3000, "hostile inputs convert quickly");
+  // Output stays proportional to the markup: deep lists stop indenting, and conversion stops once links multiply a long URL.
+  const nested = `${"<ul>".repeat(20_000)}${"<li>x".repeat(20_000)}`;
+  assert.ok(htmlToText(nested).text.length < nested.length * 4 + 70_000);
+  assert.match(htmlToText("<ul><ul><ul><li>deep").text, /^ {4}- deep$/);
+  const links = "<a href=?>x</a> ".repeat(30_000);
+  const linked = htmlToText(links, { base: `https://example.com/${"p".repeat(8000)}`, links: true }).text;
+  assert.ok(linked.length < links.length * 5, "the budget is passed by at most one link");
+  assert.match(linked, /\[The rest of this page was not converted/);
 });
 
 test("a page is fetched once, converted, and then paged from the cache", async () => {

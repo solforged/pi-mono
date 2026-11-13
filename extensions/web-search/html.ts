@@ -64,6 +64,12 @@ function linkTarget(attrs: string, base?: string): string | undefined {
   } catch { return; }
 }
 
+// Output must stay proportional to the page: unbounded list indentation, or a
+// long base URL repeated in every link, would otherwise turn a few hundred
+// kilobytes of markup into hundreds of megabytes of text.
+const LIST_INDENT = 8;
+const outputBudget = (html: string) => html.length * 4 + 65_536;
+
 // One pass over the page. The text of its content region (<main> or
 // role="main", else its <article>s) is preferred over the whole page, which
 // also carries menus and sidebars.
@@ -102,7 +108,7 @@ function convert(html: string, base: string | undefined, links: boolean): string
     else if (!main && (name === "main" || ROLE_MAIN.test(attrs))) main = { name, open: 1, from: size };
     if (name === "article") article ??= { from: size, to: size };
     if (/^h[1-6]$/.test(name)) marker(`${"#".repeat(Number(name[1]))} `);
-    else if (name === "li") marker(`${"  ".repeat(Math.max(0, depth - 1))}- `);
+    else if (name === "li") marker(`${"  ".repeat(Math.min(LIST_INDENT, Math.max(0, depth - 1)))}- `);
     else if (name === "ul" || name === "ol") block(depth++ ? 1 : 2);
     else if (name === "br") block(1);
     else if (name === "tr") { block(1); cells = 0; }
@@ -134,7 +140,9 @@ function convert(html: string, base: string | undefined, links: boolean): string
     } else if (name === "li" || name === "tr" || LINE.has(name)) block(1);
   };
 
+  const budget = outputBudget(html);
   for (let pos = 0; pos < html.length;) {
+    if (size > budget) { pre = false; block(2); put("[The rest of this page was not converted: it expands to far more text than its markup.]"); break; }
     const lt = html.indexOf("<", pos);
     if (lt < 0) { text(html.slice(pos)); break; }
     if (lt > pos) text(html.slice(pos, lt));
