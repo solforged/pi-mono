@@ -1,6 +1,10 @@
-// Drives Apple's `container` CLI. Cancellation sends SIGTERM to the client,
-// which forwards it into the guest (see image/pi-run), then SIGKILL.
+// Drives Apple's `container` CLI. Cancellation stops the command inside the
+// guest with a second exec, and sends SIGTERM, then SIGKILL, to the client.
+// The client alone is not enough: container 1.5.0 fails to forward signals
+// ("missing signal in xpc message"), and a killed client leaves its guest
+// process running.
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 
 export interface RunOptions {
   input?: Buffer | string;
@@ -8,6 +12,8 @@ export interface RunOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   maxBytes?: number;
+  /** Called once when the process is first told to stop: on abort, timeout, or reaching `maxBytes`. */
+  onStop?: () => void;
 }
 export interface RunResult {
   code: number | null;
@@ -20,6 +26,8 @@ export interface RunResult {
 export type Runner = (command: string, args: string[], options?: RunOptions) => Promise<RunResult>;
 
 const GRACE_MS = 3000;
+// pi-run gives a command two seconds to end before it kills the group.
+const GUEST_GRACE_MS = 6000;
 
 export const runProcess: Runner = (command, args, options = {}) => new Promise((resolve, reject) => {
   if (options.signal?.aborted) return resolve({ code: null, stdout: Buffer.alloc(0), stderr: "", aborted: true, timedOut: false, truncated: false });
@@ -27,8 +35,17 @@ export const runProcess: Runner = (command, args, options = {}) => new Promise((
   const chunks: Buffer[] = [];
   let size = 0, stderr = "", aborted = false, timedOut = false, truncated = false;
   let killTimer: NodeJS.Timeout | undefined;
+  let stopping = false;
   const stop = () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
+    if (!stopping && options.onStop) {
+      // The caller stops the work itself, and the process then ends on its own;
+      // it is killed only if that does not happen.
+      stopping = true;
+      options.onStop();
+      killTimer = setTimeout(() => child.kill("SIGKILL"), GUEST_GRACE_MS);
+      return;
+    }
     child.kill("SIGTERM");
     killTimer ??= setTimeout(() => child.kill("SIGKILL"), GRACE_MS);
   };
@@ -61,6 +78,19 @@ export const runProcess: Runner = (command, args, options = {}) => new Promise((
 });
 
 export interface ContainerInfo { running: boolean; labels: Record<string, string> }
+
+/** Marks every process of one exec, through the environment its children inherit. */
+export const EXEC_ID = "PI_SANDBOX_EXEC";
+// Stops the exec with the given ID. A command under pi-run is stopped through
+// pi-run, which ends its process group and leaves what the command detached on
+// purpose; anything else is signalled directly.
+export const STOP_SCRIPT = `id=$1; run=; all=
+for p in /proc/[0-9]*; do
+  grep -qz "^${EXEC_ID}=$id\$" "$p/environ" 2>/dev/null || continue
+  if grep -qz 'pi-sandbox/pi-run$' "$p/cmdline" 2>/dev/null; then run="$run \${p#/proc/}"; else all="$all \${p#/proc/}"; fi
+done
+if [ -n "$run" ]; then kill -TERM $run; elif [ -n "$all" ]; then kill -TERM $all; fi
+exit 0`;
 
 export class ContainerCli {
   readonly run: Runner;
@@ -110,7 +140,13 @@ export class ContainerCli {
     child.unref();
   }
   exec(name: string, argv: string[], options: RunOptions & { cwd?: string; env?: Record<string, string> } = {}) {
-    return this.run(this.bin, this.execArgs(name, argv, { ...options, interactive: options.input !== undefined }), options);
+    const id = this.execId();
+    return this.run(this.bin, this.execArgs(name, argv, { ...options, env: { ...options.env, [EXEC_ID]: id }, interactive: options.input !== undefined }), { ...options, onStop: () => this.stop(name, id) });
+  }
+  execId() { return randomBytes(8).toString("hex"); }
+  /** Stops, inside the guest, the exec started with `EXEC_ID` set to this ID. */
+  stop(name: string, id: string) {
+    void this.run(this.bin, this.execArgs(name, ["sh", "-c", STOP_SCRIPT, "sh", id]), { timeoutMs: 15000 }).catch(() => {});
   }
   execArgs(name: string, argv: string[], options: { cwd?: string; env?: Record<string, string>; interactive?: boolean } = {}) {
     const args = ["exec", ...(options.interactive ? ["--interactive"] : [])];

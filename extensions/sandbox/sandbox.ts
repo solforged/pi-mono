@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { ContainerCli, RunOptions, RunResult } from "./container.ts";
+import { EXEC_ID, type ContainerCli, type RunOptions, type RunResult } from "./container.ts";
 import { runArgs, type Plan } from "./plan.ts";
 
 export type Phase = "idle" | "building" | "starting" | "ready" | "error";
@@ -150,10 +150,18 @@ export class Sandbox {
     if (result.code !== 0) void this.log(`wiki build failed: ${result.stderr.trim()}`);
   }
 
-  /** A command line for a long-lived guest process whose stdin and stdout the caller streams. */
+  /**
+   * A command line for a long-lived guest process whose stdin and stdout the
+   * caller streams. `stop` ends it in the guest: killing the client does not.
+   */
   async command(argv: string[], options: { cwd?: string; env?: Record<string, string> } = {}) {
     await this.ensure();
-    return { command: this.options.cli.bin, args: this.options.cli.execArgs(this.plan.name, argv, { ...options, interactive: true }) };
+    const { cli } = this.options;
+    const id = cli.execId();
+    return {
+      command: cli.bin, args: cli.execArgs(this.plan.name, argv, { ...options, env: { ...options.env, [EXEC_ID]: id }, interactive: true }),
+      stop: () => cli.stop(this.plan.name, id),
+    };
   }
 
   async exec(argv: string[], options: RunOptions & { cwd?: string; env?: Record<string, string> } = {}): Promise<RunResult> {

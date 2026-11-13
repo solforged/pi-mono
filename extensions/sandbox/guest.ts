@@ -129,10 +129,11 @@ export function sniffImage(data: Buffer): string | null {
 
 /**
  * pi.events channel for a long-lived guest process (the workflowz kernel).
- * The sandbox sets `answer`: the command line, undefined while the sandbox is
- * off, or a rejection when it is on but unavailable.
+ * The sandbox sets `answer`: the command line and a `stop` that ends the
+ * process in the guest, undefined while the sandbox is off, or a rejection
+ * when it is on but unavailable.
  */
 export const GUEST_COMMAND = "sandbox:guest-command";
 /** pi.events channel announcing `{ enabled }` whenever the sandbox is turned on or off. */
 export const SANDBOX_CHANGED = "sandbox:changed";
-export interface GuestCommandRequest { argv: string[]; cwd?: string; answer?: Promise<{ command: string; args: string[] } | undefined> }
+export interface GuestCommandRequest { argv: string[]; cwd?: string; answer?: Promise<{ command: string; args: string[]; stop?: () => void } | undefined> }

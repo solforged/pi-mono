@@ -148,6 +148,11 @@ sandbox settings or another project. Subagent and Rex children follow the
 parent's on/off state and load the same extension, so scouts share the parent's
 container and workers get their own.
 
+Esc and a bash `timeout` stop the command inside the guest: a `bash` command's
+process group, which leaves what it detached with `setsid`, or the process
+itself for other tools. This does not rely on `container exec` passing signals
+on, which container 1.5.0 fails to do.
+
 ## Limits
 
 This keeps generated commands away from your home directory, credentials, and

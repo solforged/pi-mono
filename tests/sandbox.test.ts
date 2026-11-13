@@ -5,7 +5,7 @@ import { mkdir, readdir, readFile, rm, utimes, writeFile } from "node:fs/promise
 import { join } from "node:path";
 import test from "node:test";
 import { sharedTarget, shareCargoTarget } from "../extensions/sandbox/cargo.ts";
-import { ContainerCli, runProcess, type RunResult } from "../extensions/sandbox/container.ts";
+import { ContainerCli, EXEC_ID, runProcess, STOP_SCRIPT, type RunOptions, type RunResult } from "../extensions/sandbox/container.ts";
 import { commandEnv, fdArgs, GREP_SCRIPT, GrepCollector, guestError, parseListing, rgArgs, sniffImage } from "../extensions/sandbox/guest.ts";
 import { buildPlan, containerName, promptNote, runArgs, type Probe } from "../extensions/sandbox/plan.ts";
 import { imageTag, Sandbox, withLock } from "../extensions/sandbox/sandbox.ts";
@@ -265,6 +265,38 @@ function fakeCli() {
   cli.removeDetached = (name) => { running.delete(name); };
   return { cli, running, calls };
 }
+
+test("a cancelled exec is stopped inside the guest, not by signalling the client", async () => {
+  // container 1.5.0 does not pass signals on, and a killed client leaves its guest process running.
+  const calls: Array<{ args: string[]; options?: RunOptions }> = [];
+  const cli = new ContainerCli(async (_bin, args, options) => {
+    calls.push({ args, options });
+    return { code: 0, stdout: Buffer.alloc(0), stderr: "", aborted: false, timedOut: false, truncated: false };
+  });
+  await cli.exec("pi-sbx-app-0000000000", ["sleep", "600"], { env: { PI_MODEL: "m" } });
+  const [{ args, options }] = calls;
+  const tag = args.find((arg) => arg.startsWith(`${EXEC_ID}=`))!;
+  assert.match(tag, /=[0-9a-f]{16}$/);
+  assert(args.includes("PI_MODEL=m"));
+  options!.onStop!();
+  assert.deepEqual(calls[1].args, ["exec", "pi-sbx-app-0000000000", "sh", "-c", STOP_SCRIPT, "sh", tag.split("=")[1]]);
+  // Each exec has its own ID, so stopping one leaves the others.
+  await cli.exec("pi-sbx-app-0000000000", ["true"]);
+  assert.notEqual(calls[2].args.find((arg) => arg.startsWith(`${EXEC_ID}=`)), tag);
+
+  // The process is left to end by itself once the caller has stopped the work.
+  const abort = new AbortController();
+  let stops = 0;
+  const started = Date.now();
+  const running = runProcess("sh", ["-c", "trap 'kill $!; exit 143' USR1; sleep 31 >/dev/null 2>&1 & wait"], {
+    signal: abort.signal,
+    onStop: () => { stops++; execFileSync("pkill", ["-USR1", "-f", "exit 143' USR1; sleep 31"]); },
+  });
+  setTimeout(() => { abort.abort(); abort.abort(); }, 200);
+  const result = await running;
+  assert.deepEqual([result.aborted, result.code, stops], [true, 143, 1]);
+  assert(Date.now() - started < 3000, "waited for the kill timer");
+});
 
 test("processes in one worktree share a container; the last one out removes it", async (t) => {
   const stateRoot = await temporary(t);

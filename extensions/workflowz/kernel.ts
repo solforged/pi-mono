@@ -21,7 +21,11 @@ export interface CellOptions {
   tools?: ToolBridge;
 }
 /** How to start the child; `source` is the kernel program for `-e`. */
-export interface Launch { command: string; args: string[]; env?: Record<string, string>; where: string }
+export interface Launch {
+  command: string; args: string[]; env?: Record<string, string>; where: string;
+  /** Ends the process where it runs, for a guest whose client does not pass signals on. */
+  stop?: () => void;
+}
 export interface KernelHooks {
   log?: (line: string) => void; phase?: (title: string) => void;
   syncTimeoutMs?: number;
@@ -69,7 +73,7 @@ export function candidates(code: string) {
 }
 
 interface Child {
-  proc: ChildProcessWithoutNullStreams; ready: Promise<void>; beat: number; stderr: string; where: string;
+  proc: ChildProcessWithoutNullStreams; ready: Promise<void>; beat: number; stderr: string; where: string; halt?: () => void;
   dead?: string; monitor: ReturnType<typeof setInterval>;
   /** Set once the child answers; until then the startup timer, not the hang monitor, decides. */
   started: boolean;
@@ -117,7 +121,9 @@ export class Kernel {
     child.dead = reason;
     child.waits.abort(new Error(`Kernel stopped: ${reason}`));
     clearInterval(child.monitor);
-    // SIGTERM reaches a guest process through `container exec`; SIGKILL would orphan it.
+    // A guest kernel is stopped in the guest: `container exec` may not pass the
+    // signal on, and a busy loop never sees its input close.
+    child.halt?.();
     child.proc.stdin.end();
     child.proc.kill("SIGTERM");
     setTimeout(() => { if (child.proc.exitCode === null && child.proc.signalCode === null) child.proc.kill("SIGKILL"); }, 3000).unref?.();
@@ -135,7 +141,7 @@ export class Kernel {
     if (generation !== this.generation) throw new Error("The kernel was reset while it started");
     const proc = spawn(launch.command, launch.args, { env: { ...process.env, ...launch.env }, stdio: ["pipe", "pipe", "pipe"] });
     const ready = Promise.withResolvers<void>();
-    const child: Child = { proc, ready: ready.promise, beat: Date.now(), stderr: "", where: launch.where, started: false, waits: new AbortController(),
+    const child: Child = { proc, ready: ready.promise, beat: Date.now(), stderr: "", where: launch.where, halt: launch.stop, started: false, waits: new AbortController(),
       monitor: setInterval(() => {
         const limit = this.hooks.hangMs ?? (this.hooks.syncTimeoutMs ?? SYNC_TIMEOUT_MS) + 5000;
         const silent = () => child.started && this.child === child && Date.now() - child.beat > limit;
@@ -166,7 +172,7 @@ export class Kernel {
     const timer = setTimeout(() => ready.reject(new Error(`Kernel did not start within ${startupMs / 1000}s`)), startupMs);
     try { await ready.promise; } catch (error) {
       if (this.child === child) this.stop(String((error as Error).message));
-      else if (!child.dead) { child.dead = "startup failed"; clearInterval(child.monitor); proc.kill("SIGKILL"); }
+      else if (!child.dead) { child.dead = "startup failed"; clearInterval(child.monitor); child.halt?.(); proc.kill("SIGKILL"); }
       throw error;
     } finally { clearTimeout(timer); }
     if (child.dead) throw new Error(`Kernel stopped during startup: ${child.dead}`);
