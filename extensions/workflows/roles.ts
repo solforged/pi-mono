@@ -32,6 +32,8 @@ export interface Config {
     concurrency: number;
     /** Live interactive Rex children (rex extension); separate from headless concurrency. */
     rexConcurrency: number;
+    /** Concurrent eval-kernel children (workflowz extension); separate from the other limits. */
+    evalConcurrency: number;
     maxTasks: number;
     maxTurns: number;
     outputBytes: number;
@@ -128,6 +130,7 @@ export function resolveConfig(base: unknown, local: unknown, profile: string, so
     subagents: {
       concurrency: integer(s.concurrency, 1, 8, "concurrency"),
       rexConcurrency: integer(s.rexConcurrency ?? 6, 1, 16, "rexConcurrency"),
+      evalConcurrency: integer(s.evalConcurrency ?? 6, 1, 16, "evalConcurrency"),
       maxTasks: integer(s.maxTasks, 1, 16, "maxTasks"),
       maxTurns: integer(s.maxTurns, 1, 64, "maxTurns"),
       outputBytes: integer(s.outputBytes, 1024, 50000, "outputBytes"),

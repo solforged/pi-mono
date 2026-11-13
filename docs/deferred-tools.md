@@ -5,8 +5,9 @@ declarations stay out of requests until Pi's built-in `tool_search` loads them;
 after that they stay declared on that branch. This keeps the base prompt small
 as tools are added.
 
-Deferred now: `session_search` and `session_read` (group `sessions`) and
-`intercom`. An arriving intercom note declares `intercom` straight away, since
+Deferred now: `session_search` and `session_read` (group `sessions`),
+`intercom`, and `eval` and `wait` (group `workflowz`, also declared by the
+[workflowz keyword](workflowz.md)). An arriving intercom note declares `intercom` straight away, since
 it asks for any answer to go through that tool. `figure` stays direct: models
 draw diagrams with bash rather than search for a tool to do it (see below).
 

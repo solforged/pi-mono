@@ -76,7 +76,8 @@ export async function createWorktree(cwd: string, destination: string, signal: A
   return destination;
 }
 
-export function createRunner(pi: ExtensionAPI, source: ConfigSource, root: string, agentDir: string, lifetime: AbortSignal) {
+/** `limit` overrides subagents.concurrency for callers that queue children themselves. */
+export function createRunner(pi: ExtensionAPI, source: ConfigSource, root: string, agentDir: string, lifetime: AbortSignal, limit?: (config: Config) => number) {
   const semaphore = new Semaphore();
   return async function runTasks(tasks: Task[], ctx: ExtensionContext, instructions: string, signal: AbortSignal, progress?: (text: string) => void): Promise<ChildResult[]> {
     const config = configSnapshot(source); // A batch, including queued children, keeps its role choices.
@@ -87,7 +88,7 @@ export function createRunner(pi: ExtensionAPI, source: ConfigSource, root: strin
       resolveRole(config, agents[task.agent].role, ctx.modelRegistry);
     }
     const combined = AbortSignal.any([signal, lifetime]);
-    return Promise.all(tasks.map((task) => semaphore.run(config.subagents.concurrency, combined, async () => {
+    return Promise.all(tasks.map((task) => semaphore.run(limit?.(config) ?? config.subagents.concurrency, combined, async () => {
       const spec = agents[task.agent];
       const { role } = resolveRole(config, spec.role, ctx.modelRegistry);
       const deadline = AbortSignal.any([combined, AbortSignal.timeout(role.timeoutMs)]);

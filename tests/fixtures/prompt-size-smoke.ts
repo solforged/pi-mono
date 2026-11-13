@@ -8,6 +8,8 @@ import { declarationSize, measure, owner, REPEATED_RULES } from "../../extension
 export const BUDGETS: Record<string, number> = {
   artifact_read: 500, ask_user_question: 960, intercom: 480, rex_agent: 640, rex_result: 440, rex_send: 560, session_read: 620,
   goal: 320, session_search: 520, subagent: 560, todo: 450, web_fetch: 380, web_search: 400,
+  // Deferred: declared only once a workflowz prompt or tool_search loads them.
+  eval: 920, wait: 440,
   // figure registers only on macOS, where it can draw.
   ...(process.platform === "darwin" ? { figure: 500 } : {}),
 };

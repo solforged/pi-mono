@@ -21,7 +21,8 @@ Workers also get Bash, edit, and write. Each child gets approved context-file in
 its authored definition from [agent-definitions/](../agent-definitions/); it
 does not inherit the whole conversation or discover project resources.
 Headless children cannot [ask you questions](ask.md#subagents); they list them
-under "Open questions". Recursive delegation is not allowed. Concurrency, batch, turn, and per-role
+under "Open questions". Recursive delegation is not allowed. For pools larger
+than one batch, see [workflowz](workflowz.md). Concurrency, batch, turn, and per-role
 output/time limits are configured in [roles.json](../roles.json), with
 [local role overrides](roles.md#profiles-and-local-overrides).
 

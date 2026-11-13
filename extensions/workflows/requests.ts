@@ -19,7 +19,8 @@ export async function completeRole(ctx: ExtensionContext, config: Config, name: 
   });
   deadline.throwIfAborted();
   if (["error", "aborted", "length"].includes(response.stopReason)) {
-    throw new Error(`${name}: ${response.errorMessage ?? response.stopReason}`);
+    // Failed calls can still cost tokens; callers that count spend read them here.
+    throw Object.assign(new Error(`${name}: ${response.errorMessage ?? response.stopReason}`), { usage: response.usage });
   }
   return { text: responseText(response), usage: response.usage, provider: role.provider, model: role.model };
 }

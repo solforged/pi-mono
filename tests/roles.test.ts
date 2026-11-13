@@ -67,6 +67,9 @@ test("unavailable roles fail without a fallback or model mutation", async () => 
   assert.equal(resolveConfig(base, {}, "personal").subagents.rexConcurrency, 6);
   assert.equal(resolveConfig(base, { subagents: { rexConcurrency: 14 } }, "personal").subagents.rexConcurrency, 14);
   assert.throws(() => resolveConfig(base, { subagents: { rexConcurrency: 17 } }, "personal"), /rexConcurrency/);
+  assert.equal(resolveConfig(base, {}, "personal").subagents.evalConcurrency, 6);
+  assert.equal(resolveConfig({ ...base, subagents: { ...base.subagents, evalConcurrency: undefined } }, {}, "personal").subagents.evalConcurrency, 6);
+  assert.throws(() => resolveConfig(base, { subagents: { evalConcurrency: 0 } }, "personal"), /evalConcurrency/);
   assert.throws(() => resolveConfig(base, { subagents: { childExtensions: ["npm:arbitrary"] } }, "personal"), /local paths/);
   assert.throws(() => profileName({ PI_WORKFLOW_PROFILE: "../work" }), /Invalid/);
 });

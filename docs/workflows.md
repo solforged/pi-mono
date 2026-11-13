@@ -9,6 +9,7 @@
 | `/commit [replan\|apply\|show\|clear]` | Split the working tree into commits, down to hunks; cache the plan. |
 | `/advisor <task>` | Ask the advisor with a bounded recent-conversation excerpt. |
 | `/subagent <advisor\|scout\|researcher\|worker> <task>` | Run a named agent with bounded context. |
+| `/workflowz [reset]` | Show or reset the [workflowz](workflowz.md) kernel's jobs. |
 | `/learn [flow]` | Have the current model author a managed skill. |
 | `/learn-sessions` | Pick sessions to mine; the current session starts checked. |
 | `/learn-review` | Inspect, approve, or dismiss a queued proposal. |
