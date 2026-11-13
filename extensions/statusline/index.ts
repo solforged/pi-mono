@@ -67,13 +67,15 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
   const poll = setInterval(scheduleGit, POLL_MS);
   poll.unref?.();
 
-  let cached: { key: string; stats: Stats; auto: boolean } | undefined;
+  // The footer draws on every frame, and each of these walks the whole session,
+  // so they are recomputed only when the branch or the model changes, as Pi's own footer does.
+  let cached: { key: string; stats: Stats; auto: boolean; usage: ReturnType<ExtensionContext["getContextUsage"]> } | undefined;
   const stats = () => {
-    const sm = ctx.sessionManager;
-    const key = `${sm.getSessionId()}:${sm.getLeafId()}:${sm.getEntryCount?.() ?? sm.getEntries().length}`;
+    const sm = ctx.sessionManager, model = ctx.model;
+    const key = `${sm.getSessionId()}:${sm.getLeafId()}:${sm.getEntryCount?.() ?? sm.getEntries().length}:${model?.provider}/${model?.id}:${model?.contextWindow}`;
     if (cached?.key !== key) {
       const settings: any = pi.getSettings();
-      cached = { key, stats: sessionStats(sm.getEntries()), auto: settings.compaction?.enabled !== false };
+      cached = { key, stats: sessionStats(sm.getEntries()), auto: settings.compaction?.enabled !== false, usage: ctx.getContextUsage() };
     }
     return cached;
   };
@@ -123,8 +125,7 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
           segments.push({ priority: 4, text: [head, ...marks].join(" "), compact: head });
         }
 
-        const { stats: { cost, cacheHit }, auto } = stats();
-        const usage = ctx.getContextUsage();
+        const { stats: { cost, cacheHit }, auto, usage } = stats();
         const window = usage?.contextWindow ?? model?.contextWindow ?? 0;
         const percent = usage?.percent;
         const level = (percent ?? 0) > 90 ? "error" : (percent ?? 0) > 70 ? "warning" : "muted";
