@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { registerRexTitle, rexTitle } from "../extensions/rex/title.ts";
+import { registerRexTitle, rexTitle, setTitlePrefix } from "../extensions/rex/title.ts";
 
 function stream() {
   const written: unknown[] = [];
@@ -34,4 +34,19 @@ test("outside Rex nothing is patched, and reloads patch only once", () => {
   const patched = s.out.write;
   registerRexTitle({ REX_SESSION: "s1" }, s.out, () => "/src/pi-mono");
   assert.equal(s.out.write, patched);
+});
+
+test("a colour prefix rewrites the current title at once and marks later ones", () => {
+  const s = stream();
+  setTitlePrefix("🟦", s.out);
+  assert.deepEqual(s.written, [], "an unpatched stream is left alone");
+  registerRexTitle({ REX_SESSION: "s1" }, s.out, () => "/src/pi-mono");
+  setTitlePrefix("🟦", s.out);
+  assert.deepEqual(s.written, [], "nothing to rewrite before Pi's first title");
+  s.out.write("\x1b]0;\u03c0 - fix-login - pi-mono\x07");
+  setTitlePrefix("🟦", s.out);
+  // A reloaded module reaches the same state through the stream.
+  registerRexTitle({ REX_SESSION: "s1" }, s.out, () => "/src/pi-mono");
+  setTitlePrefix("", s.out);
+  assert.deepEqual(s.written, ["\x1b]0;🟦 fix-login\x07", "\x1b]0;fix-login\x07"]);
 });

@@ -19,8 +19,8 @@ import { openHub, widget, type HubHost } from "./hub.ts";
 import { installLeftArrow } from "./left-editor.ts";
 import { completionRenderer, toolRenderers } from "./render.ts";
 import { switchTools, TOOLS_ENTRY } from "./tools.ts";
-import { registerRexTitle } from "./title.ts";
-import { agentsTabLabel } from "./tabs.ts";
+import { registerRexTitle, setTitlePrefix } from "./title.ts";
+import { agentsTabLabel, MARKS, pickMark } from "./tabs.ts";
 
 const str = () => Type.Optional(Type.String());
 import { activityLine, fitResults, oneLine, priority, rows, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
@@ -31,6 +31,17 @@ export default async function (pi: ExtensionAPI) {
   const root = resolve(dirname(await realpath(fileURLToPath(import.meta.url))), "../..");
   const rex = new RexClient(), runner = new RexRunner(pi, root, getAgentDir(), rex), lifetime = new AbortController();
   let instructions = "", currentCtx: ExtensionContext | undefined, deck: DeckManager | undefined;
+  // This parent's colour, on its title, its Agents tab and its children's panes and
+  // titles; picked at the first child and kept with the session.
+  let mark: string | undefined, picking: Promise<string> | undefined;
+  runner.markFor = (session, signal) => mark ? Promise.resolve(mark) : picking ??= (async () => {
+    try {
+      const labels = await rex.labels(session, signal);
+      mark = pickMark(labels, currentCtx?.sessionManager.getSessionId() ?? session);
+      pi.appendEntry("rex-mark", { mark });
+      return mark;
+    } finally { picking = undefined; }
+  })();
   const running = (task: TaskRun) => ["starting", "running"].includes(task.status);
   // Model-facing listing: one line per child, latest tasks indented. Names are the handle.
   const list = () => bounded(rows(runner.runs.values(), runner.tasks).map(row => {
@@ -61,6 +72,8 @@ export default async function (pi: ExtensionAPI) {
     const items = rows(runner.runs.values(), runner.tasks);
     currentCtx.ui.setWidget("rex-agents", items.length ? widget(items) : undefined);
     for (const fn of hubListeners) fn();
+    // Marked only while it has children, so other Pi tabs stay plain.
+    setTitlePrefix(mark && deckChildren().length ? mark : "");
     if (!deck) return;
     const key = JSON.stringify(deckChildren().map(({ line: _line, ...placement }) => placement));
     if (key !== layoutKey) { layoutKey = key; deck.schedule(); }
@@ -80,7 +93,7 @@ export default async function (pi: ExtensionAPI) {
   /** Names the parent as its tab does: the session name, else the directory. */
   const agentsTab = () => {
     const kids = deckChildren();
-    return agentsTabLabel(pi.getSessionName() || basename(currentCtx?.cwd ?? process.cwd()), kids.length, kids.filter(k => k.priority === 4).length);
+    return agentsTabLabel(pi.getSessionName() || basename(currentCtx?.cwd ?? process.cwd()), kids.length, kids.filter(k => k.priority === 4).length, mark);
   };
   const rosterLines = () => {
     const items = rows(runner.runs.values(), runner.tasks);
@@ -114,6 +127,7 @@ export default async function (pi: ExtensionAPI) {
   });
   pi.on("session_shutdown", async () => {
     lifetime.abort(new Error("Parent session closed or reloaded"));
+    setTitlePrefix("");
     if (flushTimer) clearTimeout(flushTimer);
     if (ticker) clearInterval(ticker);
     currentCtx?.ui.setWidget("rex-agents", undefined);
@@ -122,6 +136,8 @@ export default async function (pi: ExtensionAPI) {
   });
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
+    const savedMark = (ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "rex-mark").at(-1) as any)?.data?.mark;
+    mark = MARKS.includes(savedMark) ? savedMark : undefined;
     // Tool sets are restored with the session, so decide again at every start.
     const removedBefore = ((ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === TOOLS_ENTRY).at(-1) as any)?.data?.removed ?? []) as string[];
     const tools = switchTools(pi.getActiveTools(), pi.getAllTools().map(t => t.name), !!(process.env.REX_SESSION && process.env.REX_BLOCK), removedBefore);

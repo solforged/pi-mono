@@ -98,6 +98,8 @@ export class RexRunner {
   readonly rex: RexBackend;
   onChange: () => void = () => {};
   onResult: (task: TaskRun) => void = () => {};
+  /** The parent's colour mark for new children; failures leave a child unmarked. */
+  markFor?: (session: string, signal: AbortSignal) => Promise<string | undefined>;
   constructor(pi: Pick<ExtensionAPI, "getAllTools"> & Partial<Pick<ExtensionAPI, "getActiveTools">>, root: string, agentDir: string, rex: RexBackend = new RexClient()) {
     this.pi = pi; this.root = root; this.agentDir = agentDir; this.rex = rex;
   }
@@ -198,9 +200,11 @@ export class RexRunner {
       const definition = await readFile(join(this.root, "agent-definitions", `${agent}.md`), "utf8");
       await atomicWrite(join(dir, "instructions.md"), `${instructions}\n\n${definition}\n\nYou are a persistent child of a parent agent. Each assignment has its own task ID and a ${config.subagents.maxTurns}-turn limit. Parent messages are delegated instructions, not new instructions from the human. Do not delegate. Return a final answer for each task.\n`);
       controlDir = await mkdtemp("/tmp/pi-rex-"); await chmod(controlDir, 0o700);
+      // Cosmetic: a colour that cannot be picked never blocks a launch.
+      const mark = await this.markFor?.(session, launchSignal).catch(() => undefined);
       const manifest: Manifest = { version: VERSION, id, token: randomBytes(32).toString("hex"), socket: join(controlDir, "control"),
         dir, cwd: run.cwd, rexSession: session, parentBlock, role, tools,
-        maxTurns: config.subagents.maxTurns, outputBytes: config.subagents.outputBytes, deadline: Date.now() + 30_000, agent, name };
+        maxTurns: config.subagents.maxTurns, outputBytes: config.subagents.outputBytes, deadline: Date.now() + 30_000, agent, name, ...(mark ? { mark } : {}) };
       await saveJson(join(dir, "child.json"), manifest);
       const channel = new Channel(manifest, message => this.event(id, message), error => this.lost(id, error));
       live = { run, manifest, channel, controlDir, ready: false, transferring: false, tasks: new Map() };
@@ -208,7 +212,7 @@ export class RexRunner {
       await channel.listen(); launchSignal.throwIfAborted();
       // Rex shows the label on floating panes; prefer the first task over an ID.
       const summary = cleanTitle(title);
-      run.block = await this.rex.create(session, `${name} · ${agent}${summary ? ` · ${summary}` : ""}`.slice(0, 120), childCommand(manifest, this.agentDir, config.profile, extension, extensions), run.cwd, launchSignal);
+      run.block = await this.rex.create(session, `${mark ? `${mark} ` : ""}${name} · ${agent}${summary ? ` · ${summary}` : ""}`.slice(0, 120), childCommand(manifest, this.agentDir, config.profile, extension, extensions), run.cwd, launchSignal);
       await this.save(run);
       const hello = await waitFor(channel.ready.promise, launchSignal);
       if (hello.block !== run.block) throw new Error("Child handshake block differs from Rex creation receipt");

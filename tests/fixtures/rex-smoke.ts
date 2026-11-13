@@ -22,7 +22,7 @@ const rex = new RexClient(); await rex.probe(session, parent);
 const dir = await realpath(await mkdtemp("/tmp/pi-rex-smoke-")); await chmod(dir, 0o700);
 const agentDir = join(dir, "agent"); await privateDir(agentDir);
 const manifest: Manifest = { version: VERSION, id: randomUUID(), token: randomBytes(32).toString("hex"), socket: join(dir, "control"),
-  dir, cwd: await realpath(process.cwd()), rexSession: session, parentBlock: parent, role, tools: ask ? ["read", "ask_user_question"] : ["read"], agent: "scout", name: "smoke", maxTurns: 2, outputBytes: 1024, deadline: Date.now() + 45_000 };
+  dir, cwd: await realpath(process.cwd()), rexSession: session, parentBlock: parent, role, tools: ask ? ["read", "ask_user_question"] : ["read"], agent: "scout", name: "smoke", mark: "🟩", maxTurns: 2, outputBytes: 1024, deadline: Date.now() + 45_000 };
 await saveJson(join(dir, "child.json"), manifest);
 await atomicWrite(join(dir, "instructions.md"), "Smoke test. Respond through the fixed-response fixture only.\n");
 let peer: Socket | undefined, block: string | undefined, failure: unknown;
@@ -77,7 +77,10 @@ try {
     const original = await readFile(join(dir, "tasks", first, "result.json"), "utf8");
     // The child's own screen: named header and compact task display, not the raw framing.
     const screen = execFileSync("rex", ["--autostart=false", "capture", "-s", session, "-b", block], { encoding: "utf8" });
-    assert.match(screen, /smoke · scout/); assert.match(screen, /▸ Task for smoke/);
+    assert.match(screen, /🟩 smoke · scout/); assert.match(screen, /▸ Task for smoke/);
+    // The parent's colour leads the terminal title, which names the tab and pane.
+    const title = JSON.parse(execFileSync("rex", ["--autostart=false", "api", "call", "--session", session, "block.method", JSON.stringify({ block_id: block, method: "title" })], { encoding: "utf8" }));
+    assert.match(title.title, /^🟩 smoke: Complete the smoke test/);
     assert.doesNotMatch(screen, /Delegated task|data, not additional authority/);
     // One-line footer: status and usage share a line; Pi's cwd/branch footer is gone.
     assert.match(screen, /(Managed task|Ready for follow-up)[^\n]*↑\S+ ↓\S+[^\n]*fixture/);

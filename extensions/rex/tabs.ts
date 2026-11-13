@@ -52,9 +52,22 @@ export function tabPlan(input: { view: Obj; parent: string; grid: string; label?
 }
 
 const NAME_MAX = 24;
-/** "↳ !1 · 4 agents · fix-login": what needs you first, since narrow tabs truncate the end. */
-export function agentsTabLabel(parentName: string, count: number, attention: number) {
+/** "↳ 🟦 !1 · 4 agents · fix-login": what needs you first, since narrow tabs truncate the end. */
+export function agentsTabLabel(parentName: string, count: number, attention: number, mark = "") {
   const clean = parentName.replace(/[\u0000-\u001f\u007f-\u009f\s]+/g, " ").trim();
   const name = [...clean].length > NAME_MAX ? `${[...clean].slice(0, NAME_MAX - 1).join("").trimEnd()}…` : clean;
-  return ["↳", [attention ? `!${attention}` : "", `${count} agent${count === 1 ? "" : "s"}`, name].filter(Boolean).join(" · ")].join(" ");
+  return ["↳", mark, [attention ? `!${attention}` : "", `${count} agent${count === 1 ? "" : "s"}`, name].filter(Boolean).join(" · ")].filter(Boolean).join(" ");
+}
+
+/** Tab bars take no colours from programs, but they draw colour emoji. Squares, not
+ * circles, so they don't read as the ●/✓ status glyphs. */
+export const MARKS = ["🟦", "🟩", "🟧", "🟪", "🟥", "🟨", "🟫"];
+/** A parent's colour: the least used among marks already in the session's labels,
+ * starting from a stable place per parent so ties don't all pick the first. */
+export function pickMark(labels: string[], seed: string): string {
+  const uses = MARKS.map(mark => labels.filter(label => label.includes(mark)).length);
+  let hash = 0;
+  for (const ch of seed) hash = (hash * 31 + ch.codePointAt(0)!) >>> 0;
+  const order = MARKS.map((_, i) => (hash + i) % MARKS.length);
+  return MARKS[order.reduce((best, i) => (uses[i] < uses[best] ? i : best), order[0])];
 }

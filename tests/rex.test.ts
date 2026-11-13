@@ -100,6 +100,8 @@ test("versioned handshake pins model, tools, cwd, block, session and capability"
   for (const patch of [{ model: "other" }, { token: "b".repeat(64) }, { token: "☃".repeat(64) }, { cwd: "/" }, { block: parent }, { tools: ["bash"] }, { sessionFile: "/tmp/other" }, { version: 1 }]) assert.throws(() => validateReady({ ...hello, ...patch }, m));
   assert.equal(validateManifest(m).id, m.id);
   assert.throws(() => validateManifest({ ...m, deadline: 0 }), /expired/);
+  assert.equal(validateManifest({ ...m, mark: "🟦" }).mark, "🟦");
+  assert.throws(() => validateManifest({ ...m, mark: "\u001b]0;x" }), /Invalid/);
 });
 test("interactive argv omits print flags, prompt, credentials and parent Rex identity", () => {
   const command = childCommand(manifest(), "/private/agent", "work", "/ext/index.ts", ["/routing/index.ts"]);

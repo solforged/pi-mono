@@ -6,6 +6,7 @@ import { registerChild } from "./child.ts";
 import { RexClient } from "./client.ts";
 import { installLeftArrow } from "./left-editor.ts";
 import { displayTaskPrompt, OPENED, validateManifest, type Manifest } from "./protocol.ts";
+import { setTitlePrefix } from "./title.ts";
 import { childFooter } from "./ui.ts";
 
 /** Child presentation only. Policy stays in child.ts and is unaffected by display. */
@@ -14,11 +15,13 @@ export function registerChildUi(pi: ExtensionAPI, manifestPath: string) {
   registerChild(pi, manifestPath, (ctx: ExtensionContext, m: Manifest) => {
     agent = m.agent ?? agent; label = m.name ?? agent;
     if (ctx.mode !== "tui") return;
+    // The parent's colour on this terminal's title, so its tab and pane match the parent's.
+    setTitlePrefix(m.mark ?? "");
     const home = process.env.HOME, cwd = home && m.cwd.startsWith(home) ? `~${m.cwd.slice(home.length)}` : m.cwd;
     // Replaces the generic Pi banner and key hints with what this terminal is.
     ctx.ui.setHeader((_tui, theme) => ({
       render: (width: number) => [
-        truncateToWidth(`${theme.fg("accent", theme.bold(`${m.name ?? "Rex"} · ${agent}`))} ${theme.fg("dim", `· ${m.role.provider}/${m.role.model} · ${cwd}`)}`, width),
+        truncateToWidth(`${m.mark ? `${m.mark} ` : ""}${theme.fg("accent", theme.bold(`${m.name ?? "Rex"} · ${agent}`))} ${theme.fg("dim", `· ${m.role.provider}/${m.role.model} · ${cwd}`)}`, width),
         truncateToWidth(theme.fg("dim", `Managed by the parent agent · ← on an empty prompt returns to it · approvals answer here · /take when idle · tools: ${m.tools.join(", ")}`), width),
       ],
       invalidate() {},

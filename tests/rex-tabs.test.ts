@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agentsTabLabel, tabPlan, type TabState } from "../extensions/rex/tabs.ts";
+import { agentsTabLabel, MARKS, pickMark, tabPlan, type TabState } from "../extensions/rex/tabs.ts";
 
 const P = "block:p", G = "window:grid";
 const tab = (id: string, block = `block:${id}`, label = id) =>
@@ -46,4 +46,15 @@ test("labels put what needs you first and shorten long parent names", () => {
   assert.equal(agentsTabLabel("fix-login", 1, 0), "↳ 1 agent · fix-login");
   assert.equal(agentsTabLabel("fix-login", 4, 2), "↳ !2 · 4 agents · fix-login");
   assert.equal(agentsTabLabel("Improve Pi and Rex agent tab links\u001b[2J", 3, 0), "↳ 3 agents · Improve Pi and Rex agen…");
+});
+
+test("a parent's colour mark avoids marks already in the session, stably per parent", () => {
+  assert.equal(agentsTabLabel("fix-login", 4, 1, "🟦"), "↳ 🟦 !1 · 4 agents · fix-login");
+  const first = pickMark([], "session-a");
+  assert.equal(pickMark([], "session-a"), first, "the same parent gets the same mark");
+  assert(MARKS.includes(first));
+  const taken = MARKS.filter(m => m !== "🟪").map(m => `${m} birch · scout`);
+  assert.equal(pickMark(taken, "session-b"), "🟪", "the only unused mark wins");
+  const crowded = [...taken, "↳ 🟪 1 agent · x", "🟦 oak · worker"], picked = pickMark(crowded, "session-b");
+  assert.notEqual(picked, "🟦", "otherwise one of the least used");
 });

@@ -427,6 +427,12 @@ export class RexClient {
     id(blockId, "block");
     return { windowId: result.window_id, blockId };
   }
+  /** Every window and block label in the session (for picking a colour mark not in use). */
+  async labels(sessionId: string, signal?: AbortSignal): Promise<string[]> {
+    const state = await this.preflight(sessionId, signal);
+    const labels = [...(state.view.windows ?? []).map((w: ObjectValue) => w.label), ...state.blocks.map(b => b.label)];
+    return labels.filter((label): label is string => typeof label === "string");
+  }
   /** Reorders a tab; without `before` it goes last. Never changes the active window or focus. */
   async moveWindow(sessionId: string, windowId: string, before?: string, signal?: AbortSignal) {
     id(windowId, "window"); if (before !== undefined) id(before, "window");
