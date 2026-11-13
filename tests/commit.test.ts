@@ -3,7 +3,7 @@ import test from "node:test";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  analyze, applyGroups, applyHunks, checkMessages, createPlan, formatPlan, loadStyle, parseGroups, parseHunks,
+  analyze, applyGroups, applyHunks, buildPrompt, checkMessages, createPlan, fitParts, formatPlan, loadStyle, parseGroups, parseHunks,
   parsePorcelainV2, planValid, snapshot, type FileState, type GitCtx, type Plan, type Unit,
 } from "../extensions/workflows/commit.ts";
 import { runProcess } from "../extensions/workflows/process.ts";
@@ -217,4 +217,65 @@ test("applyGroups retries remaining groups after a hook failure", async (t) => {
   assert.deepEqual(second.committed, ["feat: added secret"]);
   assert.equal(await git("show", "HEAD~1:app.txt"), lines(30, { 3: "ok" }));
   assert.equal((await snapshot(ctx)).files.length, 0);
+});
+
+test("a prompt over its budget cuts the longest units and still names every one", async (t) => {
+  assert.deepEqual(fitParts(["a".repeat(50), "b".repeat(60)], 200), ["a".repeat(50), "b".repeat(60)]);
+  const parts = fitParts(["F1 small.txt\nx", `F2 big.txt\n${"y".repeat(5000)}`, `F3 other.txt\n${"z".repeat(900)}`], 1500);
+  assert.equal(parts[0], "F1 small.txt\nx");
+  assert.match(parts[1], /^F2 big\.txt\ny+\n\[truncated\]$/);
+  assert.match(parts[2], /^F3 other\.txt\nz+\n\[truncated\]$/);
+  assert(parts.join("").length <= 1500 + 2 * "\n[truncated]".length);
+  // Too many units for the budget: each keeps enough to be recognised.
+  const many = fitParts(Array.from({ length: 50 }, (_, i) => `F${i + 1} file-${i + 1}.txt\n${"x".repeat(1000)}`), 1000);
+  many.forEach((part, i) => assert(part.startsWith(`F${i + 1} file-${i + 1}.txt\n`) && part.length < 300, part.slice(0, 40)));
+
+  const { repo, git, ctx } = await isolated(t);
+  await git("commit", "--allow-empty", "-qm", "init");
+  for (let i = 1; i <= 40; i++) await writeFile(join(repo, `new-${i}.txt`), `${"content ".repeat(240)}\n`);
+  const current = await snapshot(ctx);
+  const { units, sections } = await analyze(ctx, current.head, current.files);
+  const prompt = await buildPrompt(ctx, sections);
+  assert(Buffer.byteLength(sections.join("\n\n")) < 120000);
+  for (const unit of units) assert.match(prompt, new RegExp(`^${unit.id} new-\\d+\\.txt \\(new file\\)$`, "m"));
+});
+
+test("a diff far larger than the planner reads does not stop planning", async (t) => {
+  const { repo, git, ctx } = await isolated(t);
+  const big = Array.from({ length: 6000 }, (_, i) => `generated line ${i} ${"x".repeat(40)}`).join("\n") + "\n";
+  await writeFile(join(repo, "lock.json"), big);
+  await writeFile(join(repo, "gone.txt"), big.replaceAll("generated", "obsolete"));
+  await git("add", ".");
+  await git("commit", "-qm", "init");
+  // One hunk each, so both stay whole files: a rewrite and a deletion of about 300 KB.
+  await writeFile(join(repo, "lock.json"), big.replaceAll("generated", "rewritten"));
+  await git("rm", "-q", "gone.txt");
+  const current = await snapshot(ctx);
+  const { units, sections } = await analyze(ctx, current.head, current.files);
+  assert.equal(units.length, 2);
+  for (const section of sections) assert(Buffer.byteLength(section) < 7000, section.slice(0, 60));
+  assert.match(sections.find((section) => section.includes("gone.txt"))!, /^F\d gone\.txt \(D\.\)\ndiff --git[\s\S]*-obsolete line 0 [\s\S]*\n\[truncated\]$/);
+  assert.match(sections.find((section) => section.includes("lock.json"))!, /^F\d lock\.json \(\.M\)\ndiff --git[\s\S]*-generated line 0 [\s\S]*\n\[truncated\]$/);
+  const plan = await createPlan(ctx, current, "style", async () => JSON.stringify({ groups: [{ subject: "chore: regenerated", units: units.map((unit) => unit.id) }] }));
+  assert.equal((await applyGroups(ctx, plan, async () => {})).error, undefined);
+  assert.equal((await snapshot(ctx)).files.length, 0);
+});
+
+test("files staged before the first commit are split like any others", async (t) => {
+  const { repo, git, ctx } = await isolated(t);
+  await writeFile(join(repo, "a.txt"), "alpha\n");
+  await writeFile(join(repo, "b.txt"), "beta\n");
+  await git("add", ".");
+  const current = await snapshot(ctx);
+  assert.equal(current.head, "unborn");
+  const { sections } = await analyze(ctx, current.head, current.files);
+  assert.deepEqual(sections, ["F1 a.txt (new file)\nalpha\n", "F2 b.txt (new file)\nbeta\n"]);
+  const plan = await createPlan(ctx, current, "style", async () => JSON.stringify({ groups: [
+    { subject: "feat: added a", units: ["F1"] }, { subject: "feat: added b", units: ["F2"] },
+  ] }));
+  const result = await applyGroups(ctx, plan, async () => {});
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.committed, ["feat: added a", "feat: added b"]);
+  assert.equal((await git("show", "--stat", "--format=", "HEAD~1")).includes("b.txt"), false);
+  assert.match(await git("show", "--stat", "--format=", "HEAD"), /b\.txt/);
 });

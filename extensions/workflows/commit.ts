@@ -30,6 +30,9 @@ export interface GitCtx { repo: string; signal: AbortSignal; env?: NodeJS.Proces
 
 const MAX_UNITS = 400;
 const SPLIT_LIMIT = 2 * 1024 * 1024;
+const PROMPT_BYTES = 120_000;
+/** Enough of a cut part to name its unit and path and show how the change starts. */
+const PART_MIN = 240;
 
 export function parsePorcelainV2(data: string): FileState[] {
   const files: FileState[] = [];
@@ -129,6 +132,21 @@ function gitBytes(ctx: GitCtx, args: string[]): Promise<Buffer> {
   });
 }
 
+/**
+ * The start of a command's output, cut and marked at `bytes`. The planner reads
+ * only that much of a diff, and a generated file's can run to megabytes.
+ */
+function gitHead(ctx: GitCtx, args: string[], bytes: number): Promise<string> {
+  ctx.signal.throwIfAborted();
+  return new Promise((resolvePromise, reject) => {
+    // The margin keeps a character split at the buffer's end outside the part that is kept.
+    execFile("git", ["-C", ctx.repo, ...args], { env: ctx.env ?? process.env, signal: ctx.signal, encoding: "buffer", maxBuffer: bytes + 64 },
+      (error: any, stdout, stderr) => error && error.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" && error.code !== 1
+        ? reject(new Error(stderr.toString("utf8").trim() || error.message))
+        : resolvePromise(bounded(stdout.toString("utf8"), bytes)));
+  });
+}
+
 async function git(ctx: GitCtx, args: string[], allow = [0], input?: string): Promise<string> {
   const result = await runProcess("git", ["-C", ctx.repo, ...args], { cwd: ctx.repo, signal: ctx.signal, env: ctx.env ?? process.env, input });
   if (!allow.includes(result.code)) throw new Error((result.stderr || result.stdout || `git ${args[0]} failed`).trim());
@@ -216,13 +234,43 @@ async function splitFile(ctx: GitCtx, base: string, path: string): Promise<{ hun
   return { hunks, display };
 }
 
-/** Turns the working tree into numbered units and the prompt sections that describe them. */
+/**
+ * Cuts the longest parts until all of them fit `budget` bytes. Every part keeps
+ * its start, so the planner still sees each unit's ID and path.
+ */
+export function fitParts(parts: string[], budget: number): string[] {
+  const sizes = parts.map((part) => Buffer.byteLength(part));
+  if (sizes.reduce((sum, size) => sum + size, 0) <= budget) return parts;
+  const ascending = [...sizes].sort((a, b) => a - b);
+  let left = budget, cap = PART_MIN;
+  for (const [index, size] of ascending.entries()) {
+    const share = Math.floor(left / (ascending.length - index));
+    if (size > share) { cap = Math.max(share, PART_MIN); break; }
+    left -= size;
+  }
+  return parts.map((part, index) => sizes[index] > cap ? bounded(part, cap) : part);
+}
+
+/**
+ * Turns the working tree into numbered units and the prompt sections that
+ * describe them: one section per unit, so each can be cut on its own.
+ */
 export async function analyze(ctx: GitCtx, head: string, files: FileState[]): Promise<{ units: Unit[]; hunks: Record<string, Hunk[]>; sections: string[] }> {
   const units: Unit[] = [];
   const hunks: Record<string, Hunk[]> = {};
   const sections: string[] = [];
   const seen = new Set<string>();
-  let untrackedSamples = 0, count = 0;
+  let samples = 0, count = 0;
+  const sample = async (path: string) => {
+    if (samples++ >= 30) return "(content omitted)";
+    try {
+      const buf = await readFile(join(ctx.repo, path));
+      return buf.includes(0) ? "(binary)" : bounded(buf.toString("utf8"), 2000);
+    } catch (error: any) {
+      if (!["ENOENT", "EISDIR"].includes(error.code)) throw error;
+      return "(content omitted)";
+    }
+  };
   for (const file of files) {
     if (seen.has(file.path)) continue;
     seen.add(file.path);
@@ -232,32 +280,32 @@ export async function analyze(ctx: GitCtx, head: string, files: FileState[]): Pr
       // Porcelain lists the new path first; its twin entry carries the old one.
       const [to, from] = [file.path, file.origPath];
       units.push({ id, paths: [file.path, file.origPath] });
-      const diff = head === "unborn" ? "" : await git(ctx, ["diff", head, "-M", "--no-color", "--no-ext-diff", "--", literal(from), literal(to)], [0, 1]);
-      sections.push(`${id} ${to} (renamed from ${from})\n${bounded(diff, 4000)}`);
+      const diff = head === "unborn" ? "" : await gitHead(ctx, ["diff", head, "-M", "--no-color", "--no-ext-diff", "--", literal(from), literal(to)], 4000);
+      sections.push(`${id} ${to} (renamed from ${from})\n${diff}`);
       continue;
     }
     if (file.state === "untracked") {
       units.push({ id, paths: [file.path] });
-      let sample = "(content omitted)";
-      if (untrackedSamples++ < 30) {
-        try {
-          const buf = await readFile(join(ctx.repo, file.path));
-          sample = buf.includes(0) ? "(binary)" : bounded(buf.toString("utf8"), 2000);
-        } catch (error: any) { if (!["ENOENT", "EISDIR"].includes(error.code)) throw error; }
-      }
-      sections.push(`${id} ${file.path} (new file)\n${sample}`);
+      sections.push(`${id} ${file.path} (new file)\n${await sample(file.path)}`);
       continue;
     }
-    const split = head === "unborn" ? null : await splitFile(ctx, head, file.path);
+    if (head === "unborn") {
+      // Nothing to diff against yet: a file staged before the first commit is shown like a new one.
+      units.push({ id, paths: [file.path] });
+      sections.push(`${id} ${file.path} (new file)\n${await sample(file.path)}`);
+      continue;
+    }
+    const split = await splitFile(ctx, head, file.path);
     if (split) {
       hunks[file.path] = split.hunks;
       split.hunks.forEach((_, index) => units.push({ id: `${id}.${index + 1}`, paths: [file.path], hunk: index }));
-      sections.push(`${id} ${file.path} (${split.hunks.length} hunks)\n${split.display.map((text, index) => `${id}.${index + 1} ${text}`).join("\n")}`);
+      const title = `${id} ${file.path} (${split.hunks.length} hunks)`;
+      split.display.forEach((text, index) => sections.push(`${index ? "" : `${title}\n`}${id}.${index + 1} ${text}`));
       continue;
     }
     units.push({ id, paths: [file.path] });
-    const diff = head === "unborn" ? "" : await git(ctx, ["diff", head, "--no-color", "--no-ext-diff", "--", literal(file.path)], [0, 1]);
-    sections.push(`${id} ${file.path} (${file.code})\n${bounded(diff, 6000) || "(no text diff)"}`);
+    const diff = await gitHead(ctx, ["diff", head, "--no-color", "--no-ext-diff", "--", literal(file.path)], 6000);
+    sections.push(`${id} ${file.path} (${file.code})\n${diff || "(no text diff)"}`);
   }
   if (units.length > MAX_UNITS) throw new Error(`Working tree has ${units.length} change units; the maximum is ${MAX_UNITS}`);
   return { units, hunks, sections };
@@ -265,7 +313,7 @@ export async function analyze(ctx: GitCtx, head: string, files: FileState[]): Pr
 
 export async function buildPrompt(ctx: GitCtx, sections: string[]): Promise<string> {
   const log = await git(ctx, ["log", "-12", "--format=%s"], [0, 128]);
-  return `Recent subjects:\n${log.trim() || "(none)"}\n\nChange units:\n${bounded(sections.join("\n\n"), 120000)}`;
+  return `Recent subjects:\n${log.trim() || "(none)"}\n\nChange units:\n${fitParts(sections, PROMPT_BYTES).join("\n\n")}`;
 }
 
 export function normalizeMessage(subject: string, body: string): { subject: string; body: string } {
@@ -378,7 +426,9 @@ export async function applyGroups(ctx: GitCtx, plan: Plan, save: (plan: Plan) =>
   const units = new Map(plan.units.map((unit) => [unit.id, unit]));
   const groupOf = new Map<string, number>();
   plan.groups.forEach((group, index) => group.units.forEach((id) => groupOf.set(id, index)));
-  if (plan.head !== "unborn") await git(ctx, ["reset", "-q"]);
+  // Each group stages its own files, so nothing staged beforehand may ride along
+  // with the first one. Before the first commit there is no HEAD to reset to.
+  await git(ctx, plan.head === "unborn" ? ["read-tree", "--empty"] : ["reset", "-q"]);
   for (const [index, group] of plan.groups.entries()) {
     if (group.status === "done") continue;
     ctx.signal.throwIfAborted();

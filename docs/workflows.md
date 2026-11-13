@@ -53,7 +53,11 @@ features. A file stays whole if applying all of its hunks to the base blob does
 not reproduce it exactly: new, deleted, renamed, binary, mode-changed, filtered
 or non-UTF-8 files. Partial content is staged with `hash-object` and
 `update-index`, so the working tree is never touched. Any existing staging is
-reset first.
+reset first, including before a repository's first commit.
+
+The planner sees the start of each change: up to 6 KB of a whole-file diff and
+80 lines of a hunk. When everything together passes 120 KB, the longest units
+are cut further, and every unit keeps its ID, path and opening lines.
 
 The message format comes from `~/.config/git/commit-style.md` (or
 `$XDG_CONFIG_HOME/git/`), plus a repository's `.commit-style.md`. The
