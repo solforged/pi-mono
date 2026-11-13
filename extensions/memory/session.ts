@@ -1,7 +1,9 @@
 // The memory extension's behavior, apart from its TUI renderer so that it
 // can be tested without Pi's packages.
+import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type Loaded, load, matches, SECTION, section, TERMS_TYPE, termId, termsMessage, wikiBinary } from "./context.ts";
+import { TOOL } from "./tool.ts";
 
 export type Details = { terms: string[]; names: string[] };
 
@@ -30,7 +32,10 @@ export function status(loaded: Loaded | undefined, binary: string, seen: Readonl
   return lines.join("\n");
 }
 
-export function register(pi: ExtensionAPI, binary = wikiBinary()) {
+/** What the tool needs from the session: the binary, and the scope a write will land in. */
+export type Session = { binary: string; scope(cwd: string): Promise<string> };
+
+export function register(pi: ExtensionAPI, binary = wikiBinary()): Session {
   let last: Loaded | undefined;
   let warned = new Set<string>();
   const warnOnce = (ctx: ExtensionContext, key: string, message: string) => {
@@ -39,13 +44,20 @@ export function register(pi: ExtensionAPI, binary = wikiBinary()) {
     ctx.ui.notify(message, "warning");
   };
 
-  pi.on("session_start", () => { last = undefined; warned = new Set(); });
+  pi.on("session_start", () => {
+    last = undefined; warned = new Set();
+    // Without a built wiki the tool could only fail, so it is not offered.
+    if (!existsSync(binary)) {
+      const active = pi.getActiveTools();
+      if (active.includes(TOOL)) pi.setActiveTools(active.filter(name => name !== TOOL));
+    }
+  });
 
   pi.on("before_agent_start", async (event, ctx) => {
     const options = event.systemPromptOptions;
     last = await load(binary, ctx.cwd);
     const context = last.context;
-    const text = context && section(context, binary);
+    const text = context && section(context, binary, options.selectedTools?.includes(TOOL) ?? false);
     if (options.sections) {
       if (text) options.sections[SECTION] = text;
       else delete options.sections[SECTION];
@@ -75,4 +87,12 @@ export function register(pi: ExtensionAPI, binary = wikiBinary()) {
       else console.log(report);
     },
   });
+
+  return {
+    binary,
+    async scope(cwd) {
+      last ??= await load(binary, cwd);
+      return last.context?.scope ?? "";
+    },
+  };
 }

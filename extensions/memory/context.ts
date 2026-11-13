@@ -43,7 +43,7 @@ export function load(binary: string, cwd: string, timeout = 3000): Promise<Loade
 const day = (iso?: string) => iso?.slice(0, 10) ?? "";
 
 /** The system prompt section, or undefined when there is no scope and no current context. */
-export function section(context: WikiContext, binary: string): string | undefined {
+export function section(context: WikiContext, binary: string, tool = false): string | undefined {
   if (!context.scope && !context.now.length) return;
   const lines: string[] = [];
   for (const page of context.now) {
@@ -51,7 +51,12 @@ export function section(context: WikiContext, binary: string): string | undefine
     if (page.stale) lines.push(`${page.ref} was due for a refresh on ${day(page.staleAfter)}; confirm anything time-sensitive before relying on it.`, "");
     if (page.truncated) lines.push(`${page.ref} is over its ${page.limit}-byte limit and was cut off here.`, "");
   }
-  if (context.scope) {
+  if (context.scope && tool) {
+    lines.push(
+      "Look things up with the `memory` tool (search, read, define, recent) when a task turns on the user's own vocabulary, systems or past decisions, not by default.",
+      "When the user corrects a term or a fact about their stack or current work, offer to record it with `memory` (term, jot or now); never write unasked. Each write asks the user to confirm.",
+    );
+  } else if (context.scope) {
     const home = homedir(), shown = binary.startsWith(`${home}/`) ? `~${binary.slice(home.length)}` : binary;
     lines.push(
       `More of the wiki is available on demand through \`${shown} -scope ${context.scope}\` with \`search <words>\`, \`read <path>\`, \`define <term>\` or \`recent\`. Use it when a task turns on the user's own vocabulary, systems or past decisions, not by default.`,

@@ -37,7 +37,7 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Rex prototype](docs/rex.md): named asynchronous children in a live deck and Agents window.
 - [Learning](docs/learning.md): session mining, skill drafts, and approval.
 - [Session search](docs/sessions.md): local historical search and original-entry retrieval.
-- [Memory](docs/memory.md): the memory wiki's current context in the system prompt, and glossary definitions when a prompt uses a term.
+- [Memory](docs/memory.md): the memory wiki's current context in the system prompt, glossary definitions when a prompt uses a term, and a `memory` tool whose writes the user confirms.
 - [Deferred tools](docs/deferred-tools.md): situational tools load through `tool_search`, with their groups listed in the prompt.
 - [Retry](docs/retry.md): `/retry` and F5 rerun a failed or aborted turn.
 - [Recovery](docs/recover.md): empty, cut-off and repeating turns continue without you.
