@@ -139,7 +139,7 @@ export function register(pi: ExtensionAPI, deps: Deps) {
     const previous = previousCompaction(projection(ctx));
     const preparation = {
       ...event.preparation,
-      previousSummary: previous ? previousSummaryOf(previous) : event.preparation.previousSummary,
+      previousSummary: previous ? previousSummaryOf(previous, limits) : event.preparation.previousSummary,
       fileOps: fileOpsFor([], previous, event.preparation.fileOps),
     } as Preparation;
     try {

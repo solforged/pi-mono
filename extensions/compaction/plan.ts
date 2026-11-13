@@ -90,14 +90,34 @@ export function previousCompaction(entries: Projected[]): Entry | undefined {
   return entries.find((entry) => isCompaction(entry) && entry.messages.length > 0)?.sourceEntry;
 }
 
+/** The share of the threshold an archive's transcript may take in the summary call that extends it. */
+export const ARCHIVE_CARRY = 0.1;
+/** Characters carried when the threshold is unknown. */
+const ARCHIVE_CARRY_CHARS = 100_000;
+
+// The opening, which holds the task, and the newest history from a scope start.
+function clipArchive(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, Math.floor(max * 0.2)).toWellFormed();
+  let tail = text.slice(text.length - (max - head.length)).toWellFormed();
+  const scope = tail.indexOf("\n¶");
+  if (scope >= 0 && scope < 4000) tail = tail.slice(scope + 1);
+  const left = text.length - head.length - tail.length;
+  return `${head}\n\n[${left.toLocaleString("en-US")} characters of older history are left out here.]\n\n${tail}`;
+}
+
 /**
  * The summary a new one should extend. A snapcompact archive's summary is only a
- * reading guide for its images, so its transcript text stands in for it.
+ * reading guide for its images, so its transcript text stands in for it. A full
+ * archive holds hundreds of thousands of tokens of text, most of it never sent
+ * to the model, so only a share of the threshold is carried.
  */
-export function previousSummaryOf(entry: Entry | undefined): string | undefined {
+export function previousSummaryOf(entry: Entry | undefined, limits?: Limits): string | undefined {
   if (!entry) return undefined;
   const archived = archiveText(entry.details);
-  return archived ? `Archived transcript of the earlier conversation:\n\n${archived}` : entry.summary;
+  if (!archived) return entry.summary;
+  const max = limits ? Math.round(limits.threshold * ARCHIVE_CARRY) * 4 : ARCHIVE_CARRY_CHARS;
+  return `Archived transcript of the earlier conversation:\n\n${clipArchive(archived, max)}`;
 }
 
 function addFileOp(name: unknown, args: any, ops: FileOps) {
@@ -174,7 +194,7 @@ export function planCompaction(entries: Projected[], limits: Limits, tokensBefor
       turnPrefixMessages,
       isSplitTurn,
       tokensBefore,
-      previousSummary: previousSummaryOf(previous),
+      previousSummary: previousSummaryOf(previous, limits),
       fileOps: fileOpsFor([...messagesToSummarize, ...turnPrefixMessages], previous),
       settings: { enabled: true, reserveTokens: limits.reserveTokens, keepRecentTokens: limits.keepRecentTokens },
     },

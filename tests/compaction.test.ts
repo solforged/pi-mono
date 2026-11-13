@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { register } from "../extensions/compaction/controller.ts";
-import { limitsFor, planCompaction, staleReason, summaryThinking, type Limits, type Projected } from "../extensions/compaction/plan.ts";
+import { limitsFor, planCompaction, previousSummaryOf, staleReason, summaryThinking, type Limits, type Projected } from "../extensions/compaction/plan.ts";
 import { usesSnapcompact } from "../extensions/snapcompact/compact.ts";
 
 // Messages carry their own token estimate.
@@ -79,6 +79,20 @@ test("a plan extends the previous summary, and a snapcompact archive's transcrip
   const fromArchive = planCompaction(archived, limits(10), 30, estimate)!;
   assert.match(fromArchive.preparation.previousSummary!, /¶user:hi\n¶ai:ok/);
   assert.doesNotMatch(fromArchive.preparation.previousSummary!, /Reading guide/);
+});
+
+test("only a share of a large archive's transcript is carried into a summary", () => {
+  const scopes = Array.from({ length: 4000 }, (_, i) => `¶user:question ${i}\u2588¶ai:answer ${i} ${"x".repeat(100)}`).join("\u2588");
+  const archive = compaction("c1", "Reading guide", { snapcompact: { frames: [], totalChars: scopes.length, truncatedChars: 0, text: scopes } }).sourceEntry;
+  // 10% of a 20,000-token threshold, at four characters a token.
+  const carried = previousSummaryOf(archive, limits(10, 20_000))!;
+  assert.ok(carried.length < 8_200 && carried.length > 6_000, String(carried.length));
+  assert.match(carried, /^Archived transcript of the earlier conversation:\n\n¶user:question 0\n/);
+  assert.match(carried, /\[[\d,]+ characters of older history are left out here\.\]\n\n¶(user|ai):/, "the newest part starts at a scope");
+  assert.ok(carried.endsWith(`¶ai:answer 3999 ${"x".repeat(100)}`));
+  assert.ok(previousSummaryOf(archive)!.length < 101_000, "bounded without a known threshold too");
+  assert.equal(previousSummaryOf(archive, limits(10, 2_000_000))!.length, scopes.length + "Archived transcript of the earlier conversation:\n\n".length);
+  assert.equal(previousSummaryOf(compaction("c2", "A text summary.").sourceEntry, limits(10, 20)), "A text summary.", "a text summary is carried whole");
 });
 
 test("a prepared summary is stale when its prefix changed or too much arrived since", () => {
