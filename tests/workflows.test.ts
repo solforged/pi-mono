@@ -175,6 +175,13 @@ test("review input sends managed skills in full and other loaded skills by descr
   // A note about an authored skill can still cite it.
   const [note] = parseCandidates(JSON.stringify([{ action: "note", name: "writing-prose", reason: "Overlaps testing-skills", content: "", sources: [other.ref] }]), new Set(inventory.map(skillRef)), 1);
   assert.deepEqual(note.sources, [other.ref]);
+  // A directory /learn named outside the slug rules cannot be managed; it must not stop every review.
+  const odd = join(dir, "skills", "Bad_Name", "SKILL.md");
+  await mkdir(join(dir, "skills", "Bad_Name"));
+  await writeFile(odd, skill("Bad_Name"));
+  assert.deepEqual((await inventorySkills(dir, [])).map((item) => item.name), ["testing-skills"]);
+  const withOdd = await inventorySkills(dir, [{ name: "Bad_Name", filePath: odd }]);
+  assert.deepEqual(withOdd.map((item) => [item.name, item.managed]), [["testing-skills", true], ["Bad_Name", false]]);
 });
 
 test("learning uses original branch evidence, excludes thinking, and checkpoints large entries only when complete", () => {

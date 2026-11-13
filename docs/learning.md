@@ -15,7 +15,8 @@ Session mining uses original messages and tool results on the selected branch,
 not just compaction summaries. Images and private thinking are excluded. The
 review model sees session evidence and the skill inventory as data: managed
 skills in full, since only they can change, and other loaded skills by name and
-description. Session/entry references accompany proposals. Treat transcripts as sensitive:
+description. A skill directory whose name is not a lowercase, hyphenated slug
+counts as one of the others. Session/entry references accompany proposals. Treat transcripts as sensitive:
 this sends selected evidence to the configured `learn` provider.
 
 Review is bounded to six chunks per invocation. Large entries have fragment

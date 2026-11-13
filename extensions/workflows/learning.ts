@@ -101,7 +101,10 @@ export async function inventorySkills(root: string, loaded: Array<{ name: string
   try {
     for (const dir of await readdir(managedDir, { withFileTypes: true })) {
       if (!dir.isDirectory() || dir.isSymbolicLink()) continue;
-      managed.push({ name: skillName(dir.name), filePath: skillPath(root, dir.name) });
+      // A name outside the slug rules cannot be updated or deleted by name. If Pi
+      // loaded such a skill, it is listed below as read-only.
+      try { skillName(dir.name); } catch { continue; }
+      managed.push({ name: dir.name, filePath: skillPath(root, dir.name) });
     }
   } catch (error: any) { if (error.code !== "ENOENT") throw error; }
   for (const skill of [...managed, ...loaded]) {
