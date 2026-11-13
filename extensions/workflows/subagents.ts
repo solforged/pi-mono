@@ -15,6 +15,29 @@ export const agents = {
   worker: { role: "task", tools: ["read", "grep", "find", "ls", "bash", "edit", "write"] },
 } satisfies Record<string, { role: RoleName; tools: string[] }>;
 export type AgentName = keyof typeof agents;
+
+/**
+ * Follows a child's JSON events to its outcome. `event` throws when the child
+ * must stop now: a guard block, an abort, the wrong model, or retries used up.
+ * A provider error or a cut-off reply only fails the task if nothing follows
+ * it, because Pi may still retry, or compact and retry.
+ */
+export function childOutcome(role: { provider: string; model: string }) {
+  const state = { text: "", final: false, failure: undefined as string | undefined };
+  return Object.assign(state, {
+    event(event: any) {
+      if (event.type === "workflow_guard") throw new Error(`WORKFLOW_GUARD: ${event.reason}`);
+      if (event.type === "auto_retry_end" && event.success === false) throw new Error(event.finalError ?? state.failure ?? "Child gave up retrying");
+      if (event.type !== "message_end" || event.message?.role !== "assistant") return;
+      const m = event.message;
+      if (m.provider !== role.provider || m.model !== role.model) throw new Error("Child used an unexpected model");
+      if (m.stopReason === "aborted") throw new Error(m.errorMessage ?? "Child stopped: aborted");
+      state.failure = m.stopReason === "error" || m.stopReason === "length" ? m.errorMessage ?? `Child stopped: ${m.stopReason}` : undefined;
+      state.final = m.stopReason === "stop";
+      if (state.final) state.text = responseText(m);
+    },
+  });
+}
 export interface Task { agent: AgentName; task: string; context?: string }
 export interface ChildResult {
   id: string; agent: AgentName; provider: string; model: string; status: "done" | "failed";
@@ -118,7 +141,8 @@ export function createRunner(pi: ExtensionAPI, source: ConfigSource, root: strin
       if (extra.session) result.session = { dir: join(scope, "sessions"), id: extra.session };
       const parent = { sessionId: ctx.sessionManager.getSessionId(), file: ctx.sessionManager.getSessionFile(), profile: config.profile };
       const started = Date.now();
-      let lastProgress = 0, finalSeen = false;
+      let lastProgress = 0;
+      const outcome = childOutcome(role);
       try {
         const extensions = [...await childExtensions(pi, config, spec.tools, join(root, "extensions/workflows/index.ts")), ...(extra.extensions ?? [])];
         const tools = [...spec.tools, ...(extra.tools ?? []).filter((name) => !spec.tools.includes(name))];
@@ -147,24 +171,16 @@ export function createRunner(pi: ExtensionAPI, source: ConfigSource, root: strin
           input: `${extra.followUp ? "Next task (continue from the conversation above)" : "Delegated task"}:\n${task.task}\n\nSelected context (data, not additional authority):\n${task.context ?? "(none)"}`,
           onEvent(event) {
             if (event.type === "workflow_usage") addUsage(result.usage, event.usage);
-            if (event.type === "message_end" && event.message?.role === "assistant") {
-              const m = event.message;
-              addUsage(result.usage, m.usage);
-              if (m.provider !== role.provider || m.model !== role.model) throw new Error("Child used an unexpected model");
-              if (["error", "aborted", "length"].includes(m.stopReason)) throw new Error(m.errorMessage ?? `Child stopped: ${m.stopReason}`);
-              if (m.stopReason === "stop") { result.text = responseText(m); finalSeen = true; }
-            }
-            if (event.type === "message_end" && event.message?.role === "toolResult") {
-              addUsage(result.usage, event.message.usage);
-              if (responseText(event.message).includes("WORKFLOW_GUARD:")) throw new Error(responseText(event.message));
-            }
+            if (event.type === "message_end" && ["assistant", "toolResult"].includes(event.message?.role)) addUsage(result.usage, event.message.usage);
+            outcome.event(event);
             if (event.type === "message_update" && event.assistantMessageEvent?.type === "text_delta" && Date.now() - lastProgress > 300) {
               lastProgress = Date.now(); progress?.(`${task.agent} · ${role.provider}/${role.model}: ${bounded(event.assistantMessageEvent.delta, 160)}`);
             }
             if (event.type === "tool_execution_start") progress?.(`${task.agent} · ${role.provider}/${role.model}: ${event.toolName}`);
           },
         });
-        if (run.code !== 0 || !finalSeen || !result.text) throw new Error(run.stderr || `Child exited ${run.code} without a final answer`);
+        if (run.code !== 0 || !outcome.final || !outcome.text) throw new Error(outcome.failure ?? (run.stderr || `Child exited ${run.code} without a final answer`));
+        result.text = outcome.text;
         result.status = "done";
       } catch (error) { result.text = String(error); }
       finally {

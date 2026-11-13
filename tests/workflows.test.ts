@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { isTransientError, loadTitlePrompt, MAX_TRANSIENT_FAILURES, parseTitle, registerAutoname } from "../extensions/workflows/autoname.ts";
 import { applyDraft, evidenceChunks, evidenceFromBranch, inventoryInput, inventorySkills, parseCandidates, readDrafts, renderDraft, skillRef, stageCandidate } from "../extensions/workflows/learning.ts";
 import { atomicWrite, hash, readSkill, withLock } from "../extensions/workflows/state.ts";
-import { agents, childArgs, childExtensions, createWorktree } from "../extensions/workflows/subagents.ts";
+import { agents, childArgs, childExtensions, childOutcome, createWorktree } from "../extensions/workflows/subagents.ts";
 import { runProcess } from "../extensions/workflows/process.ts";
 import { auxiliaryUsage, formatAuxiliary, recordUsage, showAuxiliaryUsage } from "../extensions/workflows/usage.ts";
 import { config, registry, root, skill, temporary } from "./helpers.ts";
@@ -184,6 +184,32 @@ test("researchers load the web tools' extension, which is not sandbox routing", 
   await assert.rejects(childExtensions({ getAllTools: () => loaded.slice(0, 4) } as any, config, tools, self), /not loaded in this Pi: web_search, web_fetch/);
   const required = { ...config, subagents: { ...config.subagents, sandbox: "required" as const } };
   await assert.rejects(childExtensions({ getAllTools: () => loaded } as any, required, tools, self), /No parent tool-routing extension/);
+});
+
+test("a child's outcome survives retried errors and takes guard blocks only from the guard's own event", () => {
+  const role = { provider: "p", model: "m" };
+  const assistant = (stopReason: string, text = "", errorMessage?: string, model = "m") =>
+    ({ type: "message_end", message: { role: "assistant", provider: "p", model, stopReason, errorMessage, content: [{ type: "text", text }] } });
+  // Tool output that merely contains the marker, such as this extension's own source, is not a block.
+  const reading = childOutcome(role);
+  reading.event({ type: "message_end", message: { role: "toolResult", content: [{ type: "text", text: 'reason: "WORKFLOW_GUARD: tool not allowed"' }] } });
+  reading.event(assistant("stop", "done"));
+  assert.deepEqual([reading.final, reading.text, reading.failure], [true, "done", undefined]);
+  assert.throws(() => childOutcome(role).event({ type: "workflow_guard", reason: "turn limit reached" }), /WORKFLOW_GUARD: turn limit reached/);
+  // Pi retries a provider error, and compacts after a cut-off reply; the task fails only if nothing follows.
+  const retried = childOutcome(role);
+  retried.event(assistant("error", "", "529 overloaded"));
+  assert.deepEqual([retried.final, retried.failure], [false, "529 overloaded"]);
+  retried.event(assistant("stop", "recovered"));
+  assert.deepEqual([retried.final, retried.text, retried.failure], [true, "recovered", undefined]);
+  const cut = childOutcome(role);
+  cut.event(assistant("length"));
+  assert.deepEqual([cut.final, cut.failure], [false, "Child stopped: length"]);
+  const exhausted = childOutcome(role);
+  exhausted.event(assistant("error", "", "529 overloaded"));
+  assert.throws(() => exhausted.event({ type: "auto_retry_end", success: false, finalError: "529 overloaded" }), /529 overloaded/);
+  assert.throws(() => childOutcome(role).event(assistant("aborted")), /aborted/);
+  assert.throws(() => childOutcome(role).event(assistant("stop", "x", undefined, "other")), /unexpected model/);
 });
 
 test("workers use separate worktrees, preserve the parent checkout, and reject dirty inputs", async (t) => {

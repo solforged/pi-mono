@@ -22,8 +22,14 @@ export default function (pi: ExtensionAPI) {
     if (event.compactionEntry.usage) console.log(JSON.stringify({ type: "workflow_usage", usage: event.compactionEntry.usage }));
   });
   pi.on("turn_start", () => { turns++; });
+  // The runner learns of a block from this event, not from the result text: a
+  // file or page the child reads may contain any text, this marker included.
+  const refuse = (reason: string) => {
+    console.log(JSON.stringify({ type: "workflow_guard", reason }));
+    return { block: true, terminate: true, reason: `WORKFLOW_GUARD: ${reason}` };
+  };
   pi.on("tool_call", (event) => {
-    if (!config.tools.includes(event.toolName)) return { block: true, terminate: true, reason: "WORKFLOW_GUARD: tool not allowed" };
-    if (turns >= config.maxTurns) return { block: true, terminate: true, reason: "WORKFLOW_GUARD: turn limit reached" };
+    if (!config.tools.includes(event.toolName)) return refuse("tool not allowed");
+    if (turns >= config.maxTurns) return refuse("turn limit reached");
   });
 }
