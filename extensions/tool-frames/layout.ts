@@ -150,7 +150,7 @@ export type ShellStatus =
   | { kind: "aborted" }
   | { kind: "failed" };
 
-// Pi appends one of these as the last line of the output it returns.
+// Pi appends one of these as the last line of a failed command's output.
 const STATUS = [
   { pattern: /\n?Command exited with code (\d+)\s*$/, status: (m: RegExpMatchArray): ShellStatus => ({ kind: "exit", code: Number(m[1]) }) },
   { pattern: /\n?Command timed out after (\d+) seconds[^\n]*\s*$/, status: (m: RegExpMatchArray): ShellStatus => ({ kind: "timeout", seconds: Number(m[1]) }) },
@@ -165,7 +165,8 @@ export function shellResult(text: string, isError: boolean): { output: string; s
   // trimEnd is linear; /\s+$/ starts over at every space of a long run inside the output.
   let output = text.trimEnd();
   let status: ShellStatus = isError ? { kind: "failed" } : { kind: "ok" };
-  for (const { pattern, status: read } of STATUS) {
+  // A command that succeeded may itself print such a line; it is output then.
+  for (const { pattern, status: read } of isError ? STATUS : []) {
     const match = output.match(pattern);
     if (match) { status = read(match); output = output.slice(0, match.index).trimEnd(); break; }
   }

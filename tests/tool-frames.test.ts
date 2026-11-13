@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
 import test from "node:test";
 import {
   clip, diffExcerpt, diffStats, DIVIDER, displayPath, formatDuration, frame, grepStats, listedEntries, readLines, row, shellResult, splitCommand, wrapTail, type Measure,
 } from "../extensions/tool-frames/layout.ts";
+import { noModel, root } from "./helpers.ts";
 
 const measure: Measure = {
   width: (text) => [...text].length,
@@ -97,6 +100,8 @@ test("separates shell output from how the command ended", () => {
   assert.deepEqual(shellResult("x\nCommand timed out after 60 seconds. The shell exited with code 0 after 1.2 seconds, but background processes it started kept writing output until the timeout.", true).status, { kind: "timeout", seconds: 60 });
   assert.deepEqual(shellResult("x\nCommand aborted", true).status, { kind: "aborted" });
   assert.deepEqual(shellResult("something odd", true).status, { kind: "failed" });
+  assert.deepEqual(shellResult("log says:\nCommand exited with code 3\n", false), { output: "log says:\nCommand exited with code 3", status: { kind: "ok" }, fullOutputPath: undefined });
+  assert.deepEqual(shellResult("a\n[Showing lines 3-4 of 4. Full output: /tmp/pi-bash-2.log]", false), { output: "a", status: { kind: "ok" }, fullOutputPath: "/tmp/pi-bash-2.log" });
   assert.deepEqual(shellResult("a\nb\n[Showing lines 3-4 of 4. Full output: /tmp/pi-bash-1.log]\nCommand exited with code 1", true),
     { output: "a\nb", status: { kind: "exit", code: 1 }, fullOutputPath: "/tmp/pi-bash-1.log" });
 });
@@ -128,4 +133,12 @@ test("summarizes lookups from their output", () => {
   assert.equal(listedEntries("a.ts\nb/\n\n[1000 results limit reached]"), 2);
   assert.equal(listedEntries("No files found matching pattern"), 0);
   assert.equal(listedEntries("(empty directory)"), 0);
+});
+
+// The status lines are Pi's own wording, which only a run of its bash tool pins.
+test("installed Pi's bash results are read and drawn as framed rows", (t) => {
+  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session", "-e", join(root, "tests/fixtures/tool-frames-smoke.ts"), ...noModel, "-p", "/tool-frames-smoke"], { cwd: root, encoding: "utf8", timeout: 30000 });
+  if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
+  assert.equal(check.status, 0, check.stderr || check.stdout);
+  assert.match(check.stdout, /tool-frames integration:.*passed/);
 });
