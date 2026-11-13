@@ -48,7 +48,7 @@ in
       run = ''exec node tests/fixtures/fault-smoke.ts "$@"'';
     };
     pm-compaction-smoke = {
-      description = "Time compaction in the installed Pi with and without the compaction extension, without model calls";
+      description = "Time compaction in the installed Pi with and without the compaction extension, and fail if its summary is not used; no model calls";
       run = ''exec node tests/fixtures/compaction-smoke.ts "$@"'';
     };
     pm-sandbox-smoke = {
