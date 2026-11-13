@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 export function hash(text: string): string { return createHash("sha256").update(text).digest("hex"); }
@@ -26,11 +26,27 @@ export async function saveJson(file: string, value: unknown): Promise<void> {
 const isAlive = (pid: number) => {
   try { process.kill(pid, 0); return true; } catch (error: any) { return error?.code === "EPERM"; }
 };
+const olderThan = (path: string, ms: number) => lstat(path).then((s) => Date.now() - s.mtimeMs > ms);
 // A lock is stale when its recorded owner has exited, or when it never recorded one.
+// A lock that is already gone needs no removal.
 async function isStale(lock: string, alive: (pid: number) => boolean): Promise<boolean> {
   const pid = await readJson<{ pid?: unknown }>(join(lock, "owner.json"), {}).then((owner) => owner.pid, () => undefined);
   if (typeof pid === "number") return !alive(pid);
-  return await lstat(lock).then((s) => Date.now() - s.mtimeMs > 10000, () => true);
+  return await olderThan(lock, 10000).catch(() => false);
+}
+// Only one process at a time may judge a lock stale and remove it. Two doing so
+// together could each delete the lock the other had just retaken, and both would run.
+async function clearStale(lock: string, alive: (pid: number) => boolean): Promise<void> {
+  const gate = `${lock}.takeover`;
+  try { await mkdir(gate, { mode: 0o700 }); }
+  catch (error: any) {
+    if (error.code !== "EEXIST") throw error;
+    // A gate outlives its holder only after a crash between two file operations.
+    if (await olderThan(gate, 10000).catch(() => false)) await rmdir(gate).catch(() => {});
+    return;
+  }
+  try { if (await isStale(lock, alive)) await rm(lock, { recursive: true, force: true }); }
+  finally { await rmdir(gate).catch(() => {}); }
 }
 
 // Refuse concurrent reviewers/publishers instead of risking lost updates. A
@@ -42,8 +58,8 @@ export async function withLock<T>(root: string, name: string, fn: () => Promise<
     try { await mkdir(lock, { mode: 0o700 }); break; }
     catch (error: any) {
       if (error.code !== "EEXIST") throw error;
-      if (attempt > 0 || !(await isStale(lock, alive))) throw new Error(`Workflow is locked: ${lock}. Another Pi process holds it; remove it only if none is running.`);
-      await rm(lock, { recursive: true, force: true });
+      if (attempt > 0) throw new Error(`Workflow is locked: ${lock}. Another Pi process holds it; remove it only if none is running.`);
+      await clearStale(lock, alive);
     }
   }
   try {

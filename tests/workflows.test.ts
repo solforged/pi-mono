@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isTransientError, loadTitlePrompt, MAX_TRANSIENT_FAILURES, parseTitle, registerAutoname } from "../extensions/workflows/autoname.ts";
 import { applyDraft, evidenceChunks, evidenceFromBranch, inventoryInput, inventorySkills, parseCandidates, readDrafts, renderDraft, skillRef, stageCandidate } from "../extensions/workflows/learning.ts";
@@ -274,6 +274,31 @@ test("workflow locks refuse a live holder and are taken over from a dead one", a
   // A holder that has not recorded itself yet is not presumed dead.
   await mkdir(lock);
   await assert.rejects(withLock(dir, "commit", async () => "never"), /Workflow is locked/);
+});
+
+test("only one of several contenders takes over a dead holder's lock", async (t) => {
+  const dir = await temporary(t);
+  for (let round = 0; round < 10; round++) {
+    const lock = join(dir, `round-${round}.lock`);
+    await mkdir(lock);
+    await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: 999999 }));
+    let holders = 0, most = 0;
+    const results = await Promise.allSettled(Array.from({ length: 8 }, () => withLock(dir, `round-${round}`, async () => {
+      most = Math.max(most, ++holders);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      holders--;
+    }, (pid) => pid !== 999999)));
+    assert.equal(most, 1, "the lock is never held twice");
+    for (const result of results) if (result.status === "rejected") assert.match(String(result.reason), /Workflow is locked/);
+    await assert.rejects(readFile(join(lock, "owner.json")), { code: "ENOENT" });
+  }
+  // A takeover gate left by a crash does not disable later takeovers for good.
+  const lock = join(dir, "crashed.lock");
+  await mkdir(lock); await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: 999999 }));
+  await mkdir(`${lock}.takeover`);
+  await utimes(`${lock}.takeover`, new Date(Date.now() - 60000), new Date(Date.now() - 60000));
+  await assert.rejects(withLock(dir, "crashed", async () => "never", () => false), /Workflow is locked/);
+  assert.equal(await withLock(dir, "crashed", async () => "taken", () => false), "taken");
 });
 
 test("auxiliary usage shows in the footer and ignores other entries", () => {
