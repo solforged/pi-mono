@@ -21,7 +21,9 @@ const STATUS = { discuss: "Continuing in chat instead", handback: "Handed back t
 
 export default function (pi: ExtensionAPI) {
   // After "discuss", the rest of the run's tool calls are blocked as terminating, so
-  // siblings after the ask cannot keep the agent going. Siblings before it already ran.
+  // siblings after the ask cannot keep the agent going. Siblings before it already ran,
+  // and Pi ends a batch early only when every result terminates: the model then gets one
+  // more request, which the result text tells it to end and this block keeps tool-free.
   let discussing = false;
   pi.on("agent_start", () => { discussing = false; });
   pi.on("tool_call", () => discussing ? { block: true, terminate: true, reason: "The user wants to discuss in chat first." } : undefined);

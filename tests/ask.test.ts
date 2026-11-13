@@ -122,8 +122,8 @@ test("what was entered before discussing survives as drafts", () => {
   const details = { outcome: "discuss" as const, items: items(form.questions, form.result, false) };
   assert.equal(details.items[0].answer, undefined);
   assert.equal(details.items[0].draft, 'B (note: "keep it small")');
-  assert.match(resultText(details), /Nothing was answered; wait for their message\.\n\nNot submitted, but entered before leaving the dialog:\n- Many\? → B \(note: "keep it small"\)$/);
-  assert.equal(resultText({ outcome: "discuss", items: items(form.questions, [], false) }), "The user wants to discuss these questions in chat instead. Nothing was answered; wait for their message.");
+  assert.match(resultText(details), /wait for their message\.\n\nNot submitted, but entered before leaving the dialog:\n- Many\? → B \(note: "keep it small"\)$/);
+  assert.equal(resultText({ outcome: "discuss", items: items(form.questions, [], false) }), "The user wants to discuss these questions in chat instead. Nothing was answered. End your turn now, without calling tools, and wait for their message.");
 });
 
 test("Enter on a multi-select question with nothing picked picks the focused option", () => {

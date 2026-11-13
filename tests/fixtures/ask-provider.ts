@@ -1,5 +1,5 @@
 // Loaded explicitly by ask-smoke.ts. Never deploy this fixture as an extension.
-// "go" or "again" asks two questions ("mixed" adds a read after the ask); a tool result is echoed; "dump" reports
+// "go" or "again" asks two questions ("mixed" adds a read after the ask, "before" one ahead of it); a tool result is echoed; "dump" reports
 // whether the decision ledger is in context; "tools" lists active tools;
 // anything else (such as a compaction request) gets a stub.
 import { createAssistantMessageEventStream, getCurrentTools, type AssistantMessage } from "@earendil-works/pi-ai";
@@ -30,7 +30,7 @@ export default function (pi: ExtensionAPI) {
       queueMicrotask(() => {
         stream.push({ type: "start", partial: output });
         const content = last?.content ?? "", said = (typeof content === "string" ? content : content.map((c: any) => c.text ?? "").join("")).trim();
-        if (last?.role === "toolResult" || !["go", "again", "mixed"].includes(said)) {
+        if (last?.role === "toolResult" || !["go", "again", "mixed", "before"].includes(said)) {
           const text = last?.role === "toolResult" ? `FIXTURE ECHO ${last.content.map((c: any) => c.text).join(" ").replace(/\s+/g, " ")}`
             : said === "dump" ? `FIXTURE LEDGER ${JSON.stringify(context.messages).includes("Decisions the user made earlier") ? "present" : "absent"}`
             : said === "tools" ? `FIXTURE TOOLS ${getCurrentTools(context.messages).map((tool: any) => tool.name).join(",")}`
@@ -41,7 +41,8 @@ export default function (pi: ExtensionAPI) {
           output.stopReason = "stop";
         } else {
           const call = { type: "toolCall" as const, id: `ask-${Date.now()}`, name: "ask_user_question", arguments: { questions: QUESTIONS } };
-          const calls = said === "mixed" ? [call, { type: "toolCall" as const, id: `read-${Date.now()}`, name: "read", arguments: { path: "README.md" } }] : [call];
+          const read = { type: "toolCall" as const, id: `read-${Date.now()}`, name: "read", arguments: { path: "README.md" } };
+          const calls = said === "mixed" ? [call, read] : said === "before" ? [read, call] : [call];
           calls.forEach((block, index) => {
             output.content.push(block);
             stream.push({ type: "toolcall_start", contentIndex: index, partial: output });

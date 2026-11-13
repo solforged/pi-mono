@@ -45,8 +45,8 @@ test("RPC hosts answer through Pi's own dialogs", async t => {
   assert.match(text, /Which caches should we add\? → HTTP, Query; own answer: "reads only"/);
 });
 
-test("discussing stops the run, blocking tool calls after the ask", async t => {
-  if (spawnSync("pi", ["--version"]).error) return t.skip("Pi is not installed");
+// Answers the dialog with "Discuss in chat" and returns the run's records.
+async function discuss(t: { after: (fn: () => unknown) => unknown }, prompt: string) {
   const pi = spawn("pi", [...args, "--mode", "rpc"], { cwd: root, stdio: ["pipe", "pipe", "inherit"] });
   t.after(() => pi.kill());
   const send = (value: object) => pi.stdin.write(`${JSON.stringify(value)}\n`);
@@ -59,9 +59,26 @@ test("discussing stops the run, blocking tool calls after the ask", async t => {
       if (record.type === "agent_end") resolve();
     });
   });
-  send({ type: "prompt", message: "mixed" });
+  send({ type: "prompt", message: prompt });
   await end;
-  const ended = records.filter(r => r.type === "tool_execution_end");
-  assert.deepEqual(ended.map(r => [r.toolName, !!r.isError]), [["ask_user_question", false], ["read", true]]);
-  assert.equal(records.filter(r => r.type === "message_end" && r.message?.role === "assistant").length, 1);
+  return {
+    ended: records.filter(r => r.type === "tool_execution_end").map(r => [r.toolName, !!r.isError]),
+    replies: records.filter(r => r.type === "message_end" && r.message?.role === "assistant").map(r => r.message),
+  };
+}
+
+test("discussing stops the run, blocking tool calls after the ask", async t => {
+  if (spawnSync("pi", ["--version"]).error) return t.skip("Pi is not installed");
+  const { ended, replies } = await discuss(t, "mixed");
+  assert.deepEqual(ended, [["ask_user_question", false], ["read", true]]);
+  assert.equal(replies.length, 1);
+});
+
+test("a call that ran before the ask leaves the model one reply, which is told to end the turn", async t => {
+  if (spawnSync("pi", ["--version"]).error) return t.skip("Pi is not installed");
+  const { ended, replies } = await discuss(t, "before");
+  // Pi ends a batch early only when every result terminates, and the read's does not.
+  assert.deepEqual(ended, [["read", false], ["ask_user_question", false]]);
+  assert.equal(replies.length, 2);
+  assert.match(replies[1].content[0].text, /^FIXTURE ECHO .*Nothing was answered\. End your turn now, without calling tools, and wait for their message\.$/);
 });

@@ -212,7 +212,9 @@ const drafts = (items: Item[]) => {
 export function resultText(details: Details, note = ""): string {
   switch (details.outcome) {
     case "answered": return ["User answers:", ...details.items.map(line)].join("\n");
-    case "discuss": return `The user wants to discuss these questions in chat instead. Nothing was answered; wait for their message.${drafts(details.items)}`;
+    // A call that ran before the ask in the same response makes Pi send one more request, and
+    // there only this text ends the turn before the model tries a tool.
+    case "discuss": return `The user wants to discuss these questions in chat instead. Nothing was answered. End your turn now, without calling tools, and wait for their message.${drafts(details.items)}`;
     case "handback": return `The user wants to answer these through your parent agent. Stop now: give your progress so far and list these questions under Open questions.${drafts(details.items)}`;
     case "interrupted": return `Interrupted before the user answered.${drafts(details.items)}`;
     case "unavailable": return "No interactive user is available. Decide yourself and state your assumptions.";
