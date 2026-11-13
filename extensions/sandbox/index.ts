@@ -14,7 +14,7 @@ import { Browser, parseCommand, which } from "./browser.ts";
 import { shareCargoTarget } from "./cargo.ts";
 import { ContainerCli, runProcess } from "./container.ts";
 import { buildPlan, promptNote, type Plan } from "./plan.ts";
-import { cacheRoot, findRoot, probe } from "./probe.ts";
+import { cacheRoot, commonDirOf, findRoot, probe } from "./probe.ts";
 import { imageTag, Sandbox, type Phase } from "./sandbox.ts";
 import { chooseEnabled, inheritedSwitch, resolveSettings } from "./settings.ts";
 import { savedToggle, saveToggle, togglesFile } from "./toggles.ts";
@@ -45,7 +45,8 @@ const resolvePath = (path: string | undefined, cwd: string) => {
 // A session switch, fork, or reload replaces the extension instance inside one
 // process. The running sandbox waits here for the next instance, so the
 // container and anything running in it survive.
-const handoff = globalThis as { __piSolSandbox?: Sandbox; __piSolSandboxBrowser?: Browser };
+// `__piSolSandboxOn` names the repository the outgoing session had the sandbox on in.
+const handoff = globalThis as { __piSolSandbox?: Sandbox; __piSolSandboxBrowser?: Browser; __piSolSandboxOn?: string };
 const REPLACED = new Set(["reload", "new", "resume", "fork"]);
 
 export default function sandboxExtension(pi: ExtensionAPI) {
@@ -65,6 +66,7 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   let generation = 0;
   let opening: Promise<void> | undefined;
   let projectRoot: string | undefined;
+  let repository: string | undefined;
   let settingsDefault = true;
 
   // The status line extension shows the marker after the cost; Pi's own footer
@@ -215,11 +217,14 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     browserProblem = findBrowserProblem(ctx);
     let choice;
     projectRoot = await findRoot(ctx.cwd);
+    repository = await commonDirOf(projectRoot);
+    const carried = !!repository && handoff.__piSolSandboxOn === repository;
+    handoff.__piSolSandboxOn = undefined;
     try {
       const agentDir = getAgentDir();
       const settings = resolveSettings(globalSandboxSettings(agentDir), projectRoot);
       settingsDefault = settings.enabled;
-      choice = chooseEnabled(pi.getFlag("sandbox"), inheritedSwitch(process.env), savedToggle(togglesFile(agentDir), projectRoot), settings);
+      choice = chooseEnabled(pi.getFlag("sandbox"), inheritedSwitch(process.env), savedToggle(togglesFile(agentDir), projectRoot), settings, carried);
     } catch (error) {
       // An invalid configuration keeps the sandbox on and failing, never silently off.
       await turnOff();
@@ -234,6 +239,9 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", async (event) => {
     // The next session republishes it; a reload without this extension must not keep it.
     pi.events.emit("statusline:segment", { key: STATUS });
+    // enter_worktree moves a session to another checkout, whose own toggle and
+    // settings would otherwise decide: a model could leave the sandbox that way.
+    handoff.__piSolSandboxOn = enabled && REPLACED.has(event.reason) ? repository : undefined;
     await turnOff(REPLACED.has(event.reason));
     ui = undefined;
   });
@@ -273,7 +281,7 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   }
 
   function describe() {
-    const why = ({ flag: "--sandbox", environment: "set by the parent Pi", saved: "saved for this project", settings: "settings" } as Record<string, string>)[source] ?? source;
+    const why = ({ flag: "--sandbox", environment: "set by the parent Pi", saved: "saved for this project", session: "kept on from the checkout this session came from", settings: "settings" } as Record<string, string>)[source] ?? source;
     if (!enabled) return `Sandbox off (${why}). Tools run on the host.`;
     if (failure || box?.error) return `Sandbox unavailable: ${(failure ?? box?.error)!.message}`;
     if (!plan) return "Sandbox starting.";

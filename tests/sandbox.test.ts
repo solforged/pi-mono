@@ -49,6 +49,15 @@ test("the flag beats the inherited environment, then the saved toggle, then sett
   assert.throws(() => chooseEnabled("maybe", undefined, undefined, { enabled: true }), /--sandbox/);
 });
 
+test("a session moved from a checkout with the sandbox on keeps it on", () => {
+  // enter_worktree is a model-callable move; the worktree's settings must not turn the sandbox off.
+  assert.deepEqual(chooseEnabled(undefined, undefined, undefined, { enabled: false }, true), { enabled: true, source: "session" });
+  assert.deepEqual(chooseEnabled(undefined, undefined, undefined, { enabled: true }, true), { enabled: true, source: "settings" });
+  // The user's own choices for the new checkout still win.
+  assert.deepEqual(chooseEnabled(undefined, undefined, false, { enabled: false }, true), { enabled: false, source: "saved" });
+  assert.deepEqual(chooseEnabled("off", undefined, undefined, { enabled: false }, true), { enabled: false, source: "flag" });
+});
+
 test("a process ignores the PI_SANDBOX it set itself, but children honor it", () => {
   assert.equal(inheritedSwitch({ PI_SANDBOX: "off", PI_SANDBOX_FROM: "42" }, 42), undefined);
   assert.equal(inheritedSwitch({ PI_SANDBOX: "off", PI_SANDBOX_FROM: "42" }, 43), "off");

@@ -62,7 +62,8 @@ in the current directory, so from the main checkout it would run a worktree
 session there; Pi warns, and `/resume` reopens it in its worktree. Files an
 earlier version moved into a worktree's folder are still found by
 `/wt resume`, and return when the session leaves. The sandbox remembers its
-toggle per directory, so a worktree starts from your settings.
+toggle per directory, so a worktree starts from your settings, except that a
+session moving with the sandbox on keeps it on.
 
 ## Commands
 

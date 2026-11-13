@@ -151,7 +151,10 @@ Pi processes in the same worktree share one container. Each holds a lease, and
 the last to exit deletes it; containers left by crashed sessions are removed on
 the next start. `/new`, `/resume`, `/fork`, and `/reload` keep the container and
 whatever is running in it, unless the new session resolves to different
-sandbox settings or another project. Subagent and Rex children follow the
+sandbox settings or another project. A session that moves to another checkout
+of the same repository with the sandbox on (`enter_worktree`, `/wt`) keeps it
+on unless that checkout has its own saved toggle: the model can make that
+move, so it must not be a way out. Subagent and Rex children follow the
 parent's on/off state and load the same extension, so scouts share the parent's
 container and workers get their own.
 

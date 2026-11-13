@@ -77,7 +77,7 @@ export function resolveSettings(raw: unknown, root: string, home = homedir()): S
   return settings;
 }
 
-export type Choice = { enabled: boolean; source: "flag" | "environment" | "saved" | "settings" };
+export type Choice = { enabled: boolean; source: "flag" | "environment" | "saved" | "session" | "settings" };
 const parseSwitch = (value: unknown, where: string) => {
   if (value === undefined || value === "") return undefined;
   if (typeof value === "string" && /^(on|true|1)$/i.test(value)) return true;
@@ -85,13 +85,16 @@ const parseSwitch = (value: unknown, where: string) => {
   throw new Error(`${where} must be "on" or "off"`);
 };
 // --sandbox beats PI_SANDBOX, which carries a parent's choice into children;
-// then the project's saved toggle, then settings.
-export function chooseEnabled(flag: unknown, env: string | undefined, saved: boolean | undefined, settings: Pick<Settings, "enabled">): Choice {
+// then the project's saved toggle, then settings. `carried` says this session
+// just moved, inside one process, from another checkout of the same repository
+// with the sandbox on: it stays on, since the model can make that move.
+export function chooseEnabled(flag: unknown, env: string | undefined, saved: boolean | undefined, settings: Pick<Settings, "enabled">, carried = false): Choice {
   const fromFlag = parseSwitch(flag, "--sandbox");
   if (fromFlag !== undefined) return { enabled: fromFlag, source: "flag" };
   const fromEnv = parseSwitch(env, "PI_SANDBOX");
   if (fromEnv !== undefined) return { enabled: fromEnv, source: "environment" };
   if (saved !== undefined) return { enabled: saved, source: "saved" };
+  if (carried && !settings.enabled) return { enabled: true, source: "session" };
   return { enabled: settings.enabled, source: "settings" };
 }
 

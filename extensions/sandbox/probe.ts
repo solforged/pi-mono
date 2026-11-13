@@ -31,10 +31,13 @@ export async function findRoot(cwd: string) {
   return real(await git(start, ["rev-parse", "--show-toplevel"])) ?? start;
 }
 
+/** The Git directory shared by every checkout of the repository at `root`, if it is one. */
+export const commonDirOf = async (root: string) => real(await git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+
 export async function probe(cwd: string, agentDir: string, packageDir: string, env = process.env): Promise<Probe> {
   const home = real(homedir()) ?? homedir();
   const root = await findRoot(cwd);
-  const commonDir = real(await git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+  const commonDir = await commonDirOf(root);
   const [name, email] = await Promise.all([git(root, ["config", "user.name"]), git(root, ["config", "user.email"])]);
   const configHome = env.XDG_CONFIG_HOME || join(home, ".config");
   const contextDirs = [join(home, ".agents", "skills"), join(agentDir, "skills"), packageDir, join(configHome, "git")]
