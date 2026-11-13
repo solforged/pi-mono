@@ -50,7 +50,9 @@ Everything keeps its host path, so paths in sessions and tool output stay valid.
 
 Inside writable mounts, Git `config` and `hooks`, a worktree's `.git` file, and
 the project's `.pi/` are read-only: host Git and Pi act on those without you
-running anything. `node_modules`, `target`, and `.venv` are replaced by
+running anything. A missing `hooks` or project `.pi/` is created empty on the
+host so the guest cannot add one. Existing `commondir` and `config.worktree`
+files, which point Git at another config, are read-only too. `node_modules`, `target`, and `.venv` are replaced by
 Linux-only directories per worktree when `package.json`, `Cargo.toml`, or
 `pyproject.toml` exists, so host and guest builds never mix. The wiki's `bin/`
 gets a Linux build of its CLI.
@@ -150,7 +152,10 @@ This keeps generated commands away from your home directory, credentials, and
 host processes. It does not make untrusted code safe to run later: the guest
 can still edit project files that you or your tools execute on the host
 (package scripts, Makefiles, `mise.toml`, hooks configured from the work tree),
-and it can reach the network. Submodule Git directories are not guarded.
+and it can reach the network. Submodule Git directories are not guarded, and
+neither is a `commondir` the guest adds to a Git directory that has none, such
+as a main checkout's: host Git would then read config and hooks from wherever
+it points.
 
 The browser is Chromium on the host, rendering pages the guest serves. It is
 as exposed to them as to any website, with its own profile.

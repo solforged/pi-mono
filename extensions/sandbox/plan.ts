@@ -10,6 +10,8 @@ export interface Probe {
   home: string;
   cacheRoot: string;
   commonDir?: string;
+  /** Every `<commonDir>/worktrees/<id>` directory: the private Git directories of linked worktrees. */
+  worktreeGitDirs?: string[];
   wikiDir?: string;
   contextDirs: string[];
   identity: { name?: string; email?: string };
@@ -94,24 +96,35 @@ export function buildPlan(probe: Probe, settings: Settings, image: string): Plan
   }
 
   // Host Git and Pi act on these without the user running anything, so the
-  // guest must not be able to change them: repository config and hooks, a
-  // linked worktree's .git pointer, and project Pi resources.
+  // guest must not be able to change them: repository config and hooks, the
+  // files that point Git at another config (`commondir`, `config.worktree`),
+  // a linked worktree's .git pointer, and project Pi resources.
   const readOnlyPaths: string[] = [];
   const writable = (path: string) => mounts.some((m) => !m.readonly && m.target === m.source && isInside(m.target, path))
     && !mounts.some((m) => m.target !== m.source && isInside(m.target, path));
   const guard = (path: string) => { if (writable(path) && !readOnlyPaths.includes(path)) readOnlyPaths.push(path); };
+  // A read-only path has to exist, so these are guarded only where Git already
+  // has them: a guest can still add a `commondir` to a directory without one.
+  const guardGitFiles = (dir: string) => {
+    for (const name of ["config", "commondir", "config.worktree"]) if (probe.kind(join(dir, name)) === "file") guard(join(dir, name));
+  };
   const guardGitDir = (dir: string) => {
-    if (probe.kind(join(dir, "config")) === "file") guard(join(dir, "config"));
+    guardGitFiles(dir);
     if (!probe.kind(join(dir, "hooks"))) hostDirs.push(join(dir, "hooks"));
     guard(join(dir, "hooks"));
   };
   if (probe.commonDir) guardGitDir(probe.commonDir);
+  for (const dir of probe.worktreeGitDirs ?? []) guardGitFiles(dir);
   for (const mount of mounts.filter((m) => !m.readonly && m.target === m.source)) {
     const dotGit = join(mount.source, ".git");
     const kind = probe.kind(dotGit);
     if (kind === "file") guard(dotGit);
     else if (kind === "dir" && dotGit !== probe.commonDir) guardGitDir(dotGit);
-    if (probe.kind(join(mount.source, ".pi")) === "dir") guard(join(mount.source, ".pi"));
+    // The project's .pi/ is created when missing, like hooks: Pi trusts by
+    // folder, so a guest that could add one would run code in the next host Pi.
+    const dotPi = join(mount.source, ".pi");
+    if (mount.source === root && !probe.kind(dotPi)) { hostDirs.push(dotPi); guard(dotPi); }
+    else if (probe.kind(dotPi) === "dir") guard(dotPi);
   }
 
   const env: Record<string, string> = {
@@ -174,9 +187,9 @@ export function promptNote(plan: Plan): string {
   const shown = plan.mounts.filter((m) => m.target === m.source && m.label !== "context");
   const lines = shown.map((m) => `- ${m.target} (${m.label}${m.readonly ? ", read-only" : ""})`);
   return [
-    "Your tools (read, write, edit, bash, grep, find, ls) run in a Debian Linux arm64 container, not on the macOS host. Host paths keep their locations; only these are available:",
+    "Your file and shell tools run in a Debian Linux arm64 container, not on the macOS host. Host paths keep their locations; only these are available:",
     ...lines,
     "Skills, Pi documentation, and Git configuration are readable. Other host paths, credentials, and the SSH agent are not. Install project toolchains with `mise install`; node_modules, target, and .venv are Linux-only per worktree.",
-    "Commits are created on the host: stage changes with `git add`, then call git_commit. Git config and hooks are read-only here.",
+    "Commits are created on the host: stage changes with `git add`, then call git_commit. Git config and hooks, and the project's .pi/, are read-only here.",
   ].join("\n");
 }

@@ -89,6 +89,31 @@ test("missing hooks are created on the host so the guest cannot add them", () =>
   assert(!plan.readOnlyPaths.includes("/Users/me/src/app/.git/config"));
 });
 
+test("a missing project .pi is created on the host and guarded; other mounts keep only what exists", () => {
+  const wiki = "/Users/me/.local/share/wiki";
+  const plan = buildPlan(probe({ "/Users/me/src/app/.git": "dir", [`${wiki}/.git`]: "dir" }), DEFAULTS, "img");
+  assert(plan.hostDirs.includes("/Users/me/src/app/.pi"));
+  assert(plan.readOnlyPaths.includes("/Users/me/src/app/.pi"));
+  assert(!plan.hostDirs.includes(`${wiki}/.pi`) && !plan.readOnlyPaths.includes(`${wiki}/.pi`));
+  // A file named .pi cannot hold project resources, and cannot be replaced by a directory.
+  const file = buildPlan(probe({ "/Users/me/src/app/.pi": "file" }, { wikiDir: undefined }), DEFAULTS, "img");
+  assert(!file.hostDirs.includes("/Users/me/src/app/.pi") && !file.readOnlyPaths.includes("/Users/me/src/app/.pi"));
+});
+
+test("files that point Git at another config are guarded wherever they exist", () => {
+  const common = "/Users/me/src/app/.git", worktree = "/Users/me/.pi/wt/app--task";
+  const plan = buildPlan(probe({
+    [`${worktree}/.git`]: "file", [`${common}/config`]: "file", [`${common}/hooks`]: "dir",
+    [`${common}/worktrees/app--task/commondir`]: "file", [`${common}/worktrees/app--task/config.worktree`]: "file",
+    [`${common}/worktrees/other/commondir`]: "file",
+  }, { root: worktree, wikiDir: undefined, worktreeGitDirs: [`${common}/worktrees/app--task`, `${common}/worktrees/other`] }), DEFAULTS, "img");
+  for (const path of ["worktrees/app--task/commondir", "worktrees/app--task/config.worktree", "worktrees/other/commondir"]) assert(plan.readOnlyPaths.includes(`${common}/${path}`), path);
+  // Linked worktrees take their hooks from the common directory, so none are created here.
+  assert(!plan.hostDirs.some((dir) => dir.includes("/worktrees/app--task/")));
+  // Nothing can be guarded where the file is absent, as in a main checkout.
+  assert(!plan.readOnlyPaths.includes(`${common}/commondir`));
+});
+
 test("the wiki mounts at its path with a Linux binary over bin/ and guarded Git", () => {
   const wiki = "/Users/me/.local/share/wiki";
   const plan = buildPlan(probe({ [`${wiki}/cmd/wiki`]: "dir", [`${wiki}/.git`]: "dir", [`${wiki}/.git/config`]: "file" }), DEFAULTS, "img");
