@@ -50,3 +50,14 @@ test("a colour prefix rewrites the current title at once and marks later ones", 
   setTitlePrefix("", s.out);
   assert.deepEqual(s.written, ["\x1b]0;🟦 fix-login\x07", "\x1b]0;fix-login\x07"]);
 });
+
+test("a stream patched by an earlier version is wrapped, so a reload can mark titles", () => {
+  const s = stream(), legacy = s.out.write;
+  s.out[Symbol.for("pi-mono.rex.title")] = true;
+  // The earlier patch: Pi's title becomes the session name.
+  s.out.write = (chunk: unknown) => legacy(typeof chunk === "string" ? chunk.replace(/^\x1b\]0;\u03c0 - (.*) - pi-mono\x07$/, "\x1b]0;$1\x07") : chunk);
+  registerRexTitle({ REX_SESSION: "s1" }, s.out, () => "/src/pi-mono");
+  setTitlePrefix("🟦", s.out);
+  s.out.write("\x1b]0;\u03c0 - fix-login - pi-mono\x07");
+  assert.deepEqual(s.written, ["\x1b]0;🟦 fix-login\x07"]);
+});

@@ -12,13 +12,16 @@ export function rexTitle(piTitle: string, dir: string): string {
 
 /** Kept on the stream, not the module: /reload loads a new module but the stream stays patched. */
 interface TitleState { prefix: string; last?: string; write: (...args: any[]) => boolean }
-type Patched = NodeJS.WriteStream & { [PATCHED]?: TitleState };
+/** Earlier versions stored `true`: a process upgraded by /reload still runs that patch. */
+type Patched = NodeJS.WriteStream & { [PATCHED]?: TitleState | true };
+const stateOf = (out: NodeJS.WriteStream) => { const s = (out as Patched)[PATCHED]; return typeof s === "object" ? s : undefined; };
 const osc = (state: TitleState, title: string) => `\x1b]0;${state.prefix ? `${state.prefix} ` : ""}${title}\x07`;
 
 /** Rewrites Pi's own title writes, so every path (startup, resume, reload, rename) is covered without racing Pi. */
 export function registerRexTitle(env = process.env, out: NodeJS.WriteStream = process.stdout, cwd = () => process.cwd()) {
   const stream = out as Patched;
-  if (!env.REX_SESSION || stream[PATCHED]) return;
+  // A legacy patch is wrapped, not replaced: our rewritten titles no longer match its pattern.
+  if (!env.REX_SESSION || stateOf(out)) return;
   const state: TitleState = { prefix: "", write: out.write.bind(out) as (...args: any[]) => boolean };
   stream[PATCHED] = state;
   out.write = ((chunk: any, ...rest: any[]) => {
@@ -30,7 +33,7 @@ export function registerRexTitle(env = process.env, out: NodeJS.WriteStream = pr
 
 /** Marks every later title (e.g. the parent's colour); rewrites the current one at once. */
 export function setTitlePrefix(prefix: string, out: NodeJS.WriteStream = process.stdout) {
-  const state = (out as Patched)[PATCHED];
+  const state = stateOf(out);
   if (!state || state.prefix === prefix) return;
   state.prefix = prefix;
   if (state.last !== undefined) state.write(osc(state, state.last));
