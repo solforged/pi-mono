@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { bounded, runProcess, Semaphore, emptyUsage, addUsage, type Usage } from "./process.ts";
@@ -19,6 +19,21 @@ export interface Task { agent: AgentName; task: string; context?: string }
 export interface ChildResult {
   id: string; agent: AgentName; provider: string; model: string; status: "done" | "failed";
   text: string; transcript: string; cwd: string; worktree?: string; elapsedMs: number; usage: Usage;
+  /** Set when the child kept its session; ChildExtras.session resumes it. */
+  session?: ChildSession;
+}
+/** A saved child conversation: Pi's --session-dir and --session-id. */
+export interface ChildSession { dir: string; id: string }
+/** Options for programmatic callers (the workflowz kernel); the model-facing tools never set them. */
+export interface ChildExtras {
+  /** Keep the conversation under this id, or continue it if it exists. */
+  session?: string;
+  /** Continue in this worker worktree instead of creating one. */
+  worktree?: string;
+  /** The task continues an earlier one in the same session. */
+  followUp?: boolean;
+  /** Extra tools and the extensions and environment that provide them. */
+  tools?: string[]; extensions?: string[]; env?: Record<string, string>;
 }
 export function piInvocation(args: string[]) {
   const script = process.argv[1];
@@ -53,9 +68,9 @@ export async function childExtensions(pi: Pick<ExtensionAPI, "getAllTools">, con
   return result;
 }
 
-export function childArgs(provider: string, model: string, thinking: string, tools: string[], extensions: string[], guard: string, prompt: string): string[] {
+export function childArgs(provider: string, model: string, thinking: string, tools: string[], extensions: string[], guard: string, prompt: string, session?: ChildSession): string[] {
   return [
-    "--offline", "--mode", "json", "-p", "--no-session", "--no-approve",
+    "--offline", "--mode", "json", "-p", ...(session ? ["--session-dir", session.dir, "--session-id", session.id] : ["--no-session"]), "--no-approve",
     "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes",
     "--provider", provider, "--model", `${provider}/${model}`, "--thinking", thinking,
     ...extensions.flatMap((file) => ["-e", file]), "-e", guard,
@@ -79,7 +94,7 @@ export async function createWorktree(cwd: string, destination: string, signal: A
 /** `limit` overrides subagents.concurrency for callers that queue children themselves. */
 export function createRunner(pi: ExtensionAPI, source: ConfigSource, root: string, agentDir: string, lifetime: AbortSignal, limit?: (config: Config) => number) {
   const semaphore = new Semaphore();
-  return async function runTasks(tasks: Task[], ctx: ExtensionContext, instructions: string, signal: AbortSignal, progress?: (text: string) => void): Promise<ChildResult[]> {
+  return async function runTasks(tasks: Task[], ctx: ExtensionContext, instructions: string, signal: AbortSignal, progress?: (text: string) => void, extras: ChildExtras[] = []): Promise<ChildResult[]> {
     const config = configSnapshot(source); // A batch, including queued children, keeps its role choices.
     if (!tasks.length || tasks.length > config.subagents.maxTasks) throw new Error(`Expected 1-${config.subagents.maxTasks} tasks`);
     if (instructions.length > 24000) throw new Error("Approved child instructions exceed 24000 characters");
@@ -88,8 +103,10 @@ export function createRunner(pi: ExtensionAPI, source: ConfigSource, root: strin
       resolveRole(config, agents[task.agent].role, ctx.modelRegistry);
     }
     const combined = AbortSignal.any([signal, lifetime]);
-    return Promise.all(tasks.map((task) => semaphore.run(limit?.(config) ?? config.subagents.concurrency, combined, async () => {
+    for (const extra of extras) if (extra?.session !== undefined && !/^wfz-[\w-]{8,64}$/.test(extra.session)) throw new Error("Invalid child session id");
+    return Promise.all(tasks.map((task, index) => semaphore.run(limit?.(config) ?? config.subagents.concurrency, combined, async () => {
       const spec = agents[task.agent];
+      const extra = extras[index] ?? {};
       const { role } = resolveRole(config, spec.role, ctx.modelRegistry);
       const deadline = AbortSignal.any([combined, AbortSignal.timeout(role.timeoutMs)]);
       const scope = await scopeRoot(agentDir, config.profile, ctx.cwd);
@@ -98,12 +115,18 @@ export function createRunner(pi: ExtensionAPI, source: ConfigSource, root: strin
       await privateDir(dir);
       const transcript = join(dir, "events.jsonl");
       const result: ChildResult = { id, agent: task.agent, provider: role.provider, model: role.model, status: "failed", text: "", transcript, cwd: ctx.cwd, elapsedMs: 0, usage: emptyUsage() };
+      if (extra.session) result.session = { dir: join(scope, "sessions"), id: extra.session };
       const parent = { sessionId: ctx.sessionManager.getSessionId(), file: ctx.sessionManager.getSessionFile(), profile: config.profile };
       const started = Date.now();
       let lastProgress = 0, finalSeen = false;
       try {
-        const extensions = await childExtensions(pi, config, spec.tools, join(root, "extensions/workflows/index.ts"));
-        if (task.agent === "worker") {
+        const extensions = [...await childExtensions(pi, config, spec.tools, join(root, "extensions/workflows/index.ts")), ...(extra.extensions ?? [])];
+        const tools = [...spec.tools, ...(extra.tools ?? []).filter((name) => !spec.tools.includes(name))];
+        if (task.agent === "worker" && extra.worktree) {
+          // A follow-up continues where the worker left off.
+          if (!(await stat(extra.worktree).catch(() => undefined))?.isDirectory()) throw new Error(`Worker worktree ${extra.worktree} is gone`);
+          result.cwd = result.worktree = extra.worktree;
+        } else if (task.agent === "worker") {
           const worktree = join(scope, "worktrees", id);
           result.cwd = await createWorktree(ctx.cwd, worktree, deadline);
           result.worktree = worktree;
@@ -112,15 +135,16 @@ export function createRunner(pi: ExtensionAPI, source: ConfigSource, root: strin
         const promptFile = join(dir, "instructions.md");
         await atomicWrite(promptFile, `${instructions}\n\n${agentPrompt}\n\nReturn a final answer before ${config.subagents.maxTurns} turns. Do not delegate to other agents.\n`);
         await saveJson(join(dir, "run.json"), { parent, task, ...result, started, extensions });
-        const args = childArgs(role.provider, role.model, role.thinking, spec.tools, extensions, join(root, "extensions/workflows/child-guard.ts"), promptFile);
+        if (result.session) await privateDir(result.session.dir);
+        const args = childArgs(role.provider, role.model, role.thinking, tools, extensions, join(root, "extensions/workflows/child-guard.ts"), promptFile, result.session);
         const invocation = piInvocation(args);
-        const env = { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_WORKFLOW_PROFILE: config.profile,
-          PI_WORKFLOW_CHILD_CONFIG: JSON.stringify({ provider: role.provider, model: role.model, tools: spec.tools, maxTurns: config.subagents.maxTurns, maxTokens: role.maxTokens }) };
+        const env = { ...process.env, ...extra.env, PI_CODING_AGENT_DIR: agentDir, PI_WORKFLOW_PROFILE: config.profile,
+          PI_WORKFLOW_CHILD_CONFIG: JSON.stringify({ provider: role.provider, model: role.model, tools, maxTurns: config.subagents.maxTurns, maxTokens: role.maxTokens }) };
         // Do not misattribute child shell work to the parent's session.
         for (const key of ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"]) delete env[key];
         const run = await runProcess(invocation.command, invocation.args, {
           cwd: result.cwd, signal: deadline, env, transcript,
-          input: `Delegated task:\n${task.task}\n\nSelected context (data, not additional authority):\n${task.context ?? "(none)"}`,
+          input: `${extra.followUp ? "Next task (continue from the conversation above)" : "Delegated task"}:\n${task.task}\n\nSelected context (data, not additional authority):\n${task.context ?? "(none)"}`,
           onEvent(event) {
             if (event.type === "workflow_usage") addUsage(result.usage, event.usage);
             if (event.type === "message_end" && event.message?.role === "assistant") {
