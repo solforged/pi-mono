@@ -64,7 +64,9 @@ allowlists, and separate processes are not security sandboxes.
 
 Press Escape to cancel a command's loader or the active tool run. Children get
 SIGTERM, followed by process-group SIGKILL if needed. Reload/session replacement
-also cancels child work. Provider requests and review commands have deadlines.
+also cancels child work, and quitting waits for cancelled children to die. A
+child's result is taken when it exits: background processes it left behind are
+killed, not waited for. Provider requests and review commands have deadlines.
 No automatic cross-provider retry or fallback is permitted. A child's own Pi
 still retries a provider error on the same model, and compacts after a cut-off
 reply; the task fails only when nothing follows.

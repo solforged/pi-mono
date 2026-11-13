@@ -78,18 +78,42 @@ export interface ProcessOptions {
   onEvent?: (event: any) => void;
   maxBytes?: number;
 }
+/** An abort signal that fires after `ms` with a reason saying what gave up. */
+export function timeoutSignal(ms: number, message: string): AbortSignal {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new Error(message)), ms).unref();
+  return controller.signal;
+}
+
+const children = new Set<{ stopping: boolean; closed: Promise<void> }>();
+/**
+ * Resolves once every child that was told to stop is gone, killed if it had to
+ * be. It gives up after `limitMs`, so one that cannot die never blocks a quit.
+ */
+export async function stopped(limitMs = 3000): Promise<void> {
+  const gone = Promise.all([...children].filter((child) => child.stopping).map((child) => child.closed));
+  await Promise.race([gone, new Promise((resolve) => setTimeout(resolve, limitMs).unref())]);
+}
+
+/** How long a child's pipes are still read after it exits, when something else holds them open. */
+const DRAIN_MS = 250;
+
 export async function runProcess(command: string, args: string[], options: ProcessOptions) {
   options.signal.throwIfAborted();
   return new Promise<{ stdout: string; stderr: string; code: number }>((resolve, reject) => {
     let stdout = "", stderr = "", bytes = 0;
     let failure: Error | undefined;
-    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined, drainTimer: ReturnType<typeof setTimeout> | undefined;
     const fd = options.transcript ? openSync(options.transcript, "wx", 0o600) : undefined;
     const proc = spawn(command, args, { cwd: options.cwd, env: options.env ?? process.env, shell: false, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+    const closed = Promise.withResolvers<void>();
+    const child = { stopping: false, closed: closed.promise };
+    children.add(child);
     const kill = (signal: NodeJS.Signals) => {
       try { if (proc.pid) process.kill(-proc.pid, signal); } catch (error: any) { if (error.code !== "ESRCH") proc.kill(signal); }
     };
     const stop = () => {
+      child.stopping = true;
       kill("SIGTERM");
       killTimer ??= setTimeout(() => kill("SIGKILL"), 1500);
     };
@@ -113,10 +137,21 @@ export async function runProcess(command: string, args: string[], options: Proce
     proc.on("error", fail);
     proc.stdin.on("error", (error: NodeJS.ErrnoException) => { if (error.code !== "EPIPE") fail(error); });
     proc.stdin.end(options.input ?? "");
+    proc.on("exit", () => {
+      if (killTimer) clearTimeout(killTimer);
+      // Do not leave background descendants behind, even on success, nor wait for
+      // them to let go of the pipes.
+      kill("SIGKILL");
+      // One that left the process group can still hold the pipes open: stop reading
+      // soon. What the child wrote is already in the pipe, and the loop reads it
+      // before an immediate runs, however late this timer fires.
+      drainTimer = setTimeout(() => setImmediate(() => { proc.stdout.destroy(); proc.stderr.destroy(); }), DRAIN_MS);
+    });
     proc.on("close", (code, signal) => {
       options.signal.removeEventListener("abort", stop);
       if (killTimer) clearTimeout(killTimer);
-      kill("SIGKILL"); // Do not leave background descendants behind, even on success.
+      if (drainTimer) clearTimeout(drainTimer);
+      children.delete(child); closed.resolve();
       if (fd !== undefined) closeSync(fd);
       try { parser?.finish(); } catch (error) { failure ??= error as Error; }
       if (options.signal.aborted) reject(options.signal.reason ?? new Error("Cancelled"));

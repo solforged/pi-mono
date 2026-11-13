@@ -69,7 +69,9 @@ The TUI confirms the plan. Print mode only prints it; `/commit apply` creates
 the commits without asking. The plan is stored under `commits/plan.json` and
 reused while the working tree, `HEAD` and the style files are unchanged. A hook
 failure can therefore be fixed and retried without another model call. If a
-hook edits the working tree mid-run, `/commit` stops and needs `replan`.
+hook edits the working tree mid-run, `/commit` stops and needs `replan`. A
+background job that a hook leaves in Git's process group is killed when Git
+exits.
 `/commit replan` discards the cache, `/commit show` prints it, and
 `/commit clear` deletes it.
 

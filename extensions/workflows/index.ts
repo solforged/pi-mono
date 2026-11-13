@@ -9,7 +9,7 @@ import { loadTitlePrompt, registerAutoname } from "./autoname.ts";
 import { registerCommit } from "./commit.ts";
 import { registerAutolearn } from "./autolearn-ui.ts";
 import { registerLearning } from "./learning-ui.ts";
-import { addUsage, bounded, emptyUsage } from "./process.ts";
+import { addUsage, bounded, emptyUsage, stopped } from "./process.ts";
 import { resolveRole, roleNames } from "./roles.ts";
 import { RoleStore } from "./role-store.ts";
 import { showRoles } from "./roles-ui.ts";
@@ -26,7 +26,11 @@ export default async function (pi: ExtensionAPI) {
   const getConfig = () => roles.snapshot();
   const config = getConfig();
   const lifetime = new AbortController();
-  pi.on("session_shutdown", () => { lifetime.abort(new Error("Workflow session closed")); });
+  pi.on("session_shutdown", async () => {
+    lifetime.abort(new Error("Workflow session closed"));
+    // Pi may exit as soon as the handlers return, before a child that ignores SIGTERM is killed.
+    await stopped();
+  });
   pi.on("session_start", (_event, ctx) => { showAuxiliaryUsage(ctx); });
   let approvedInstructions = "";
   const instructionsText = (files: Array<{ path: string; content: string }> = []) => files.map((f) => `Instructions from ${f.path}:\n${f.content}`).join("\n\n");

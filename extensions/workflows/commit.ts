@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { hostGit } from "../sandbox/hostgit.ts";
-import { bounded, runProcess } from "./process.ts";
+import { bounded, runProcess, timeoutSignal } from "./process.ts";
 import { completeRole } from "./requests.ts";
 import { configSnapshot, type ConfigSource } from "./roles.ts";
 import { hash, privateDir, readJson, saveJson, scopeRoot, withLock } from "./state.ts";
@@ -35,6 +35,7 @@ const SPLIT_LIMIT = 2 * 1024 * 1024;
 const PROMPT_BYTES = 120_000;
 /** Enough of a cut part to name its unit and path and show how the change starts. */
 const PART_MIN = 240;
+const READ_TIMEOUT_MS = 60_000;
 
 export function parsePorcelainV2(data: string): FileState[] {
   const files: FileState[] = [];
@@ -201,7 +202,7 @@ export async function snapshot(ctx: GitCtx): Promise<{ head: string; files: File
   const files = parsePorcelainV2(raw);
   if (files.some((file) => file.state === "unmerged")) throw new Error("Resolve merge conflicts before /commit");
   if (files.length > 200) throw new Error("Working tree has more than 200 paths; split it before /commit");
-  for (const file of files) file.digest = await digestFile(ctx.repo, file.path);
+  for (const file of files) { ctx.signal.throwIfAborted(); file.digest = await digestFile(ctx.repo, file.path); }
   return { head, files };
 }
 
@@ -544,8 +545,10 @@ export function registerCommit(pi: ExtensionAPI, source: ConfigSource, agentDir:
       try {
         const { cancellable } = await import("./ui.ts");
         await withLock(root, "commit", async () => {
-          const repo = await repoRoot(ctx.cwd, lifetime);
-          const current = await snapshot({ repo, signal: lifetime });
+          // No loader is up yet, so Escape cannot stop these: a stuck Git must not hold the lock for good.
+          const reading = AbortSignal.any([lifetime, timeoutSignal(READ_TIMEOUT_MS, "Git did not finish reading the working tree within a minute")]);
+          const repo = await repoRoot(ctx.cwd, reading);
+          const current = await snapshot({ repo, signal: reading });
           if (!current.files.length) {
             await rm(file, { force: true });
             report(ctx, "Working tree is clean");
