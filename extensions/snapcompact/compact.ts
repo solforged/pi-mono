@@ -3,6 +3,10 @@ import { geometry, NEWLINE_GLYPH, renderFrame, type RenderedFrame, type Shape } 
 export const PRESERVE_KEY = "snapcompact";
 export const MAX_FRAMES = 80;
 export const FRAME_DATA_BYTES_BUDGET = 3_000_000;
+/** The share of the compaction threshold that archive images may take in every request. */
+export const FRAME_TOKEN_SHARE = 0.25;
+/** What frames may cost a request. Bytes keep it sendable; tokens keep it in proportion to the model's window. */
+export type FrameBudget = { bytes?: number; tokens?: number };
 const TOOL_RESULT_MAX = 2000;
 const TOOL_ARG_MAX = 500;
 const TOOL_CALL_MAX = 2000;
@@ -84,6 +88,8 @@ const CHAR_FOLD: Record<string, string> = {
   "\u2010": "-", "\u2011": "-", "\u2013": "-", "\u2014": "-", "\u2212": "-",
   "\u2026": "...", "\u2022": "*", "\u2190": "<-", "\u2192": "->", "\u2194": "<->",
   "\u21d2": "=>", "\u2713": "v", "\u2717": "x",
+  "\u00df": "ss", "\u00e6": "ae", "\u00c6": "AE", "\u0153": "oe", "\u0152": "OE", "\u00f8": "o", "\u00d8": "O",
+  "\u00d7": "x", "\u00ab": '"', "\u00bb": '"', "\u00b7": "*", "\u00a9": "(c)", "\u00b1": "+/-",
 };
 const EMOJI_FOLD: Record<string, string> = {
   "✅": "[OK]", "❌": "[FAIL]", "⚠": "[WARN]", "📁": "[DIR]", "📄": "[FILE]", "📝": "[NOTE]",
@@ -163,53 +169,59 @@ export function serializeConversation(messages: LlmMessage[]) {
   return parts.join("\n\n");
 }
 
+const ascii = (cp: number) => cp >= 0x20 && cp < 0x7f;
+const MARK = /\p{M}/u;
+const WRITTEN = /[\p{L}\p{N}\p{P}\p{S}]/u;
+const UNWRITTEN = /[\p{Cc}\p{Cs}\p{Co}\p{Cn}\p{Extended_Pictographic}]/u;
+
+/**
+ * The transcript as one dense line: whitespace runs collapse, and typography and
+ * accented Latin letters fold to the ASCII the frame font has. Text in other
+ * scripts is kept as written, one cell per code point: an image shows `?` for
+ * it, but the text sections and later summaries still read it.
+ */
 export function normalize(text: string) {
   const collapsed = text.replace(ANSI, "").replace(COLLAPSIBLE, (run) => (/[\n\r\u2028\u2029]/.test(run) ? NEWLINE_GLYPH : " "));
   const out: string[] = [];
+  let kept = false;
   for (const ch of collapsed) {
     const cp = ch.codePointAt(0);
     if (cp === undefined) continue;
-    if (ch === NEWLINE_GLYPH || (cp >= 0x20 && cp < 0x7f) || (cp >= 0xa0 && cp <= 0xff)) {
-      out.push(cp >= 0xa0 && cp <= 0xff ? "?" : ch);
-      continue;
-    }
+    // Marks stay with a letter that was kept as written (Thai and Arabic vowels, Indic signs).
+    if (kept && MARK.test(ch)) { out.push(ch); continue; }
+    kept = false;
+    if (ch === NEWLINE_GLYPH || ascii(cp)) { out.push(ch); continue; }
     if (EMOJI_FOLD[ch]) { out.push(EMOJI_FOLD[ch]!); continue; }
     if (CHAR_FOLD[ch]) { out.push(CHAR_FOLD[ch]!); continue; }
     if (cp >= 0x2500 && cp <= 0x257f) {
       out.push(cp === 0x2502 || cp === 0x2503 ? "|" : cp === 0x2500 || cp === 0x2501 ? "-" : "+");
       continue;
     }
-    const folded = ch.normalize("NFKD").replace(COMBINING, "");
-    if (folded && [...folded].every((part) => {
-      const n = part.codePointAt(0) ?? 0;
-      return (n >= 0x20 && n < 0x7f) || CHAR_FOLD[part];
-    })) {
-      out.push([...folded].map((part) => CHAR_FOLD[part] ?? part).join(""));
-    } else if (!/[\p{Cc}\p{Mn}\p{Me}\p{Cs}\p{Extended_Pictographic}]/u.test(ch)) {
-      out.push("?");
+    const folded = [...ch.normalize("NFKD").replace(COMBINING, "")];
+    if (folded.length && folded.every((part) => ascii(part.codePointAt(0) ?? 0) || CHAR_FOLD[part])) {
+      out.push(folded.map((part) => CHAR_FOLD[part] ?? part).join(""));
+    } else if (WRITTEN.test(ch) && !UNWRITTEN.test(ch)) {
+      out.push(ch);
+      kept = true;
     }
   }
   return out.join("").replace(/ +/g, " ").replace(EDGE_RUNS, "");
 }
 
-function pages(text: string, capacity: number) {
-  const chars = [...text];
-  const out: string[] = [];
-  for (let i = 0; i < chars.length; i += capacity) out.push(chars.slice(i, i + capacity).join(""));
-  return out;
-}
-
+// Pages are counted in code points, one per frame cell, so a character outside
+// the BMP is never cut in half.
 export function planArchive(text: string, shape: Shape, maxFrames = MAX_FRAMES) {
   const cap = geometry(shape).capacity;
-  if (text.length <= 2 * cap) return { frames: [] as string[], textHead: text, textTail: "", keptText: text, truncatedChars: 0 };
-  const textHead = text.slice(0, cap);
-  const textTail = text.slice(-cap);
-  const middle = text.slice(cap, text.length - cap);
-  let kept = pages(middle, cap);
+  const chars = [...text];
+  if (chars.length <= 2 * cap) return { frames: [] as string[], textHead: text, textTail: "", keptText: text, truncatedChars: 0 };
+  const cut = (from: number, to: number) => chars.slice(from, to).join("");
+  const textHead = cut(0, cap);
+  const textTail = cut(chars.length - cap, chars.length);
+  let kept: string[] = [];
+  for (let at = cap; at < chars.length - cap; at += cap) kept.push(cut(at, Math.min(at + cap, chars.length - cap)));
   let truncatedChars = 0;
   if (kept.length > maxFrames) {
-    const dropped = kept.slice(0, kept.length - maxFrames);
-    truncatedChars = dropped.join("").length;
+    truncatedChars = (kept.length - maxFrames) * cap;
     kept = kept.slice(-maxFrames);
   }
   return { frames: kept, textHead, textTail, keptText: textHead + kept.join("") + textTail, truncatedChars };
@@ -241,18 +253,33 @@ function toPlain(text: string) {
   return text.replaceAll(NEWLINE_GLYPH, "\n");
 }
 
-export function historyBlocks(archive: Archive, maxFrameDataBytes = FRAME_DATA_BYTES_BUDGET): HistoryBlock[] {
-  const blocks: HistoryBlock[] = [];
-  let used = 0;
-  const kept: RenderedFrame[] = [];
-  let omitted = archive.omittedFrames ?? 0;
-  for (let i = archive.frames.length - 1; i >= 0; i--) {
-    const frame = archive.frames[i]!;
-    if (used + frame.data.length > maxFrameDataBytes) { omitted++; continue; }
-    used += frame.data.length;
-    kept.push(frame);
+/**
+ * An estimate of what one frame costs a request, read from its PNG header.
+ * Anthropic bills about a token per 750 pixels; other providers are near enough
+ * for a budget.
+ */
+export function frameTokens(frame: { data: string }): number {
+  const header = Buffer.from(frame.data.slice(0, 32), "base64");
+  return header.length < 24 ? Number.POSITIVE_INFINITY : Math.ceil((header.readUInt32BE(16) * header.readUInt32BE(20)) / 750);
+}
+
+// The newest frames that fit, without gaps: once one does not, every older one is left out too.
+function fitting(frames: RenderedFrame[], budget: FrameBudget): RenderedFrame[] {
+  const maxBytes = budget.bytes ?? FRAME_DATA_BYTES_BUDGET, maxTokens = budget.tokens ?? Number.POSITIVE_INFINITY;
+  let first = frames.length;
+  for (let bytes = 0, tokens = 0; first > 0; first--) {
+    const frame = frames[first - 1]!;
+    bytes += frame.data.length;
+    tokens += frameTokens(frame);
+    if (bytes > maxBytes || tokens > maxTokens) break;
   }
-  kept.reverse();
+  return frames.slice(first);
+}
+
+export function historyBlocks(archive: Archive, budget: FrameBudget = {}): HistoryBlock[] {
+  const blocks: HistoryBlock[] = [];
+  const kept = fitting(archive.frames, budget);
+  const omitted = (archive.omittedFrames ?? 0) + archive.frames.length - kept.length;
   const images = kept.map((frame) => ({ type: "image" as const, data: frame.data, mimeType: frame.mimeType }));
   if (archive.textHead) {
     const suffix = images.length ? "\n-------------- imaged middle below\n" : omitted ? "\n-------------- snapcompact image middle omitted\n" : "";
@@ -272,7 +299,7 @@ export function historyBlocks(archive: Archive, maxFrameDataBytes = FRAME_DATA_B
 
 function readingGuide(opts: { frames: number; cols: number; rows: number; truncatedChars: number; files: string }) {
   const imageNote = opts.frames
-    ? `- Some middle sections are attached as images. Each image is a page of that same transcript. A solid black cell marks a newline. A frame is a grid ${opts.cols} characters wide and up to ${opts.rows} rows tall: read left to right, top to bottom; words may break across rows.\n`
+    ? `- Some middle sections are attached as images. Each image is a page of that same transcript. A solid black cell marks a newline. A frame is a grid ${opts.cols} characters wide and up to ${opts.rows} rows tall: read left to right, top to bottom; words may break across rows. A character outside ASCII shows as \`?\`.\n`
     : "";
   const truncated = opts.truncatedChars ? `- About ${opts.truncatedChars} characters of older middle history were dropped to fit the archive budget.\n` : "";
   const files = opts.files ? `FILES\n===================\n${opts.files}\n\n` : "";
@@ -284,7 +311,7 @@ The archived transcript uses compact scopes:
 - A tool call reads \`¶call:name(args)\`. Its \`<out>…</out>\` block is tool output.
 
 Reading HISTORY:
-- Plain-text sections are the verbatim transcript — rely on them exactly.
+- Plain-text sections are that transcript as text. Runs of whitespace, indentation included, are collapsed, and typographic characters are folded to ASCII.
 ${imageNote}${truncated}- When an exact earlier detail matters and a section reads unclearly, re-derive it from the workspace rather than guessing.
 
 ${files}HISTORY
@@ -318,7 +345,12 @@ export function fileOpsLists(fileOps: unknown, previous?: unknown) {
   };
 }
 
-export function compactText(text: string, shape: Shape, extras?: { previousText?: string; previousSummary?: string; maxFrames?: number; maxFrameDataBytes?: number }) {
+// A compaction lays out the whole archive again, and its older pages render to
+// the same bytes each time. Keeping the last archive's frames saves about a
+// second of blocked event loop when it is full.
+let rendered = new Map<string, RenderedFrame>();
+
+export function compactText(text: string, shape: Shape, extras?: { previousText?: string; previousSummary?: string; maxFrames?: number; maxFrameDataBytes?: number; maxFrameTokens?: number }) {
   let archiveText = normalize(text);
   if (extras?.previousText) archiveText = archiveText ? `${extras.previousText}${NEWLINE_GLYPH}${archiveText}` : extras.previousText;
   else if (extras?.previousSummary) {
@@ -330,14 +362,20 @@ export function compactText(text: string, shape: Shape, extras?: { previousText?
   // Newest pages first, stopping at the request budget: older frames could
   // never be sent, and each costs render time and session-file space. Their
   // text stays in the archive for later compactions.
-  const budget = extras?.maxFrameDataBytes ?? FRAME_DATA_BYTES_BUDGET;
+  const maxBytes = extras?.maxFrameDataBytes ?? FRAME_DATA_BYTES_BUDGET, maxTokens = extras?.maxFrameTokens ?? Number.POSITIVE_INFINITY;
   const frames: RenderedFrame[] = [];
-  for (let i = layout.frames.length - 1, used = 0; i >= 0; i--) {
-    const frame = renderFrame(layout.frames[i]!, shape);
-    if (used + frame.data.length > budget) break;
-    used += frame.data.length;
+  const reused = new Map<string, RenderedFrame>();
+  const shapeKey = `${shape.cellWidth}x${shape.cellHeight}@${shape.frameSize}:`;
+  for (let i = layout.frames.length - 1, bytes = 0, tokens = 0; i >= 0; i--) {
+    const key = shapeKey + layout.frames[i]!;
+    const frame = rendered.get(key) ?? reused.get(key) ?? renderFrame(layout.frames[i]!, shape);
+    bytes += frame.data.length;
+    tokens += frameTokens(frame);
+    if (bytes > maxBytes || tokens > maxTokens) break;
+    reused.set(key, frame);
     frames.unshift(frame);
   }
+  rendered = reused;
   const omittedFrames = layout.frames.length - frames.length;
   const textChars = layout.textHead.length + layout.textTail.length;
   const totalChars = frames.reduce((sum, frame) => sum + frame.chars, 0) + textChars;
@@ -363,12 +401,15 @@ export function compactMessages(
     fileOps?: unknown;
     firstKeptEntryId: string;
     tokensBefore: number;
+    /** Estimated tokens the frames may take per request; unlimited when unset. */
+    maxFrameTokens?: number;
   },
 ): CompactResult {
   const shape = resolveShape(opts.model);
   const packed = compactText(serializeConversation(messages), shape, {
     previousText: opts.previousArchive?.text ?? [opts.previousArchive?.textHead, opts.previousArchive?.textTail].filter(Boolean).join(NEWLINE_GLYPH),
     previousSummary: opts.previousSummary,
+    maxFrameTokens: opts.maxFrameTokens,
   });
   const files = fileOpsLists(opts.fileOps, opts.previousDetails);
   const filesText = fileList(files.readFiles, files.modifiedFiles);
@@ -402,9 +443,10 @@ export function injectHistory<T extends { role: string; summary?: string; timest
   messages: T[],
   archive: Archive | undefined,
   vision: boolean,
+  maxFrameTokens?: number,
 ) {
   if (!archive) return messages;
-  const blocks = vision ? historyBlocks(archive) : historyBlocks({ ...archive, frames: [], omittedFrames: 0 }, 0);
+  const blocks = vision ? historyBlocks(archive, { tokens: maxFrameTokens }) : historyBlocks({ ...archive, frames: [], omittedFrames: 0 });
   if (!blocks.length) return messages;
   return messages.map((message) => {
     if (message.role !== "compactionSummary") return message;

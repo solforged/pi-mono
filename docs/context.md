@@ -41,9 +41,19 @@ the compaction extension, which builds on an earlier archive's transcript.
 `/compact` with extra instructions also uses a text summary.
 
 `/snapcompact` shows whether this model will use it and the size of the last
-archive on this branch. Frames are stored on the compaction entry and
-re-attached on every LLM request. Only the newest pages that fit one request
-(3 MB of image data) are rendered; older pages stay in the archive as text.
+archive on this branch, and what it adds to each request. Frames are stored on
+the compaction entry and re-attached on every LLM request. Only the newest
+pages are rendered: as many as fit 3 MB of image data and, in estimated tokens
+(pixels / 750), 25% of the compaction threshold (`FRAME_TOKEN_SHARE`), so a
+small window is not mostly archive again right after compacting. Older pages
+stay in the archive as text.
+
+The transcript is stored as one dense line: runs of whitespace collapse,
+indentation included, and typography and accented Latin letters fold to ASCII.
+Text in other scripts is kept as written. The frame font is ASCII only, so a
+frame shows `?` for it, while the text sections at both ends and any later
+text summary still read it. Such a summary carries the opening and the newest
+part of the transcript, up to 10% of the threshold (`ARCHIVE_CARRY`).
 
 ## Compaction ratio
 

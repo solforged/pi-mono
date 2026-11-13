@@ -4,6 +4,7 @@ import {
   compactMessages,
   compactText,
   fileOpsLists,
+  frameTokens,
   getArchive,
   historyBlocks,
   injectHistory,
@@ -33,6 +34,30 @@ test("normalize folds punctuation, newlines, and box drawing", () => {
   assert.equal(text.includes("\n"), false);
   assert.equal(text.includes(NEWLINE_GLYPH), true);
   assert.match(text, /\+-\+/);
+});
+
+test("normalize folds accented Latin to ASCII and keeps other scripts as written", () => {
+  assert.equal(normalize("café Zürich, Straße, Ærø, ēĀ ＡＢ"), "cafe Zurich, Strasse, AEro, eA AB");
+  // Letters with no ASCII form stay, marks included; the frame font draws them as "?".
+  for (const text of ["日本語のテスト。", "Привет, мир", "ภาษาไทย", "سلام دنیا", "한국어", "x ≥ 2"]) assert.equal(normalize(text), text);
+  assert.equal(normalize("done 🎉 ok\u0301"), "done ok", "emoji and stray marks are dropped");
+  assert.equal(normalize("def f():\n    return 1"), `def f():${NEWLINE_GLYPH}return 1`, "indentation is not kept");
+  const shape = { cellWidth: 8, cellHeight: 22, frameSize: 160 };
+  assert.equal(renderFrame("日й", shape).data, renderFrame("??", shape).data);
+  assert.doesNotMatch(compactMessages([{ role: "user", content: "hi" }], { firstKeptEntryId: "k", tokensBefore: 1 }).summary, /verbatim/);
+});
+
+test("pages are cut between characters, never inside one", () => {
+  const shape = { cellWidth: 8, cellHeight: 22, frameSize: 160 };
+  const cap = geometry(shape).capacity;
+  // An odd offset puts every UTF-16 page boundary inside a surrogate pair.
+  const plan = planArchive(`a${"𠮷".repeat(cap * 5)}`, shape);
+  assert.ok(plan.frames.length >= 3);
+  for (const page of [plan.textHead, plan.textTail, ...plan.frames]) {
+    assert.equal(page.isWellFormed(), true);
+    assert.ok([...page].length <= cap);
+  }
+  assert.equal(plan.keptText, `a${"𠮷".repeat(cap * 5)}`);
 });
 
 test("serializeConversation keeps scopes and truncates tool output", () => {
@@ -117,7 +142,7 @@ test("compactMessages stores frames and injectHistory attaches them for vision m
 test("historyBlocks keep newest frames when the byte budget is tight", () => {
   const shape = { cellWidth: 8, cellHeight: 22, frameSize: 160 };
   const packed = compactText("Hello world. ".repeat(800), shape, { maxFrames: 4 });
-  const tiny = historyBlocks(packed.archive, 800);
+  const tiny = historyBlocks(packed.archive, { bytes: 800 });
   const images = tiny.filter((block) => block.type === "image");
   assert.ok(images.length < packed.archive.frames.length);
   assert.ok(tiny.some((block) => block.type === "text" && /omitted/.test(block.text)));
@@ -140,6 +165,38 @@ test("compaction renders only the newest frames that fit a request and keeps the
   const blocks = historyBlocks(capped.archive);
   assert.equal(blocks.filter((block) => block.type === "image").length, 3);
   assert.ok(blocks.some((block) => block.type === "text" && /5 older snapcompact frames omitted/.test(block.text)));
+});
+
+test("frames are budgeted in estimated tokens, at compaction and again per request", () => {
+  const shape = { cellWidth: 8, cellHeight: 22, frameSize: 160 };
+  const text = "Hello world. ".repeat(800);
+  const full = compactText(text, shape, { maxFrames: 8 });
+  const size = pngSize(full.archive.frames[0]!.data);
+  assert.equal(frameTokens(full.archive.frames[0]!), Math.ceil((size.width * size.height) / 750));
+  assert.equal(frameTokens({ data: "" }), Number.POSITIVE_INFINITY, "an unreadable frame never fits");
+  const newestTwo = full.archive.frames.slice(-2).reduce((sum, frame) => sum + frameTokens(frame), 0);
+  const capped = compactText(text, shape, { maxFrames: 8, maxFrameTokens: newestTwo });
+  assert.deepEqual(capped.archive.frames, full.archive.frames.slice(-2));
+  assert.equal(capped.archive.omittedFrames, 6);
+  // A model with a smaller window may read an archive made for a larger one.
+  const blocks = historyBlocks(full.archive, { tokens: newestTwo });
+  assert.equal(blocks.filter((block) => block.type === "image").length, 2);
+  assert.ok(blocks.some((block) => block.type === "text" && /6 older snapcompact frames omitted/.test(block.text)));
+  const injected = injectHistory([{ role: "compactionSummary", summary: "guide", timestamp: 1 }], full.archive, true, newestTwo)[0] as any;
+  assert.equal(injected.content.filter((block: any) => block.type === "image").length, 2);
+});
+
+test("a later compaction reuses the frames of pages that did not change", () => {
+  const shape = { cellWidth: 8, cellHeight: 22, frameSize: 160 };
+  const lines = (from: number, count: number) => Array.from({ length: count }, (_, i) => `line ${from + i} of the transcript`).join("\n");
+  const first = compactText(lines(0, 100), shape);
+  const second = compactText(lines(100, 50), shape, { previousText: first.archive.text });
+  assert.equal(second.archive.truncatedChars, 0);
+  assert.ok(second.archive.frames.length > first.archive.frames.length);
+  // Every full page of the first archive sits at the same offset in the second.
+  const full = first.archive.frames.slice(0, -1);
+  assert.ok(full.length >= 3);
+  full.forEach((frame, i) => assert.equal(second.archive.frames[i], frame));
 });
 
 test("previousSnapcompact reads the latest compaction archive", () => {

@@ -1,8 +1,12 @@
 import { convertToLlm, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { limitsFor } from "../compaction/plan.ts";
 import {
   compactMessages,
+  FRAME_TOKEN_SHARE,
+  frameTokens,
   getArchive,
+  historyBlocks,
   injectHistory,
   isVision,
   previousSnapcompact,
@@ -27,12 +31,22 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // Frames ride along with every request, so they get a share of the compaction
+  // threshold: a small window would otherwise be mostly archive again right
+  // after compacting. Unlimited when Pi's compaction is off for this model.
+  function frameTokenBudget(ctx: ExtensionContext): number | undefined {
+    const limits = limitsFor(ctx.model, pi.getSettings());
+    return limits ? Math.floor(limits.threshold * FRAME_TOKEN_SHARE) : undefined;
+  }
+
   pi.registerCommand("snapcompact", {
     description: "Show whether snapcompact will archive this model as images",
     handler: async (_args, ctx) => {
       const model = ctx.model;
       const vision = isVision(model);
       const archive = archiveFrom(ctx);
+      const budget = frameTokenBudget(ctx);
+      const sent = archive && vision ? historyBlocks(archive, { tokens: budget }).filter((block) => block.type === "image") : [];
       const lines = [
         `Session: ${model ? `${model.provider}/${model.id}` : "none"}`,
         `Vision: ${vision ? "yes" : "no"}`,
@@ -40,6 +54,7 @@ export default function (pi: ExtensionAPI) {
         archive
           ? `Last archive: ${archive.frames.length} frames, ${archive.totalChars.toLocaleString()} chars${archive.omittedFrames ? `, ${archive.omittedFrames} older pages not imaged` : ""}${archive.truncatedChars ? `, dropped ${archive.truncatedChars.toLocaleString()}` : ""}`
           : "Last archive: none",
+        ...(sent.length ? [`Sent with each request: ${sent.length} frames, about ${sent.reduce((sum, frame) => sum + frameTokens(frame), 0).toLocaleString()} tokens${budget ? ` of a ${budget.toLocaleString()} budget` : ""}`] : []),
       ];
       report(ctx, lines.join("\n"));
     },
@@ -62,6 +77,7 @@ export default function (pi: ExtensionAPI) {
         fileOps: preparation.fileOps,
         firstKeptEntryId: preparation.firstKeptEntryId,
         tokensBefore: preparation.tokensBefore,
+        maxFrameTokens: frameTokenBudget(ctx),
       });
       const archive = result.details.snapcompact;
       ctx.ui.notify(
@@ -81,6 +97,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("context_with_system", async (event, ctx) => {
     const archive = archiveFrom(ctx);
     if (!archive) return;
-    return { messages: injectHistory(event.messages, archive, isVision(ctx.model)) };
+    return { messages: injectHistory(event.messages, archive, isVision(ctx.model), frameTokenBudget(ctx)) };
   });
 }
