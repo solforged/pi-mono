@@ -127,6 +127,14 @@ test("skill drafts stay inactive until the exact diff is approved; stale edits a
   await assert.rejects(stageCandidate(dir, { ...candidate, action: "update", name: "authored" }, [{ name: "authored", path: "/authored", content: skill("authored"), managed: false }]), /owned skill/);
   await symlink(join(dir, "skills/testing-skills"), join(dir, "skills/escape"));
   await assert.rejects(readSkill(dir, "escape"), /symlink/);
+  // A linked agent directory is the user's own layout; only links inside the managed tree are refused.
+  await symlink(dir, join(dir, "linked-home"));
+  const linked = join(dir, "linked-home");
+  assert.equal(await readSkill(linked, "testing-skills"), skill("testing-skills", "User changes"));
+  const second = await stageCandidate(linked, { ...candidate, name: "linking-homes", content: skill("linking-homes") }, []);
+  await applyDraft(linked, second, hash(renderDraft(second)), queue);
+  assert.equal(await readSkill(dir, "linking-homes"), skill("linking-homes"));
+  await assert.rejects(readSkill(linked, "escape"), /symlink/);
   assert.throws(() => parseCandidates(JSON.stringify([{ ...candidate, name: "../escape" }]), new Set(["s:entry"]), 5), /Skill names/);
 });
 

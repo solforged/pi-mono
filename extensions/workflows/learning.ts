@@ -172,7 +172,7 @@ export async function applyDraft(root: string, draft: Draft, approvedHash: strin
   if (draft.action !== "delete") validateSkill(draft.name, draft.content);
   const file = skillPath(root, draft.name);
   await withLock(root, "publish", () => queue(file, async () => {
-    await rejectSymlinks(file);
+    await rejectSymlinks(root, file);
     const current = await readSkill(root, draft.name);
     if (current !== draft.before) throw new Error("Skill changed since this proposal; review a new diff");
     if (draft.action === "create" && current !== null) throw new Error("Skill already exists");

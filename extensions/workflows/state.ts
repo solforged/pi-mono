@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 export function hash(text: string): string { return createHash("sha256").update(text).digest("hex"); }
 export async function scopeRoot(agentDir: string, profile: string, cwd: string): Promise<string> {
@@ -60,11 +60,13 @@ export function skillName(name: unknown): string {
 }
 export function skillPath(root: string, name: string): string { return join(root, "skills", skillName(name), "SKILL.md"); }
 
-// Check each component, including existing parents, before a host-side publication.
-export async function rejectSymlinks(file: string): Promise<void> {
-  const parts = resolve(file).split("/").filter(Boolean);
-  let current = "/";
-  for (const part of parts) {
+// Check each component below the scope root before a host-side publication. The
+// path to the root is the user's own layout (a linked ~/.pi, /tmp on macOS).
+export async function rejectSymlinks(root: string, file: string): Promise<void> {
+  const below = relative(root, file);
+  if (isAbsolute(below) || below.split(sep)[0] === "..") throw new Error(`Managed path is outside its root: ${file}`);
+  let current = root;
+  for (const part of below.split(sep)) {
     current = join(current, part);
     try { if ((await lstat(current)).isSymbolicLink()) throw new Error(`Refusing symlink in managed path: ${current}`); }
     catch (error: any) { if (error.code === "ENOENT") return; throw error; }
@@ -72,7 +74,7 @@ export async function rejectSymlinks(file: string): Promise<void> {
 }
 export async function readSkill(root: string, name: string): Promise<string | null> {
   const file = skillPath(root, name);
-  await rejectSymlinks(file);
+  await rejectSymlinks(root, file);
   try { return await readFile(file, "utf8"); }
   catch (error: any) { if (error.code === "ENOENT") return null; throw error; }
 }
