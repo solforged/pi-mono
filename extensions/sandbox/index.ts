@@ -19,6 +19,7 @@ import { imageTag, Sandbox, type Phase } from "./sandbox.ts";
 import { chooseEnabled, inheritedSwitch, resolveSettings } from "./settings.ts";
 import { savedToggle, saveToggle, togglesFile } from "./toggles.ts";
 import { GUEST_COMMAND, SANDBOX_CHANGED, type GuestCommandRequest } from "./guest.ts";
+import { repath, shareOutput } from "./output.ts";
 import { bashOps, editOps, findOps, grep, lsOps, readOps, writeOps } from "./tools.ts";
 
 const STATUS = "sandbox";
@@ -298,7 +299,28 @@ export default function sandboxExtension(pi: ExtensionAPI) {
   pi.registerTool(route((cwd, s) => createReadToolDefinition(cwd, s ? { operations: readOps(s) } : undefined)));
   pi.registerTool(route((cwd, s) => createWriteToolDefinition(cwd, s ? { operations: writeOps(s) } : undefined)));
   pi.registerTool(route((cwd, s) => createEditToolDefinition(cwd, s ? { operations: editOps(s) } : undefined)));
-  pi.registerTool(route((cwd, s) => createBashToolDefinition(cwd, s ? { operations: bashOps(s) } : { spawnHook: shareCargoTarget })));
+  pi.registerTool({
+    ...createBashToolDefinition(process.cwd()),
+    async execute(id: string, params: any, signal: AbortSignal | undefined, onUpdate: any, ctx: ExtensionContext) {
+      const s = await current();
+      if (!s) return createBashToolDefinition(ctx.cwd, { spawnHook: shareCargoTarget }).execute(id, params, signal, onUpdate, ctx);
+      // Pi saves long output to the host's temp folder and names that file in
+      // the result, where the guest's read and bash cannot reach it. Updates
+      // carry the path even when the command fails, so it is taken from them.
+      let log: string | undefined;
+      const watch = (update: any) => { log = update?.details?.fullOutputPath ?? log; onUpdate?.(update); };
+      const shared = async <T,>(outcome: T): Promise<T> => {
+        const from: string | undefined = (outcome as any)?.details?.fullOutputPath ?? log;
+        if (!from) return outcome;
+        const moved = await shareOutput(from, s.plan.outputDir).catch(() => undefined);
+        return moved ? repath(outcome, from, moved) : outcome;
+      };
+      let result;
+      try { result = await createBashToolDefinition(ctx.cwd, { operations: bashOps(s) }).execute(id, params, signal, watch, ctx); }
+      catch (error) { throw await shared(error); }
+      return shared(result);
+    },
+  });
   // Pi leaves ls, find and grep off unless asked for; registering them here
   // would otherwise switch them on, and their declarations into every request.
   pi.registerTool({ ...route((cwd, s) => createLsToolDefinition(cwd, s ? { operations: lsOps(s) } : undefined)), defaultActive: false });

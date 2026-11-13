@@ -27,6 +27,8 @@ export interface Plan {
   mounts: Mount[];
   readOnlyPaths: string[];
   hostDirs: string[];
+  /** Where long bash output is kept: Pi writes it to the host's temp folder, which the guest cannot see. */
+  outputDir: string;
   env: Record<string, string>;
   labels: Record<string, string>;
   wiki?: string;
@@ -34,6 +36,7 @@ export interface Plan {
 }
 
 export const GUEST_CACHE = "/cache";
+const OUTPUT_LABEL = "command output";
 const OVERLAYS: Array<[manifest: string, dir: string]> = [["package.json", "node_modules"], ["Cargo.toml", "target"], ["pyproject.toml", ".venv"]];
 const hash = (value: string, length = 10) => createHash("sha256").update(value).digest("hex").slice(0, length);
 
@@ -77,6 +80,10 @@ export function buildPlan(probe: Probe, settings: Settings, image: string): Plan
   const shared = join(cacheRoot, "shared");
   hostDirs.push(shared);
   mounts.push({ source: shared, target: GUEST_CACHE, readonly: false, label: "cache" });
+
+  const outputDir = join(cacheRoot, "output", containerName(root));
+  hostDirs.push(outputDir);
+  mounts.push({ source: outputDir, target: outputDir, readonly: true, label: OUTPUT_LABEL });
 
   // Platform-specific build outputs get Linux-only directories per worktree,
   // so the guest never mixes its artifacts with the host's.
@@ -159,7 +166,7 @@ export function buildPlan(probe: Probe, settings: Settings, image: string): Plan
 
   const plan: Plan = {
     name: containerName(root), root, image, cpus: settings.cpus, memory: settings.memory,
-    mounts, readOnlyPaths, hostDirs, env, labels: {}, wiki, wikiBuild,
+    mounts, readOnlyPaths, hostDirs, outputDir, env, labels: {}, wiki, wikiBuild,
   };
   plan.labels = { "pi.sandbox": "1", "pi.sandbox.root": root, "pi.sandbox.config": configHash(plan) };
   return plan;
@@ -184,7 +191,7 @@ export function runArgs(plan: Plan): string[] {
 
 // The model sees host paths unchanged, so it only needs to know what exists.
 export function promptNote(plan: Plan): string {
-  const shown = plan.mounts.filter((m) => m.target === m.source && m.label !== "context");
+  const shown = plan.mounts.filter((m) => m.target === m.source && m.label !== "context" && m.label !== OUTPUT_LABEL);
   const lines = shown.map((m) => `- ${m.target} (${m.label}${m.readonly ? ", read-only" : ""})`);
   return [
     "Your file and shell tools run in a Debian Linux arm64 container, not on the macOS host. Host paths keep their locations; only these are available:",

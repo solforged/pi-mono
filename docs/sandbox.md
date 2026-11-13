@@ -49,6 +49,13 @@ Everything keeps its host path, so paths in sessions and tool output stay valid.
 | Shared folders from settings | read-only unless set otherwise |
 | `~/.agents/skills`, Pi's installation and docs, `~/.config/git` | read-only |
 | `/cache` (`~/.cache/pi-sandbox/shared`) | mise, Cargo, Go, npm, and uv caches |
+| `~/.cache/pi-sandbox/output/<container>` | read-only: full output of long bash commands |
+
+Pi saves bash output it had to cut to a file in the host's temp folder. With
+the sandbox on, that file moves to the output folder above, so the path in the
+result works for `read` and for bash in the guest. Logs older than a week are
+deleted when the sandbox starts. Output of your own `!` commands stays in the
+host's temp folder.
 
 Inside writable mounts, Git `config` and `hooks`, a worktree's `.git` file, and
 the project's `.pi/` are read-only: host Git and Pi act on those without you

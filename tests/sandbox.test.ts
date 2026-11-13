@@ -7,6 +7,7 @@ import test from "node:test";
 import { sharedTarget, shareCargoTarget } from "../extensions/sandbox/cargo.ts";
 import { ContainerCli, EXEC_ID, runProcess, STOP_SCRIPT, type RunOptions, type RunResult } from "../extensions/sandbox/container.ts";
 import { commandEnv, fdArgs, GREP_SCRIPT, GrepCollector, guestError, parseListing, rgArgs, sniffImage } from "../extensions/sandbox/guest.ts";
+import { repath, shareOutput } from "../extensions/sandbox/output.ts";
 import { buildPlan, containerName, promptNote, runArgs, type Probe } from "../extensions/sandbox/plan.ts";
 import { imageTag, Sandbox, withLock } from "../extensions/sandbox/sandbox.ts";
 import { chooseEnabled, DEFAULTS, inheritedSwitch, resolveSettings } from "../extensions/sandbox/settings.ts";
@@ -148,6 +149,11 @@ test("run arguments carry mounts, guards, labels, and environment but no host se
   assert.deepEqual(args.slice(-3), ["pi-sandbox:abc", "sleep", "infinity"]);
   assert(!args.some((arg) => /API_KEY|TOKEN/.test(arg)));
   assert.match(promptNote(plan), /git_commit/);
+  // Long bash output is kept where the guest can read it, at the host's path, and not listed in the prompt.
+  assert.equal(plan.outputDir, `/Users/me/.cache/pi-sandbox/output/${plan.name}`);
+  assert(args.includes(`type=bind,source=${plan.outputDir},target=${plan.outputDir},readonly`));
+  assert(plan.hostDirs.includes(plan.outputDir));
+  assert.doesNotMatch(promptNote(plan), /output/);
   assert.notEqual(buildPlan(probe(), { ...DEFAULTS, cpus: 2 }, "pi-sandbox:abc").labels["pi.sandbox.config"], plan.labels["pi.sandbox.config"]);
 });
 
@@ -211,6 +217,23 @@ test("guest errors and environment stay narrow", () => {
   assert.deepEqual(commandEnv({ PI_SESSION_ID: "s", ANTHROPIC_API_KEY: "k", PATH: "/bin", PI_SESSION_FILE: "/f" }), { PI_SESSION_ID: "s" });
   assert.equal(sniffImage(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), "image/png");
   assert.equal(sniffImage(Buffer.from("text")), null);
+});
+
+test("long bash output moves to the folder the guest can read", async (t) => {
+  const dir = await temporary(t);
+  const log = join(dir, "tmp", "pi-bash-0123456789abcdef.log");
+  await mkdir(join(dir, "tmp"));
+  await writeFile(log, "all of it\n");
+  const moved = await shareOutput(log, join(dir, "output"));
+  assert.equal(moved, join(dir, "output", "pi-bash-0123456789abcdef.log"));
+  assert.equal(await readFile(moved, "utf8"), "all of it\n");
+  assert(!existsSync(log));
+  // The result, and an error thrown for a failed or cancelled command, name the new path.
+  const result = { content: [{ type: "text", text: `tail\n[Showing lines 5-9 of 9. Full output: ${log}]` }], details: { fullOutputPath: log, truncation: { truncated: true, totalLines: 9 } }, structuredContent: { full_output_path: log, exit_code: 0 } };
+  assert.deepEqual(repath(result, log, moved), { content: [{ type: "text", text: `tail\n[Showing lines 5-9 of 9. Full output: ${moved}]` }], details: { fullOutputPath: moved, truncation: { truncated: true, totalLines: 9 } }, structuredContent: { full_output_path: moved, exit_code: 0 } });
+  const error = new Error(`[Showing lines 5-9 of 9. Full output: ${log}]\nCommand aborted`);
+  assert.equal(repath(error, log, moved), error);
+  assert.equal(error.message, `[Showing lines 5-9 of 9. Full output: ${moved}]\nCommand aborted`);
 });
 
 test("image tags follow the image directory contents", async (t) => {
