@@ -30,8 +30,9 @@ jobs keep their models. Without a name it opens a picker, or lists the presets
 outside the TUI.
 
 The session records its preset, so resume, fork, and Rex children follow it.
-The last choice also starts each new session, unless `--model` or `--provider`
-names the main model. Sessions that never chose a preset use the profile's
+The last choice also starts each new session, unless `--model`, `--models` or
+`--provider` names the main model; `--thinking` keeps its level under the
+preset's model. Sessions that never chose a preset use the profile's
 default (`openai`) roles and Pi's own default main model. The choice is kept in
 `<agent-dir>/workflow-state/<profile>/preset.json`.
 

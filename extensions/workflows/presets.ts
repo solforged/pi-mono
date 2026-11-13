@@ -17,18 +17,20 @@ export const describeLineup = (config: Config) => [
 const summary = (config: Config) => [["main", config.main], ["advisor", config.roles.advisor], ["task", config.roles.task]]
   .map(([label, r]) => `${label} ${(r as Ref)?.model ?? "-"}`).join(" · ");
 
-/** Explicit --model/--provider flags keep their main model in a fresh session. */
-export const cliChoosesModel = (argv = process.argv.slice(2)) => argv.some((arg) => /^--(model|provider)(=|$)/.test(arg));
+/** Explicit --model, --models or --provider flags keep their main model in a fresh session. */
+export const cliChoosesModel = (argv: string[]) => argv.some((arg) => /^--(model|models|provider)(=|$)/.test(arg));
+/** An explicit --thinking keeps its level under the remembered preset's model. */
+export const cliChoosesThinking = (argv: string[]) => argv.some((arg) => /^--thinking(=|$)/.test(arg));
 
 // A session records its preset as a branch entry, so resume, fork and Rex (which reads
 // the branch) agree. Only an explicit /modelpreset, or a fresh session starting with the
 // remembered choice, changes the main model; role edits and profiles never do.
-export function registerPresets(pi: ExtensionAPI, store: RoleStore, agentDir: string, signal: AbortSignal, report: Report) {
-  async function setMain(ctx: ExtensionContext, main: MainModel) {
+export function registerPresets(pi: ExtensionAPI, store: RoleStore, agentDir: string, signal: AbortSignal, report: Report, argv = process.argv.slice(2)) {
+  async function setMain(ctx: ExtensionContext, main: MainModel, thinking = true) {
     const model = ctx.modelRegistry.find(main.provider, main.model);
     if (!model) throw new Error(`Model not registered: ${main.provider}/${main.model}`);
     if (!await pi.setModel(model)) throw new Error(`No configured authentication: ${main.provider}/${main.model}`);
-    pi.setThinkingLevel(main.thinking);
+    if (thinking) pi.setThinkingLevel(main.thinking);
   }
   function warn(ctx: ExtensionContext, text: string) {
     if (ctx.hasUI) ctx.ui.notify(text, "warning"); else console.error(text);
@@ -51,8 +53,8 @@ export function registerPresets(pi: ExtensionAPI, store: RoleStore, agentDir: st
     const remembered = await rememberedPreset(agentDir, current.profile);
     if (remembered === undefined) return;
     const next = await store.lineup(remembered);
-    if (next.main && !cliChoosesModel()) {
-      try { await setMain(ctx, next.main); }
+    if (next.main && !cliChoosesModel(argv)) {
+      try { await setMain(ctx, next.main, !cliChoosesThinking(argv)); }
       catch (error) { warn(ctx, `Model preset ${remembered}: kept the current main model. ${(error as Error).message}`); }
     }
     store.adopt(next);

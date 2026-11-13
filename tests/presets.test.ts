@@ -12,7 +12,7 @@ const models = (missing = "") => ({
   find: (provider: string, id: string) => id === missing ? undefined : { provider, id, maxTokens: 128000, reasoning: true },
 });
 
-async function harness(t: any, branch: unknown[] = []) {
+async function harness(t: any, branch: unknown[] = [], argv: string[] = []) {
   const dir = await temporary(t);
   const store = await RoleStore.create(root, dir, "personal");
   const calls = { models: [] as string[], thinking: [] as string[], entries: [] as any[], reports: [] as string[], warnings: [] as string[] };
@@ -25,7 +25,7 @@ async function harness(t: any, branch: unknown[] = []) {
     setThinkingLevel: (level: string) => { calls.thinking.push(level); },
     appendEntry: (type: string, data: unknown) => { calls.entries.push({ type: "custom", customType: type, data }); },
   } as any;
-  registerPresets(pi, store, dir, new AbortController().signal, (_ctx, text) => calls.reports.push(text));
+  registerPresets(pi, store, dir, new AbortController().signal, (_ctx, text) => calls.reports.push(text), argv);
   const ctx = (modelRegistry: any = models()) => ({
     mode: "print", hasUI: false, waitForIdle: async () => {}, modelRegistry,
     ui: { notify: (text: string) => calls.warnings.push(text) },
@@ -84,8 +84,26 @@ test("fresh sessions start with the remembered preset; older ones keep the profi
   assert.match(stale.calls.warnings[0], /Unknown preset personal.removed/);
   assert.equal(stale.store.snapshot().preset, "openai");
 
-  assert.ok(cliChoosesModel(["--model", "x"]) && cliChoosesModel(["--provider=openai"]));
-  assert.ok(!cliChoosesModel(["--models", "x", "-p", "--model-free"]));
+  assert.ok(cliChoosesModel(["--model", "x"]) && cliChoosesModel(["--provider=openai"]) && cliChoosesModel(["--models", "a,b"]));
+  assert.ok(!cliChoosesModel(["-p", "--model-free", "--thinking", "low"]));
+});
+
+test("explicit model and thinking flags outrank the remembered preset; its roles still apply", async (t) => {
+  for (const [argv, models, thinking] of [
+    [["--thinking", "low"], ["anthropic/claude-opus-5-5"], []],
+    [["--models", "sonnet,haiku"], [], []],
+    [["--model=sonnet:high"], [], []],
+    [[], ["anthropic/claude-opus-5-5"], ["high"]],
+  ] as const) {
+    const fresh = await harness(t, [], [...argv]);
+    await saveJson(rememberedPresetFile(fresh.dir, "personal"), { preset: "anthropic" });
+    await fresh.handlers.session_start({}, fresh.ctx());
+    assert.deepEqual([fresh.calls.models, fresh.calls.thinking], [models, thinking], argv.join(" "));
+    assert.equal(fresh.store.snapshot().preset, "anthropic");
+  }
+  const explicit = await harness(t, [], ["--thinking", "low"]);
+  await explicit.command.handler("anthropic", explicit.ctx());
+  assert.deepEqual(explicit.calls.thinking, ["high"], "/modelpreset is the explicit switch and sets the preset's level");
 });
 
 test("Rex and other branch readers resolve the session's preset", async (t) => {
