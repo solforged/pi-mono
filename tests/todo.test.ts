@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import test from "node:test";
-import { apply, empty, format, ordered, reminder, restore, section, upNext, valid, withParentTodos, type List } from "../extensions/todo/store.ts";
+import { apply, empty, format, ordered, reminder, restated, restore, section, upNext, valid, withParentTodos, type List } from "../extensions/todo/store.ts";
 import { root, noModel } from "./helpers.ts";
 
 const result = (list: List, isError = false) => ({ type: "message", message: { role: "toolResult", toolName: "todo", isError, details: { action: "add", ...list } } });
@@ -66,6 +66,8 @@ test("listings, prompt section, reminder and child context stay bounded", () => 
   const finished = apply(build(["x"]), { action: "update", id: 1, change: { status: "done" } }).list;
   assert.equal(section(finished), undefined);
   assert.equal(reminder(finished, 1), undefined);
+  assert.equal(restated(list), "The todo list has changed since the <todos> section above was written. Open items now:\n#3 [in_progress] c\n#2 [pending] b");
+  assert.equal(restated(finished), "The todo list has changed since the <todos> section above was written. No items are open now.");
   const long = section(build(Array.from({ length: 30 }, (_, i) => `item ${i}`)), 20, 300)!;
   assert.ok(long.length < 320);
   assert.match(long, /\n… \d+ more$/);

@@ -29,6 +29,13 @@ While the tool is active, each run adds a `<todos>` section to the system
 prompt listing open items, at most 20 items or 2,000 characters, so the list
 remains in view after compaction. Pi updates the section only when it changes.
 
+Pi takes a section only when a run starts, so in a long run, such as a goal
+loop, the section is as old as that start. A compaction inside the run replays
+it and summarizes away the calls that changed the list since. When the list
+differs by then, the extension adds one hidden message after the summary with
+the open items as they are now. This appends to the conversation, so it costs
+no prompt cache.
+
 ## Reminders
 
 When the agent stops with open items, the extension adds a reminder listing

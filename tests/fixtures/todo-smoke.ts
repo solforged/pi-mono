@@ -12,7 +12,7 @@ const render = (component: any) => component.render(200).map((line: string) => l
 
 export default function (pi: ExtensionAPI) {
   const entries: any[] = [], events: Record<string, any> = {}, commands: Record<string, any> = {}, renderers: Record<string, any> = {};
-  const bus: Record<string, any> = {};
+  const bus: Record<string, any> = {}, sent: any[] = [];
   let tool: any, active = ["todo"];
   install({
     on: (event: string, fn: any) => { events[event] = fn; },
@@ -21,6 +21,7 @@ export default function (pi: ExtensionAPI) {
     registerCommand: (name: string, options: any) => { commands[name] = options; },
     registerMessageRenderer: (type: string, fn: any) => { renderers[type] = fn; },
     appendEntry: (customType: string, data: unknown) => { entries.push({ type: "custom", customType, data }); },
+    sendMessage: (message: any) => { sent.push(message); },
     getActiveTools: () => active,
   } as any);
 
@@ -60,6 +61,23 @@ export default function (pi: ExtensionAPI) {
         event.systemPromptOptions.selectedTools = [];
         await events.before_agent_start(event, fake);
         assert.equal(event.systemPromptOptions.sections.todos, undefined);
+
+        // The section is as old as the run. A compaction inside the run restates a list that changed since.
+        await events.before_agent_start(prompt(), fake);
+        await events.session_compact({}, fake);
+        assert.deepEqual(sent, []);
+        await run({ action: "update", id: 2, status: "blocked", note: "needs a release" });
+        await events.session_compact({}, fake);
+        assert.deepEqual(sent, [{ customType: "todo-state", display: false,
+          content: "The todo list has changed since the <todos> section above was written. Open items now:\n#1 [in_progress] write tests\n#2 [blocked] ship (note: needs a release)" }]);
+        active = [];
+        await events.session_compact({}, fake);
+        active = ["todo"];
+        // Between runs the next start refreshes the section instead.
+        await events.agent_settled({}, fake);
+        await events.session_compact({}, fake);
+        assert.equal(sent.length, 1);
+        await run({ action: "update", id: 2, status: "pending", note: "" });
 
         // Reminders need progress since the last one, stop at three, and reset per user prompt.
         const settle = (extra: any = {}) => events.agent_before_settle({ entries: [], outcome: "completed", ...extra }, ui);

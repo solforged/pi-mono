@@ -147,6 +147,12 @@ export function section(list: List, maxItems = 20, maxChars = 2000): string | un
   return lines.join("\n");
 }
 
+// Sent after a compaction inside a run, when the prompt section predates the list.
+export function restated(list: List): string {
+  const text = section(list);
+  return `The todo list has changed since the <todos> section above was written. ${text ? `Open items now:\n${text}` : "No items are open now."}`;
+}
+
 // Sent when the agent stops with open items.
 export function reminder(list: List, count: number): string | undefined {
   const text = section(list);

@@ -5,7 +5,7 @@ import { Type } from "typebox";
 import { DISCUSS } from "../ask/model.ts";
 import { showPanel } from "./panel.ts";
 import {
-  apply, counts, empty, format, limits, open, reminder, restore, section, statuses, tally, withParentTodos,
+  apply, counts, empty, format, limits, open, reminder, restated, restore, section, statuses, tally, withParentTodos,
   type Item, type List, type Operation, type Status,
 } from "./store.ts";
 import { resultRows, widgetLines } from "./view.ts";
@@ -20,6 +20,8 @@ export default function (pi: ExtensionAPI) {
   let reminders = 0;     // Reminders sent since the user's last prompt.
   let progressed = false; // A tool ran since that prompt or the last reminder.
   let discussing = false; // The user ended an ask to talk; cleared when the next run starts.
+  let running = false;    // Between a run's start and its settle.
+  let prompted: string | undefined; // The <todos> section that run's prompt carries.
 
   function refresh(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
@@ -46,8 +48,19 @@ export default function (pi: ExtensionAPI) {
     const sections = event.systemPromptOptions.sections;
     const text = event.systemPromptOptions.selectedTools?.includes("todo") ? section(list) : undefined;
     if (text) sections.todos = text; else delete sections.todos;
+    running = true; prompted = text;
   });
+  pi.on("agent_settled", () => { running = false; });
   pi.on("tool_execution_end", () => { progressed = true; });
+
+  // Pi takes a section only when a run starts, so a compaction inside a long
+  // run replays the list from that start and summarizes away the calls that
+  // changed it since. Restate the list once, after the summary. Between runs
+  // the next start refreshes the section itself.
+  pi.on("session_compact", () => {
+    if (!running || !pi.getActiveTools().includes("todo") || section(list) === prompted) return;
+    pi.sendMessage({ customType: "todo-state", content: restated(list), display: false });
+  });
 
   // Remind the agent once per stop while it keeps making progress, at most three
   // times per prompt. Aborted runs skip this event; print and JSON runs are left alone.
