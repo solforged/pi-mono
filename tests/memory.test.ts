@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { load, matches, mentions, plain, SECTION, section, type Term, TERMS_TYPE, termId, termsMessage, type WikiContext, wikiDir } from "../extensions/memory/context.ts";
 import { register, seenTerms, status } from "../extensions/memory/session.ts";
-import { command, execute, preview, TOOL } from "../extensions/memory/tool.ts";
+import { command, execute, preview, runWiki, TOOL } from "../extensions/memory/tool.ts";
 import { root, temporary } from "./helpers.ts";
 
 const terms: Term[] = [
@@ -212,6 +212,17 @@ test("tool actions map to wiki arguments; flags cannot be smuggled in as a term"
   assert.equal(preview({ action: "term", term: "X", text: "y", replace: true }, "work").title, "Change an entry in the work glossary?");
   assert.match(preview({ action: "now", text: "* é" }, "work").body, /^\* é\n\n4 bytes\./);
   assert.equal(preview({ action: "now", text: "x" }, "work").title, "Replace work/now.md?");
+});
+
+test("wiki output keeps characters that straddle two pipe reads", async t => {
+  const dir = await temporary(t);
+  const binary = join(dir, "wiki");
+  // An odd first byte puts every 64 KiB boundary inside a three-byte character.
+  await writeFile(binary, `#!/bin/sh\nprintf a\nhead -c 600000 ${join(dir, "text")}\n`);
+  await writeFile(join(dir, "text"), "語".repeat(200_000));
+  await chmod(binary, 0o755);
+  const { stdout } = await runWiki(binary, ["read"], dir);
+  assert.equal(stdout, `a${"語".repeat(200_000)}`);
 });
 
 test("reads run directly; writes run only after the user confirms", async t => {

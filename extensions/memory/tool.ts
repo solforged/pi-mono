@@ -70,6 +70,9 @@ export function runWiki(binary: string, args: string[], cwd: string, input?: str
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { cwd, signal, timeout, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "", stderr = "";
+    // Decoded as streams: appending raw chunks splits a character that straddles two of them.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     child.stdout.on("data", chunk => { stdout += chunk; });
     child.stderr.on("data", chunk => { stderr += chunk; });
     child.on("error", reject);
