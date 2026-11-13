@@ -21,6 +21,7 @@ import { completionRenderer, toolRenderers } from "./render.ts";
 import { switchTools, TOOLS_ENTRY } from "./tools.ts";
 import { registerRexTitle, setTitlePrefix } from "./title.ts";
 import { agentsTabLabel, MARKS, pickMark } from "./tabs.ts";
+import { REX_WORKERS, type RexWorkersRequest } from "./workers.ts";
 
 const str = () => Type.Optional(Type.String());
 import { activityLine, fitResults, oneLine, priority, rows, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
@@ -134,6 +135,41 @@ export default async function (pi: ExtensionAPI) {
     await deck?.stop();
     await runner.shutdown();
   });
+  // Watched workflowz pools run their items on managed children (see workers.ts).
+  pi.events.on(REX_WORKERS, (data) => {
+    const request = data as RexWorkersRequest;
+    if (lifetime.signal.aborted || currentCtx?.mode !== "tui" || process.env.PI_REX_CHILD) return;
+    request.answer = {
+      async open(agent, title, ctx, signal) {
+        const config = await loadConfig(root, runner.agentDir, ctx.sessionManager.getBranch());
+        const run = await runner.open(agent, config, ctx, instructions, AbortSignal.any([signal, lifetime.signal]), r => pi.appendEntry("rex-run", { id: r.id, profile: r.profile }), title);
+        return run.id;
+      },
+      async run(child, task, context, signal, title) {
+        const combined = AbortSignal.any([signal, lifetime.signal]);
+        const submitted = await runner.submit(child, task, context, combined, false, title);
+        let done: TaskRun;
+        try { done = await runner.wait(submitted.id, combined); }
+        catch (error) {
+          if (!combined.aborted) throw error;
+          // Cancel the task and read its receipt, so the child can close and its spend is counted.
+          let usage: Usage | undefined;
+          try {
+            await runner.cancel(child);
+            await runner.wait(submitted.id, AbortSignal.any([lifetime.signal, AbortSignal.timeout(15_000)]));
+            usage = await runner.collect(submitted.id);
+          } catch { /* The receipt stays unread; Rex keeps the child's files. */ }
+          throw Object.assign(error instanceof Error ? error : new Error(String(error)), { usage });
+        }
+        const usage = await runner.collect(done.id);
+        const run = runner.runs.get(child)!;
+        return { status: done.status as "succeeded" | "failed" | "cancelled", text: done.text, usage, provider: run.provider, model: run.model,
+          worktree: run.worktree, sessionFile: run.sessionFile, elapsedMs: done.elapsedMs };
+      },
+      close: (child) => runner.closeIdle(child),
+    };
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     currentCtx = ctx;
     const savedMark = (ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "rex-mark").at(-1) as any)?.data?.mark;
