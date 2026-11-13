@@ -29,7 +29,9 @@ from a session abandoned inside the band, is wasted.
 
 `pm-compaction-smoke` runs the installed Pi against a scripted slow agent
 and summarizer, with and without the extension, and reports how long each
-compaction blocked the run.
+compaction blocked the run. It fails when the extension's summary did not
+commit, ran above low thinking, or was not prepared in the background. Run it
+after a Pi upgrade: the extension calls Pi's internal `compact()` by position.
 
 ## Snapcompact
 

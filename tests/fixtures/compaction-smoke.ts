@@ -2,7 +2,8 @@
 // without the compaction extension. No model, network or credentials.
 // node tests/fixtures/compaction-smoke.ts [--json] [--keep]
 // Reports how long each compaction blocked the run, which summaries were requested at
-// which thinking level, and whether the context after compaction is intact.
+// which thinking level, and whether the context after compaction is intact. Exits 1
+// when the extension's summary did not commit, as after a change to Pi's compact().
 import { spawn, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -73,7 +74,25 @@ async function check(variant: string, extensions: string[]) {
   } finally { if (!keep) await rm(dir, { recursive: true, force: true }); }
 }
 
+// The extension passes positional arguments to Pi's internal compact() through `as any`.
+// Were an upgrade to move one, the background summary would fail without a word and every
+// compaction would fall back to Pi's default after a wasted attempt. These are the signs.
+function problems(r: Awaited<ReturnType<typeof check>>, extension: boolean) {
+  const found: string[] = [];
+  if (!r.settled || !r.finished) found.push("the run did not finish");
+  if (!r.compactions.length) found.push("nothing was compacted");
+  if (r.errors.length) found.push(`compaction failed: ${r.errors.join("; ")}`);
+  if (!extension) return found;
+  if (!r.kept.every(k => k.fromExtension)) found.push("a compaction used Pi's default summary, not the extension's");
+  if (!r.summaries.every(s => s.reasoning === "low")) found.push(`summaries ran at ${r.summaries.map(s => s.reasoning).join(", ")} thinking, not low`);
+  if (!r.summaries.some(s => s.beforeThreshold)) found.push("no summary was prepared in the background");
+  return found;
+}
+
 const rows = [await check("pi alone", []), await check("with compaction", ["extensions/compaction/index.ts"])];
+const failures = rows.flatMap((r, i) => problems(r, i === 1).map(problem => `${r.variant}: ${problem}`));
+for (const failure of failures) console.error(`FAILED ${failure}`);
+if (failures.length) process.exitCode = 1;
 if (json) console.log(JSON.stringify(rows, null, 2));
 else {
   console.log(`Agent turns take ${TURN_MS}ms, a summary takes ${SUMMARY_MS}ms; thinking is xhigh.`);
