@@ -130,7 +130,8 @@ named directory and everything below it.
 
 `wiki` is `"rw"`, `"ro"`, or `"off"`. `image` replaces the built image with your
 own, which must provide `/usr/local/libexec/pi-sandbox/pi-run`, `rg`, and `fd`
-(and `browser-sshd` with OpenSSH's server for the browser); building `FROM` the
+(and `browser-sshd` with OpenSSH's server for the browser, and `/usr/bin/node`
+for the [workflowz](workflowz.md) kernel); building `FROM` the
 default image is simplest.
 
 ## Sessions and children

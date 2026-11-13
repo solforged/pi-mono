@@ -5,7 +5,7 @@ FROM docker.io/library/debian:trixie-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bash build-essential ca-certificates curl fd-find file git golang-go jq \
-      less libssl-dev openssh-server pkg-config procps python3 ripgrep unzip \
+      less libssl-dev nodejs openssh-server pkg-config procps python3 ripgrep unzip \
       xz-utils zstd \
  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
  && rm -rf /var/lib/apt/lists/* \

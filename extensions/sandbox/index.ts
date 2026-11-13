@@ -18,6 +18,7 @@ import { cacheRoot, findRoot, probe } from "./probe.ts";
 import { imageTag, Sandbox, type Phase } from "./sandbox.ts";
 import { chooseEnabled, inheritedSwitch, resolveSettings } from "./settings.ts";
 import { savedToggle, saveToggle, togglesFile } from "./toggles.ts";
+import { GUEST_COMMAND, SANDBOX_CHANGED, type GuestCommandRequest } from "./guest.ts";
 import { bashOps, editOps, findOps, grep, lsOps, readOps, writeOps } from "./tools.ts";
 
 const STATUS = "sandbox";
@@ -183,6 +184,8 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     // Children inherit this: workflow subagents through the environment, Rex children explicitly.
     process.env.PI_SANDBOX = next ? "on" : "off";
     process.env.PI_SANDBOX_FROM = String(process.pid);
+    // Long-lived processes started for the other setting (the workflowz kernel) stop now.
+    pi.events.emit(SANDBOX_CHANGED, { enabled: next });
   }
   async function apply(next: boolean, ctx: ExtensionContext, why: string) {
     enabled = next; source = why;
@@ -278,6 +281,13 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     return [`Sandbox ${phase}: ${plan.name} (${plan.image}, ${plan.cpus} CPUs, ${plan.memory})`, "Mounts:", ...mounts,
       ...(plan.readOnlyPaths.length ? ["Read-only in the guest:", ...plan.readOnlyPaths.map((path) => `  ${path}`)] : [])].join("\n");
   }
+
+  // Other extensions run long-lived guest processes through this request, which
+  // fails closed like the tools: `answer` resolves to undefined only when off.
+  pi.events.on(GUEST_COMMAND, (data) => {
+    const request = data as GuestCommandRequest;
+    request.answer = current().then((s) => s?.command(request.argv, { cwd: request.cwd }));
+  });
 
   const route = <T extends { execute: (...args: any[]) => any }>(make: (cwd: string, sandbox?: Sandbox) => T) => ({
     ...make(process.cwd()),

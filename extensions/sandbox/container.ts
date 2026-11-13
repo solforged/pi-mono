@@ -110,9 +110,12 @@ export class ContainerCli {
     child.unref();
   }
   exec(name: string, argv: string[], options: RunOptions & { cwd?: string; env?: Record<string, string> } = {}) {
-    const args = ["exec", ...(options.input !== undefined ? ["--interactive"] : [])];
+    return this.run(this.bin, this.execArgs(name, argv, { ...options, interactive: options.input !== undefined }), options);
+  }
+  execArgs(name: string, argv: string[], options: { cwd?: string; env?: Record<string, string>; interactive?: boolean } = {}) {
+    const args = ["exec", ...(options.interactive ? ["--interactive"] : [])];
     if (options.cwd) args.push("--workdir", options.cwd);
     for (const [key, value] of Object.entries(options.env ?? {})) args.push("--env", `${key}=${value}`);
-    return this.run(this.bin, [...args, name, ...argv], options);
+    return [...args, name, ...argv];
   }
 }

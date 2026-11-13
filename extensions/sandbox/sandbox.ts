@@ -150,6 +150,12 @@ export class Sandbox {
     if (result.code !== 0) void this.log(`wiki build failed: ${result.stderr.trim()}`);
   }
 
+  /** A command line for a long-lived guest process whose stdin and stdout the caller streams. */
+  async command(argv: string[], options: { cwd?: string; env?: Record<string, string> } = {}) {
+    await this.ensure();
+    return { command: this.options.cli.bin, args: this.options.cli.execArgs(this.plan.name, argv, { ...options, interactive: true }) };
+  }
+
   async exec(argv: string[], options: RunOptions & { cwd?: string; env?: Record<string, string> } = {}): Promise<RunResult> {
     await this.ensure();
     const result = await this.options.cli.exec(this.plan.name, argv, options);
