@@ -290,7 +290,9 @@ export default function sandboxExtension(pi: ExtensionAPI) {
     if (!plan) return "Sandbox starting.";
     const mounts = plan.mounts.map((m) => `  ${m.target}${m.target !== m.source ? ` <- ${m.source}` : ""} (${m.label}${m.readonly ? ", read-only" : ""})`);
     const phase = !box || box.phase === "idle" ? "not started (starts on the first tool call)" : box.phase;
-    return [`Sandbox ${phase}: ${plan.name} (${plan.image}, ${plan.cpus} CPUs, ${plan.memory})`, "Mounts:", ...mounts,
+    // The lists below are what this session asked for, which a borrowed container does not have.
+    const borrowed = box?.borrowed ? ["Another session started this container with different settings, and it keeps them until that session ends. /sandbox restart applies the ones below now, and interrupts commands the other session is running."] : [];
+    return [`Sandbox ${phase}: ${plan.name} (${plan.image}, ${plan.cpus} CPUs, ${plan.memory})`, ...borrowed, "Mounts:", ...mounts,
       ...(plan.readOnlyPaths.length ? ["Read-only in the guest:", ...plan.readOnlyPaths.map((path) => `  ${path}`)] : [])].join("\n");
   }
 

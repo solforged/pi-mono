@@ -183,7 +183,10 @@ Pi processes in the same worktree share one container. Each holds a lease, and
 the last to exit deletes it; containers left by crashed sessions are removed on
 the next start. `/new`, `/resume`, `/fork`, and `/reload` keep the container and
 whatever is running in it, unless the new session resolves to different
-sandbox settings or another project. A session that moves to another checkout
+sandbox settings or another project. A session whose settings differ from
+those of a container other sessions are using borrows it as it is until they
+end; `/sandbox` says so, and `/sandbox restart` applies its settings at once.
+A session that moves to another checkout
 of the same repository with the sandbox on (`enter_worktree`, `/wt`) keeps it
 on unless that checkout has its own saved toggle: the model can make that
 move, so it must not be a way out. Subagent and Rex children follow the

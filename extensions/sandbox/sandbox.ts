@@ -113,6 +113,8 @@ const UNUSED_AGE_MS = 30 * 24 * 3600 * 1000;
 export class Sandbox {
   phase: Phase = "idle";
   error?: Error;
+  /** The container was started by another session with other settings, and keeps them while that session lasts. */
+  borrowed = false;
   private starting?: Promise<void>;
   private readonly pid: number;
   private readonly alive: (pid: number) => boolean;
@@ -183,6 +185,7 @@ export class Sandbox {
       const others = (await this.liveLeases(this.plan.name)).filter((pid) => pid !== this.pid);
       const info = await cli.inspect(this.plan.name);
       const same = info?.labels["pi.sandbox.config"] === this.plan.labels["pi.sandbox.config"];
+      this.borrowed = !!info?.running && !same && others.length > 0;
       if (info?.running && (same || others.length)) {
         if (!same) void this.log(`reusing ${this.plan.name} with different settings; it restarts when its other sessions end`);
         return;

@@ -463,6 +463,21 @@ test("a session starting while its container is being deleted waits, then starts
   assert(running.has(plan.name));
 });
 
+test("a container another session started with other settings is borrowed, and says so", async (t) => {
+  const stateRoot = await temporary(t);
+  const { cli, calls } = fakeCli();
+  const facts = probe({}, { root: join(stateRoot, "app"), home: "/nonexistent", commonDir: undefined, wikiDir: undefined, contextDirs: [], cacheRoot: join(stateRoot, "cache") });
+  const options = { cli, stateRoot, alive: () => true };
+  const one = new Sandbox(buildPlan(facts, DEFAULTS, "img"), { ...options, pid: 1 });
+  const two = new Sandbox(buildPlan(facts, { ...DEFAULTS, cpus: DEFAULTS.cpus + 1 }, "img"), { ...options, pid: 2 });
+  await one.ensure();
+  await two.ensure();
+  assert.deepEqual([one.borrowed, two.borrowed, calls.filter(([cmd]) => cmd === "run").length], [false, true, 1]);
+  // Restarting applies this session's settings, and the container is then its own.
+  await two.restart();
+  assert.deepEqual([two.borrowed, calls.filter(([cmd]) => cmd === "run").length], [false, 2]);
+});
+
 test("a stale container from a dead session is replaced, and orphans are swept", async (t) => {
   const stateRoot = await temporary(t);
   const { cli, running, calls } = fakeCli();
