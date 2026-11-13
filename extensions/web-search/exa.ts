@@ -64,7 +64,7 @@ export function parseExaResponse(response: ExaJson, limit?: number): SearchRespo
   }
   const limited = limit ? sources.slice(0, limit) : sources;
   const answer = synthesizeAnswer((response.results ?? []).filter((result) => result.url));
-  return { provider: "exa", answer, sources: limited, requestId: response.requestId };
+  return { provider: "exa", answer, sources: limited };
 }
 
 export async function searchExa(options: {

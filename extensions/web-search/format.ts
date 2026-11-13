@@ -30,7 +30,6 @@ export type SearchResponse = {
   sources: Source[];
   citations?: Citation[];
   model?: string;
-  requestId?: string;
 };
 
 export const DEFAULT_ORDER: ProviderId[] = ["codex", "xai", "exa"];
@@ -40,7 +39,7 @@ export function backendForSession(provider?: string): ProviderId | undefined {
   if (!provider) return;
   const id = provider.toLowerCase();
   if (id === "openai-codex" || id === "openai") return "codex";
-  if (id === "xai" || id === "grok" || id === "xai-oauth") return "xai";
+  if (id === "xai") return "xai";
 }
 
 export function preferFirst<T>(preferred: T | undefined, rest: readonly T[]): T[] {
@@ -48,8 +47,7 @@ export function preferFirst<T>(preferred: T | undefined, rest: readonly T[]): T[
   return [preferred, ...rest.filter((item) => item !== preferred)];
 }
 
-export function searchOrder(sessionProvider?: string, explicit?: ProviderId | "auto"): ProviderId[] {
-  if (explicit && explicit !== "auto") return [explicit];
+export function searchOrder(sessionProvider?: string): ProviderId[] {
   return preferFirst(backendForSession(sessionProvider), DEFAULT_ORDER);
 }
 export const SYSTEM_PROMPT = "Web research assistant: accurate, well-sourced answers. Prefer primary sources. Cite URLs. Direct answer first, then evidence.";

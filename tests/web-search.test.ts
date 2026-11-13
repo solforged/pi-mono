@@ -4,7 +4,6 @@ import { codexModels, consumeCodexEvents, extractTextSources, resolveCodexUrl, s
 import { buildExaBody, parseExaResponse, recencyStartDate, synthesizeAnswer } from "../extensions/web-search/exa.ts";
 import { ANSWER_MAX, attemptSummary, dropBlankRecency, errorDetail, formatFailures, formatForLLM, hasRenderableSearchContent, ProviderError, searchOrder, sourceLimit, withRecencyHint } from "../extensions/web-search/format.ts";
 import { executeSearch, orderByHealth, registryAuth, type SearchAuth } from "../extensions/web-search/search.ts";
-import { sseText } from "../extensions/web-search/sse.ts";
 import { searchCall, searchView } from "../extensions/web-search/view.ts";
 import { buildXaiBody, parseXaiResponse, xaiModels } from "../extensions/web-search/xai.ts";
 
@@ -18,7 +17,8 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 function sseResponse(events: unknown[], status = 200): Response {
-  return new Response(sseText(events), { status, headers: { "content-type": "text/event-stream" } });
+  const text = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+  return new Response(text, { status, headers: { "content-type": "text/event-stream" } });
 }
 
 test("search defaults use current models and preserve explicit pins", (t) => {
@@ -281,7 +281,6 @@ test("search chain skips missing backends, then falls through failures", async (
 
 test("Grok and Codex sessions prefer their own backend first", async () => {
   assert.deepEqual(searchOrder("xai"), ["xai", "codex", "exa"]);
-  assert.deepEqual(searchOrder("grok"), ["xai", "codex", "exa"]);
   assert.deepEqual(searchOrder("openai"), ["codex", "xai", "exa"]);
   assert.deepEqual(searchOrder("openai-codex"), ["codex", "xai", "exa"]);
   assert.deepEqual(searchOrder("nous-portal"), ["codex", "xai", "exa"]);
@@ -334,7 +333,7 @@ test("a stalled backend times out on its own and the next one answers", async ()
   });
   assert.equal(stuck.response?.provider, "exa");
 
-  const alone = await executeSearch({ query: "slow codex", provider: "codex" }, { auth, timeoutMs: 40, fetchImpl, cooldowns: new Map() });
+  const alone = await executeSearch({ query: "slow codex" }, { auth: { codex: auth.codex }, timeoutMs: 40, fetchImpl, cooldowns: new Map() });
   assert.equal(alone.error, "Error: codex timed out after 0 s");
 
   // The caller's cancellation ends the whole search instead of trying the next backend.
@@ -347,7 +346,7 @@ test("API error bodies are reduced to their message and bounded", async () => {
   assert.equal(errorDetail(JSON.stringify({ error: { message: "The requested model is not supported." } })), "The requested model is not supported.");
   assert.equal(errorDetail(JSON.stringify({ detail: "No access" })), "No access");
   assert.equal(errorDetail("<html>\n  <body>Bad   gateway</body>\n</html>"), "<html> <body>Bad gateway</body> </html>");
-  const result = await executeSearch({ query: "big error", provider: "exa" }, {
+  const result = await executeSearch({ query: "big error" }, {
     auth: { exa: async () => "exa-key" },
     fetchImpl: async () => new Response("x".repeat(200_000), { status: 502 }),
   });

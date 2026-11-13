@@ -100,7 +100,7 @@ test("transcribe posts WAV and marks previews as partial", async (t) => {
   t.after(() => server.close());
   const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 
-  assert.deepEqual(await transcribe(url, wav(Buffer.alloc(320))), { text: "hello pi-mono", ms: 42 });
+  assert.deepEqual(await transcribe(url, wav(Buffer.alloc(320))), { text: "hello pi-mono" });
   await transcribe(url, wav(Buffer.alloc(320)), { partial: true });
   assert.deepEqual(requests, [
     { url: "/transcribe", type: "audio/wav", bytes: 44 + 320 },

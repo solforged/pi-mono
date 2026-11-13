@@ -110,7 +110,6 @@ export function consumeCodexEvents(events: Iterable<Record<string, unknown>>, re
   const answerParts: string[] = [];
   const streamed: string[] = [];
   let model = requestedModel;
-  let requestId = "";
   let webSearchInvoked = false;
 
   for (const raw of events) {
@@ -118,8 +117,7 @@ export function consumeCodexEvents(events: Iterable<Record<string, unknown>>, re
     if (!eventType) continue;
     if (eventType.startsWith("response.web_search_call")) webSearchInvoked = true;
     if (eventType === "response.created") {
-      const resp = raw.response as { id?: string; model?: string } | undefined;
-      if (resp?.id) requestId = resp.id;
+      const resp = raw.response as { model?: string } | undefined;
       if (resp?.model) model = resp.model;
     } else if (eventType === "response.output_text.delta" && typeof raw.delta === "string") {
       streamed.push(raw.delta);
@@ -148,8 +146,7 @@ export function consumeCodexEvents(events: Iterable<Record<string, unknown>>, re
         }
       }
     } else if (eventType === "response.completed" || eventType === "response.done") {
-      const resp = raw.response as { id?: string; model?: string } | undefined;
-      if (resp?.id) requestId = resp.id;
+      const resp = raw.response as { model?: string } | undefined;
       if (resp?.model) model = resp.model;
     } else if (eventType === "error" || eventType === "response.failed") {
       const { code, message } = extractSseError(raw);
@@ -165,7 +162,7 @@ export function consumeCodexEvents(events: Iterable<Record<string, unknown>>, re
   if (sources.length === 0 && answer) {
     for (const source of extractTextSources(answer)) addSource(sources, source);
   }
-  return { provider: "codex", answer: answer || undefined, sources, model, requestId: requestId || undefined };
+  return { provider: "codex", answer: answer || undefined, sources, model };
 }
 
 function codexHeaders(auth: CodexAuth): Headers {

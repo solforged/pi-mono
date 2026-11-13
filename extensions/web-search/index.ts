@@ -33,7 +33,6 @@ export default function (pi: ExtensionAPI) {
       query: extra.query ?? "",
       recency: extra.recency,
       limit: sourceLimit(extra.limit),
-      provider: extra.provider,
       sessionProvider: ctx.model?.provider,
       sessionModel: ctx.model?.id,
     };

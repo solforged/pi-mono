@@ -98,7 +98,6 @@ export function parseXaiResponse(response: XaiJson, resultCap = DEFAULT_CAP): Se
     sources: sources.slice(0, cap),
     citations: citations.length > 0 ? citations.slice(0, cap) : undefined,
     model: response.model,
-    requestId: response.id,
   };
 }
 

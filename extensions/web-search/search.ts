@@ -31,7 +31,6 @@ export type SearchQuery = {
   query: string;
   recency?: "day" | "week" | "month" | "year";
   limit?: number;
-  provider?: ProviderId | "auto";
   sessionProvider?: string;
   sessionModel?: string;
 };
@@ -80,10 +79,6 @@ export async function availableProviders(auth: SearchAuth): Promise<Record<Provi
   return { codex, xai, exa };
 }
 
-function candidates(query: SearchQuery): ProviderId[] {
-  return searchOrder(query.sessionProvider, query.provider);
-}
-
 const COOLDOWN_MS = 5 * 60_000;
 /** Backends that recently timed out, and when each may lead the order again. */
 const cooling = new Map<ProviderId, number>();
@@ -111,14 +106,13 @@ export async function executeSearch(query: SearchQuery, options: {
   cooldowns?: Map<ProviderId, number>;
 }): Promise<SearchResult> {
   const cooldowns = options.cooldowns ?? cooling;
-  const order = orderByHealth(candidates(query), cooldowns);
+  const order = orderByHealth(searchOrder(query.sessionProvider), cooldowns);
   const errors: Array<{ provider: ProviderId; message: string }> = [];
   const attempts: Attempt[] = [];
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? SEARCH_TIMEOUT_MS;
   const hinted = withRecencyHint(query.query, query.recency);
 
-  const explicit = Boolean(query.provider && query.provider !== "auto");
   for (const provider of order) {
     // Each backend has its own time limit, so a stalled one still falls through
     // to the next. Only the caller's cancellation ends the whole search.
@@ -129,7 +123,6 @@ export async function executeSearch(query: SearchQuery, options: {
       const response = await Promise.race([runProvider(provider, hinted, query, options.auth, signal, fetchImpl), abandoned(signal)]);
       if (response === "skip") {
         attempts.push({ provider, outcome: "not configured" });
-        if (explicit) errors.push({ provider, message: `${provider} credentials not configured` });
         continue;
       }
       if (!hasRenderableSearchContent(response)) {

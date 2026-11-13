@@ -43,7 +43,3 @@ export async function* readSseJson(
     try { reader.releaseLock(); } catch {}
   }
 }
-
-export function sseText(events: unknown[]): string {
-  return `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
-}

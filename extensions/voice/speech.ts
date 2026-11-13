@@ -4,7 +4,7 @@
 
 export const DEFAULT_URL = "http://127.0.0.1:8178";
 
-export interface Transcript { text: string; ms: number }
+export interface Transcript { text: string }
 
 export class SpeechError extends Error {}
 
@@ -25,9 +25,9 @@ export async function transcribe(url: string, clip: Buffer, options: { partial?:
     if ((error as Error).name === "AbortError" || (error as Error).name === "TimeoutError") throw error;
     throw unreachable(url);
   }
-  const body = await response.json().catch(() => ({})) as { text?: string; ms?: number; error?: string };
+  const body = await response.json().catch(() => ({})) as { text?: string; error?: string };
   if (!response.ok || typeof body.text !== "string") throw new SpeechError(body.error ?? `speech server answered HTTP ${response.status}`);
-  return { text: body.text, ms: body.ms ?? 0 };
+  return { text: body.text };
 }
 
 /** The transcript as it joins the editor's text: after a space unless that ends in whitespace. */
