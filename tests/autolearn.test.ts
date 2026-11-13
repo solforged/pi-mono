@@ -4,6 +4,7 @@ import { mkdir, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { alreadyReviewed, commandActions, documented, recurrence, runs, type Run } from "../extensions/workflows/autolearn.ts";
 import { indexSessions, readState, registerAutolearn, type AutoState } from "../extensions/workflows/autolearn-ui.ts";
+import { MAX_TRANSIENT_FAILURES } from "../extensions/workflows/autoname.ts";
 import { readDrafts } from "../extensions/workflows/learning.ts";
 import { scopeRoot } from "../extensions/workflows/state.ts";
 import { config, registry, temporary } from "./helpers.ts";
@@ -184,6 +185,53 @@ test("an over-budget skill inventory warns without marking the pattern reviewed"
   assert.equal(calls, 0);
   assert.match(notices.at(-1)!, /Managed skills exceed the learning input budget/);
   assert.deepEqual((await readState(root)).reviews, []); // Raising the limit lets this pattern be reviewed.
+});
+
+test("a provider outage leaves the pattern unreviewed; repeated outages and bad answers are recorded", async (t) => {
+  async function run(replies: string[]) {
+    const dir = await temporary(t);
+    const history = new Map([[join(dir, "one.jsonl"), release("v1")], [join(dir, "two.jsonl"), release("v2")]]);
+    for (const file of history.keys()) await writeFile(file, "x");
+    const sessions = { list: async () => [...history.keys()].map((path) => ({ path })), open: (path: string) => ({ getSessionId: () => path, getHeader: () => null, getBranch: () => history.get(path)! }) };
+    const events: Record<string, (...args: any[]) => any> = {};
+    const commands: Record<string, any> = {};
+    const pi = { on: (event: string, fn: any) => { events[event] = fn; }, registerCommand: (name: string, command: any) => { commands[name] = command; }, appendEntry() {} } as any;
+    let calls = 0;
+    const notices: string[] = [];
+    let branch: any[] = [];
+    const ctx = {
+      hasUI: true, cwd: dir, ui: { notify: (text: string) => notices.push(text) },
+      modelRegistry: registry(async () => {
+        const reply = replies[calls++];
+        return reply.startsWith("error:") ? { stopReason: "error", errorMessage: reply.slice(6), usage: {}, content: [] } : { stopReason: "stop", usage: {}, content: [{ type: "text", text: reply }] };
+      }),
+      sessionManager: { getBranch: () => branch, getLeafId: () => branch.at(-1)?.id ?? null, getSessionFile: () => join(dir, "current.jsonl"), getSessionId: () => "current" },
+    } as any;
+    registerAutolearn(pi, config, dir, new AbortController().signal, () => {}, sessions);
+    events.session_start({}, ctx);
+    events.before_agent_start({ systemPromptOptions: { contextFiles: [], skills: [] } });
+    await commands.autolearn.handler("on", ctx);
+    for (const [i] of replies.entries()) {
+      branch = [...branch, ...release(`v${i + 3}`)];
+      events.agent_settled({ aborted: false }, ctx);
+      for (let tick = 0; tick < 50 && calls <= i; tick++) await new Promise((resolve) => setTimeout(resolve, 5));
+      for (let tick = 0; tick < 20; tick++) await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    return { calls, notices, reviews: (await readState(await scopeRoot(dir, config.profile, dir))).reviews.map((review) => review.outcome) };
+  }
+  const outage = "error:OpenAI API error (429): rate limit reached";
+  const recovered = await run([outage, "[]"]);
+  assert.equal(recovered.calls, 2, "the pattern was reviewed when it recurred");
+  assert.deepEqual(recovered.reviews, ["nothing"]);
+  assert.match(recovered.notices.find((text) => /skipped/.test(text))!, /rate limit/);
+
+  const down = await run(Array(MAX_TRANSIENT_FAILURES + 1).fill(outage));
+  assert.equal(down.calls, MAX_TRANSIENT_FAILURES, "a provider that stays down is not called on every later task");
+  assert.deepEqual(down.reviews, ["failed"]);
+
+  // Only the provider's own failure counts as an outage, whatever a bad answer happens to say.
+  const garbled = await run(["The connection timed out (503)", "[]"]);
+  assert.deepEqual([garbled.calls, garbled.reviews], [1, ["failed"]]);
 });
 
 test("a dry run lists recurring patterns and why each would or would not run, without saving", async (t) => {

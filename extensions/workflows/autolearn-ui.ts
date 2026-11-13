@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isTransientError, MAX_TRANSIENT_FAILURES } from "./autoname.ts";
 import { alreadyReviewed, documented, recurrence, recurringPatterns, runs, similarCore, segments, skillUse, summarizeRun, type PatternReview, type Recurrence, type Run } from "./autolearn.ts";
 import { evidenceFromBranch, INVENTORY_LABEL, inventoryInput, inventorySkills, LEARNING_SYSTEM, parseCandidates, readDrafts, skillRef, stageCandidate, type Draft, type SkillSnapshot } from "./learning.ts";
 import { completeRole } from "./requests.ts";
@@ -91,6 +92,9 @@ function evidenceText(entries: any[], session: string, budget: number): { text: 
   return { text, refs };
 }
 
+/** The learn provider failed in a way that says nothing about the pattern under review. */
+class Outage extends Error {}
+
 const FOCUS = `A deterministic detector, not a person, flagged this workflow because it recurred across sessions. Most recurring work needs nothing new: return [] unless capturing it would clearly save future effort or prevent a mistake the evidence shows being repeated. In order of preference: nothing; automate the mechanical steps; update an existing managed skill; create a skill only for judgment that commands cannot encode and that no existing skill or instruction already covers.`;
 
 export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentDir: string, lifetime: AbortSignal, report: (ctx: ExtensionContext, text: string) => void, sessions: Sessions) {
@@ -101,12 +105,13 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
   let disabled = new AbortController(); // Aborted by /autolearn off.
   let running = false;
   let warned = false;
+  let outages = 0;
   // Where the previous task ended. A task is everything since, so steering
   // messages mid-run do not split it.
   let boundary: string | null | undefined;
   const considered = new Set<string>();
   pi.on("session_start", (_event, ctx) => {
-    session.abort(); session = new AbortController(); considered.clear(); warned = false;
+    session.abort(); session = new AbortController(); considered.clear(); warned = false; outages = 0;
     boundary = ctx.sessionManager.getLeafId();
   });
   pi.on("session_shutdown", () => { session.abort(); });
@@ -169,12 +174,14 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
       const skills = await skillInput(config, root);
       signal.throwIfAborted();
       // Record failures too, so a bad answer is not retried on every later task.
+      // An outage says nothing about the pattern: it stays unrecorded, to be
+      // reviewed when it recurs, until the provider has failed a few times.
       let staged: Draft | undefined, outcome = "nothing", failure: unknown;
       try {
         staged = await review(ctx, config, root, task, found, usedSkills, skills, signal);
         if (staged) outcome = `${staged.action} ${staged.name}`;
       } catch (error) {
-        if (signal.aborted) throw error;
+        if (signal.aborted || (error instanceof Outage && ++outages < MAX_TRANSIENT_FAILURES)) throw error;
         failure = error; outcome = "failed";
       }
       const record = { core: found.core, sessions: found.sessions, at: new Date().toISOString(), outcome };
@@ -211,7 +218,8 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
       usedSkills.length ? `The latest run consulted these skills and still hit errors: ${usedSkills.join(", ")}.` : "",
     ].filter(Boolean).join("\n");
     const result = await completeRole(ctx, config, "learn", LEARNING_SYSTEM,
-      `Candidate limit: 1\nRecurring steps (in ${found.sessions} sessions): ${found.core.join(" | ")}\nFocus: ${focus}\n${INVENTORY_LABEL}:\n${inventoryText}\nEvidence, one run per session:\n${parts.map((part) => part.text).join("\n")}`, signal);
+      `Candidate limit: 1\nRecurring steps (in ${found.sessions} sessions): ${found.core.join(" | ")}\nFocus: ${focus}\n${INVENTORY_LABEL}:\n${inventoryText}\nEvidence, one run per session:\n${parts.map((part) => part.text).join("\n")}`, signal)
+      .catch((error) => { throw isTransientError(error) ? new Outage(error instanceof Error ? error.message : String(error), { cause: error }) : error; });
     signal.throwIfAborted();
     recordUsage(pi, ctx, { role: "learn", ...result, text: undefined });
     const candidate = parseCandidates(result.text, new Set([...parts.flatMap((part) => part.refs), ...inventory.map(skillRef)]), 1)[0];

@@ -44,7 +44,8 @@ half the project's sessions. The review runs only when:
 
 The review sees one run per session and the skill inventory. If managed skills
 exceed the input budget, it warns and leaves the pattern unreviewed, so raising
-the limit lets it run. It is asked to prefer nothing, then `automate`
+the limit lets it run. A provider outage (5xx, rate limit, timeout) also leaves
+it unreviewed, for up to three tries a session. It is asked to prefer nothing, then `automate`
 (deterministic tooling such as a script or task), then a skill update, and only
 then a new skill. New skills are refused once `maxSkills`
 (12) managed skills exist. A proposal raises one notification. In
