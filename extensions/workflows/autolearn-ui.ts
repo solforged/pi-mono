@@ -62,6 +62,8 @@ export async function indexSessions(state: AutoState, listed: Array<{ path: stri
     let session;
     try { session = open(path); } catch { continue; } // An unreadable session is not evidence.
     files[path] = { mtimeMs, session: session.getSessionId(), created: session.getHeader()?.timestamp ?? new Date(mtimeMs).toISOString(), runs: runs(session.getBranch()) };
+    // Opening parses the whole file synchronously; let input and drawing in between two.
+    await new Promise((resolve) => setImmediate(resolve));
   }
   state.files = files;
   const others = new Map<string, Run[]>();

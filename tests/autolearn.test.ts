@@ -83,6 +83,12 @@ test("the session index is incremental and counts forked history once", async (t
   assert.equal(index.others.get(files.a)!.length, 1);
   assert.equal(index.others.get(files.b)!.length, 1);
   assert.equal(opened.length, 4); // Unchanged files are not reopened.
+
+  // Opening a session parses it synchronously: the event loop gets a turn between two of them.
+  const order: string[] = [];
+  const slow = (path: string) => { order.push("open"); setImmediate(() => order.push("turn")); return open(path); };
+  await indexSessions({ version: 1, files: {}, reviews: [] }, listed, { entryIds: new Set() }, slow);
+  assert.deepEqual(order.slice(0, 5), ["open", "turn", "open", "turn", "open"]);
 });
 
 test("autolearn stays idle until enabled, then stages one proposal for a recurring workflow", async (t) => {
