@@ -6,6 +6,7 @@ import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync,
 import { homedir, tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { hostGit } from "../sandbox/hostgit.ts";
 import { SOURCES, type Source } from "./git.ts";
 import type { Palette } from "./render.ts";
 

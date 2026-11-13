@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { changedHunks, collect, parseDiff, unquote } from "../extensions/diff/git.ts";
-import { bundledHighlighter, DEFAULT_SETTINGS, paneSize, readPanes, readSettings, registerDiff, tick, which } from "../extensions/diff/pane.ts";
+import { bundledHighlighter, DEFAULT_SETTINGS, paneSize, readPanes, readSettings, registerDiff, run, tick, treeState, which } from "../extensions/diff/pane.ts";
 import { body, DEFAULT_PALETTE, emphasis, fileBody, hunkAt, layout, type View } from "../extensions/diff/render.ts";
 import { createHighlighter, loadHighlighter, piecesFromHtml, tokenFor } from "../extensions/diff/syntax.ts";
 import { paint, sanitize, width, wrapSpans } from "../extensions/diff/text.ts";
@@ -109,6 +109,17 @@ test("collects uncommitted, staged and branch diffs from a real repository", asy
   const branch = await collect(root, "branch");
   assert.equal(branch.label, "since main");
   assert.deepEqual(branch.files.map((file) => file.path), ["a.txt", "blob.bin", "new.txt", "staged.txt"]);
+});
+
+test("the pane's own Git calls find the working tree and its state", async (t) => {
+  // Every other pane test injects `run`, so only this one runs the real thing.
+  const root = realpathSync(await mkdtemp(join(tmpdir(), "diff-run-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  git(root, "init", "-q", "-b", "main");
+  await mkdir(join(root, "sub"));
+  await writeFile(join(root, "sub", "new.txt"), "fresh\n");
+  assert.equal((await run("git", ["rev-parse", "--show-toplevel"], join(root, "sub"))).trim(), root);
+  assert.match(await treeState(run, root), /^\?\? sub\/new\.txt\t6\t[\d.]+$/);
 });
 
 test("measures wide characters and wraps styled text without losing content", () => {
