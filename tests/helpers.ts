@@ -14,11 +14,12 @@ export async function temporary(t: { after: (fn: () => Promise<unknown>) => unkn
   t.after(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }
-export function registry(complete?: (...args: any[]) => Promise<any>) {
+/** A model registry whose requests are answered by `complete(model, context, options)`. */
+export function registry(complete: (...args: any[]) => Promise<any> = async () => { throw new Error("Unexpected model call"); }) {
   return {
     find: (provider: string, id: string) => ({ provider, id, maxTokens: 8192 }),
     hasConfiguredAuth: () => true,
-    complete: complete ?? (async () => { throw new Error("Unexpected model call"); }),
+    streamSimple: (...args: any[]) => ({ result: async () => complete(...args) }),
   };
 }
 export const skill = (name = "test-skill", body = "Run a repeatable check. Verify its output.") => `---\nname: ${name}\ndescription: "A reusable testing procedure"\n---\n\n# Test procedure\n\n${body}\n`;

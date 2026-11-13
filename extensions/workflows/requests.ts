@@ -9,14 +9,16 @@ export async function completeRole(ctx: ExtensionContext, config: Config, name: 
   const { role, model } = resolveRole(config, name, ctx.modelRegistry);
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(role.timeoutMs)]);
   deadline.throwIfAborted();
-  const response = await ctx.modelRegistry.complete(model, {
+  // streamSimple turns `reasoning` into each API's own thinking options. complete()
+  // passes options through as they are, and Anthropic's API ignores reasoningEffort.
+  const response = await ctx.modelRegistry.streamSimple(model, {
     systemPrompt,
     messages: [{ role: "user", content: [{ type: "text", text }], timestamp: Date.now() }],
   }, {
     signal: deadline, maxTokens: role.maxTokens,
-    reasoningEffort: role.thinking === "off" ? undefined : role.thinking,
+    reasoning: role.thinking === "off" ? undefined : role.thinking,
     cacheRetention: "none", sessionId: randomUUID(),
-  });
+  }).result();
   deadline.throwIfAborted();
   if (["error", "aborted", "length"].includes(response.stopReason)) {
     // Failed calls can still cost tokens; callers that count spend read them here.

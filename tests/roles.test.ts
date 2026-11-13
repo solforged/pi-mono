@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { profileName, resolveConfig, resolveRole, roleNames } from "../extensions/workflows/roles.ts";
 import { completeRole } from "../extensions/workflows/requests.ts";
-import { base, config, registry, root, temporary } from "./helpers.ts";
+import { base, config, noModel, registry, root, temporary } from "./helpers.ts";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RoleStore, previewRoles } from "../extensions/workflows/role-store.ts";
 import { supportedThinking } from "../extensions/workflows/roles.ts";
@@ -84,10 +87,27 @@ test("auxiliary requests use their role, limits and abort signal without changin
   assert.equal(ctx.model, parent);
   assert.equal(captured[0].id, config.roles.tiny?.model);
   assert.equal(captured[2].maxTokens, config.roles.tiny?.maxTokens);
-  assert.equal(captured[2].reasoningEffort, "low");
+  // The provider-neutral option: each API maps it to its own, and Anthropic's ignores reasoningEffort.
+  assert.equal(captured[2].reasoning, "low");
+  assert.ok(!("reasoningEffort" in captured[2]));
   assert.ok(captured[2].signal instanceof AbortSignal);
+  await completeRole(ctx, { ...config, roles: { ...config.roles, tiny: { ...config.roles.tiny!, thinking: "off" } } }, "tiny", "Name this", "Synthetic test", new AbortController().signal);
+  assert.equal(captured[2].reasoning, undefined);
   const abort = new AbortController(); abort.abort();
   await assert.rejects(completeRole(ctx, config, "tiny", "", "", abort.signal));
+});
+
+test("Pi's Anthropic and OpenAI requests carry the role's thinking level", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "pi-role-thinking-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const result = spawnSync("pi", [
+    "--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session",
+    "-e", join(root, "tests/fixtures/role-thinking-smoke.ts"), ...noModel, "-p", "/role-thinking-smoke",
+  ], { encoding: "utf8", timeout: 30_000, input: "", env: { ...process.env, PI_CODING_AGENT_DIR: dir } });
+  if ((result.error as NodeJS.ErrnoException)?.code === "ENOENT") return t.skip("Pi is not installed");
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.match(result.stdout, /Role thinking: adaptive, budget, off and OpenAI requests passed/);
 });
 
 test("role panel drafts are isolated; save preserves other profiles and running snapshots", async (t) => {
