@@ -89,6 +89,21 @@ export function taskLine(meta: TaskMeta, theme: Theme) {
   const facts = [state, ...(running ? [] : [duration(meta.elapsedMs)]), ...(meta.tokens !== undefined ? [`${compact(meta.tokens)} tok`] : [])];
   return `${theme.fg(tone, glyph)} ${meta.name} ${theme.fg("muted", `${meta.agent} · ${facts.join(" · ")}`)}`;
 }
+/** Enough of a task ID to name it: rex_result and rex_send resolve a prefix. */
+export const shortId = (id: string) => id.slice(0, 8);
+/**
+ * A task's receipt for the model. It stays in the conversation, so file paths
+ * appear only where they are the way forward: the full result when the text
+ * was cut or the task did not succeed, and a worker's worktree to review.
+ */
+export function resultText(run: Pick<Run, "name" | "agent" | "sessionFile" | "worktree">, task: TaskRun) {
+  const done = task.status !== "starting" && task.status !== "running";
+  const lines = [`${run.name} (${run.agent}) · task ${shortId(task.id)} · ${task.status}`];
+  if (done && (task.status !== "succeeded" || task.text.endsWith("\n[truncated]"))) lines.push(`Result: ${task.resultFile}`, `Session: ${run.sessionFile}`);
+  if (run.worktree) lines.push(`Worktree (not integrated): ${run.worktree}`);
+  if (done && !task.usageKnown) lines.push("Usage: unavailable");
+  return `${lines.join("\n")}\n\n${task.text}`;
+}
 /** The model-facing result is `header\n\nanswer`; display separates them. */
 export function splitResult(text: string): { header: string; answer: string } {
   const at = text.indexOf("\n\n");

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { displayTaskPrompt, taskPrompt } from "../extensions/rex/protocol.ts";
 import { columns, COMMANDS, CONFIRM, entries, entryLine, LeftGate, listLines, replyTarget, tailLines, type Peer } from "../extensions/rex/hub-model.ts";
-import { activityLine, callLine, childFooter, money, fitResults, rows, splitResult, taskLine, waitingLine, widgetLine, type TaskMeta } from "../extensions/rex/ui.ts";
+import { activityLine, callLine, childFooter, money, fitResults, resultText, rows, shortId, splitResult, taskLine, waitingLine, widgetLine, type TaskMeta } from "../extensions/rex/ui.ts";
+import { canUseRex } from "../extensions/rex/tools.ts";
 
 const run = (name: string, extra: object = {}) => ({ id: `${name}-id`, name, agent: "scout", owner: "managed", status: "idle", taskIds: [], ...extra }) as any;
 const task = (id: string, status: string, text = "Read AGENTS.md and report") => [id, { id, status, task: text }] as const;
@@ -155,4 +156,24 @@ test("hub columns fit what the rows hold: long session names stay whole, and the
   const busy = entries(rows([run("oak", { status: "running", activeTask: "r", taskIds: ["r"], note: "x".repeat(60) })], tasks, 61_000), new Set(), []);
   assert.deepEqual(columns(busy, 160), { name: 3, role: 5, state: 40, time: 6, cost: 0 }, "time is a fixed width so ticking never shifts columns");
   assert.equal(columns(busy, 40).time, 0, "a cramped pane drops time and cost before the title");
+});
+
+test("a receipt names files only when they are the way forward", () => {
+  const child = { name: "birch", agent: "scout", sessionFile: "/state/session.jsonl" } as any;
+  const result = (status: string, text: string, extra: object = {}) => ({ id: TASK, status, text, usageKnown: true, resultFile: "/state/result.json", ...extra }) as any;
+  assert.equal(shortId(TASK), "7c2ae99a");
+  assert.equal(resultText(child, result("succeeded", "The answer")), "birch (scout) · task 7c2ae99a · succeeded\n\nThe answer");
+  assert.equal(resultText(child, result("running", "")), "birch (scout) · task 7c2ae99a · running\n\n", "a launch receipt points at nothing that does not exist yet");
+  assert.equal(resultText(child, result("succeeded", "Long\n[truncated]")), "birch (scout) · task 7c2ae99a · succeeded\nResult: /state/result.json\nSession: /state/session.jsonl\n\nLong\n[truncated]");
+  assert.match(resultText(child, result("failed", "boom", { usageKnown: false })), /· failed\nResult: \/state\/result\.json\nSession: \/state\/session\.jsonl\nUsage: unavailable\n\nboom$/);
+  assert.equal(resultText({ ...child, agent: "worker", worktree: "/wt/birch" }, result("succeeded", "Done")), "birch (worker) · task 7c2ae99a · succeeded\nWorktree (not integrated): /wt/birch\n\nDone");
+  assert.deepEqual(splitResult(resultText(child, result("succeeded", "The answer"))), { header: "birch (scout) · task 7c2ae99a · succeeded", answer: "The answer" });
+});
+
+test("Rex tools replace subagent only in an interactive Pi inside a Rex pane", () => {
+  const pane = { REX_SESSION: "s", REX_BLOCK: "b" };
+  assert.equal(canUseRex(pane, "tui"), true);
+  for (const mode of ["print", "json", "rpc"]) assert.equal(canUseRex(pane, mode), false, `${mode} cannot open panes`);
+  assert.equal(canUseRex({ REX_SESSION: "s" }, "tui"), false);
+  assert.equal(canUseRex({}, "tui"), false);
 });

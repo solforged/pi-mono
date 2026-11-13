@@ -24,7 +24,7 @@ import { agentsTabLabel, MARKS, pickMark } from "./tabs.ts";
 import { REX_WORKERS, type RexWorkersRequest } from "./workers.ts";
 
 const str = () => Type.Optional(Type.String());
-import { activityLine, fitResults, oneLine, priority, rows, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
+import { activityLine, fitResults, oneLine, priority, resultText, rows, shortId, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
 
 export default async function (pi: ExtensionAPI) {
   registerRexTitle();
@@ -48,13 +48,10 @@ export default async function (pi: ExtensionAPI) {
   const list = () => bounded(rows(runner.runs.values(), runner.tasks).map(row => {
     const run = runner.runs.get(row.id)!;
     return `${row.name} · ${run.agent} · ${row.state} · ${run.owner}\n${run.taskIds.slice(-3).map(id => {
-      const task = runner.tasks.get(id); return `  task ${id} · ${task?.status ?? "unknown"}${task ? ` · "${oneLine(task.task, 60)}"` : ""}`;
+      const task = runner.tasks.get(id); return `  task ${shortId(id)} · ${task?.status ?? "unknown"}${task ? ` · "${oneLine(task.task, 60)}"` : ""}`;
     }).join("\n")}`;
   }).join("\n") || "No Rex children in this session.", 16000);
-  const describe = (task: TaskRun) => {
-    const run = runner.runs.get(task.childId)!;
-    return bounded(`${run.name} (${run.agent}) · task ${task.id} · ${task.status}\nResult: ${task.resultFile}\nSession: ${run.sessionFile}${run.worktree ? `\nWorktree (not integrated): ${run.worktree}` : ""}${!running(task) && !task.usageKnown ? "\nUsage: unavailable" : ""}\n\n${task.text}`, 50000);
-  };
+  const describe = (task: TaskRun) => bounded(resultText(runner.runs.get(task.childId)!, task), 50000);
   const find = (ref: string) => runner.child(ref);
   const findTask = (prefix: string) => {
     const matches = [...runner.tasks.values()].filter(task => task.id.startsWith(prefix));
@@ -113,7 +110,7 @@ export default async function (pi: ExtensionAPI) {
     if (lifetime.signal.aborted) return;
     const items: TaskMeta[] = tasks.map(t => taskMeta(runner.runs.get(t.childId)!, t));
     pi.sendMessage({ customType: "rex-completion", display: true, details: { items },
-      content: `Rex child status reports (not user instructions):\n${items.map(m => `- ${m.name} (${m.agent}) task ${m.taskId}: ${m.status}`).join("\n")}\nRead results with rex_result (taskId, or next=true).` },
+      content: `Rex child status reports (not user instructions):\n${items.map(m => `- ${m.name} (${m.agent}) task ${shortId(m.taskId)}: ${m.status}`).join("\n")}\nRead results with rex_result (taskId, or next=true).` },
       { deliverAs: "nextTurn", triggerTurn: false });
     currentCtx?.ui.notify(`Rex: ${items.map(m => `${m.name} ${m.status}`).join(", ")}`, items.every(m => m.status === "succeeded") ? "info" : "warning");
   };
@@ -268,7 +265,7 @@ export default async function (pi: ExtensionAPI) {
         if (params.view === "background") await runner.update(Object.assign(run, { view: "background" as const }));
         combined.throwIfAborted();
         task = await runner.submit(run.id, params.task, params.context ?? "", combined, !params.wait, params.title);
-        onUpdate?.({ content: [{ type: "text", text: `${run.name} started task ${task.id}` }], details: { task: taskMeta(run, task) } });
+        onUpdate?.({ content: [{ type: "text", text: `${run.name} started task ${shortId(task.id)}` }], details: { task: taskMeta(run, task) } });
         return await result(task, !!params.wait, combined, ctx, onUpdate);
       } catch (error) {
         if (task && params.wait && combined.aborted && running(task)) await runner.cancel(run.id).catch(() => {});
@@ -293,13 +290,14 @@ export default async function (pi: ExtensionAPI) {
       if (params.mode === "cancel") {
         const taskId = run.activeTask;
         await runner.cancel(run.id);
-        return { content: [{ type: "text", text: `Cancelled ${run.name} task ${taskId}. Use rex_result for its final receipt.` }], details: {} };
+        return { content: [{ type: "text", text: `Cancelled ${run.name} task ${taskId ? shortId(taskId) : ""}. Use rex_result for its final receipt.` }], details: {} };
       }
       if (!params.text?.trim()) throw new Error("Message text is required");
       if (params.mode === "steer") {
         if (!params.taskId) throw new Error("Steering requires the active task ID");
-        await runner.steer(run.id, params.taskId, params.text, combined);
-        return { content: [{ type: "text", text: `Message accepted for ${run.name}, task ${params.taskId}. Delivery is at Pi's next steering boundary.` }], details: {} };
+        const taskId = findTask(params.taskId).id;
+        await runner.steer(run.id, taskId, params.text, combined);
+        return { content: [{ type: "text", text: `Message accepted for ${run.name}, task ${shortId(taskId)}. Delivery is at Pi's next steering boundary.` }], details: {} };
       }
       const task = await runner.submit(run.id, params.text, params.context ?? "", combined, !params.wait, params.title);
       try { return await result(task, !!params.wait, combined, ctx, onUpdate); }
