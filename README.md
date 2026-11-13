@@ -47,6 +47,7 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Figures](docs/figure.md): themed SVG mockups and diagrams shown inline on macOS.
 - [Pasted images](docs/image-paste.md): pasted and dropped image paths are attached to the prompt and previewed above the editor.
 - [Intercom](docs/intercom.md): notes between separate Pi sessions for coordinating work.
+- [Voice](docs/voice.md): hold `ctrl+space` to dictate into the editor through a local speech server.
 - [Herdr](docs/herdr.md): Desktop support and the separate TUI title bridge.
 - [Status line](docs/statusline.md): a one-line footer with Git, context, and cache use.
 - [Tool frames](docs/tool-frames.md): built-in tool rows drawn by what they did, with lookups on one line and edits and commands in light frames.
