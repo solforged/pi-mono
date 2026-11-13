@@ -66,6 +66,21 @@ test("links Markdown files in messages, leaving code, URLs and missing files alo
   assert.equal(linkDocs("no documents here", "/repo", url, () => true), "no documents here");
 });
 
+test("links only prose: not indented or nested code, HTML tags, or labels of links it cannot read", () => {
+  const url = (path: string) => `pi-open://1${path}`;
+  const link = (lines: string[]) => linkDocs(lines.join("\n"), "/repo", url, () => true).split("\n");
+  // Indented code needs a blank line before it, and is not what a list item's continuation is.
+  assert.deepEqual(link(["Run this:", "", "    cat README.md", "    less docs/a.md", "", "then docs/a.md", "    and README.md"]),
+    ["Run this:", "", "    cat README.md", "    less docs/a.md", "", "then [docs/a.md](pi-open://1/repo/docs/a.md)", "    and [README.md](pi-open://1/repo/README.md)"]);
+  assert.deepEqual(link(["1. Step", "", "    read docs/a.md", "    ```sh", "    cat README.md", "    ```", "> ~~~", "> cat README.md", "> ~~~"]),
+    ["1. Step", "", "    read [docs/a.md](pi-open://1/repo/docs/a.md)", "    ```sh", "    cat README.md", "    ```", "> ~~~", "> cat README.md", "> ~~~"]);
+  assert.deepEqual(link(["<a href=\"docs/a.md\">guide</a> <img src='x.md' /> a<b README.md"]),
+    ["<a href=\"docs/a.md\">guide</a> <img src='x.md' /> a<b [README.md](pi-open://1/repo/README.md)"]);
+  // A URL with parentheses is still one link target, so its label is not linked a second time.
+  assert.deepEqual(link(["[README.md](https://x.dev/a_(b)) and [notes](docs/a_(1).md)"]),
+    ["[README.md](https://x.dev/a_(b)) and [notes](pi-open://1/repo/docs/a_(1).md)"]);
+});
+
 test("paints hyperlinks and closes them at the end of each row", () => {
   const row = paint({ spans: [{ text: "a " }, { text: "link", style: { fg: "#ff0000", underline: true, link: "pi-open://1/%2Fa.md" } }] }, 10);
   assert.match(row, /\x1b\]8;;pi-open:\/\/1\/%2Fa\.md\x1b\\\x1b\[0m\x1b\[4;38;2;255;0;0mlink/);

@@ -76,12 +76,16 @@ export function isFile(path: string, now = Date.now()): boolean {
   return file;
 }
 
-// Code fences, which are left alone; then on other lines, in order: URLs (left
-// alone), Markdown links and images, inline code, and bare paths.
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+// Code is left alone: fences, at any depth of list or quote, and indented
+// blocks. On other lines, in order: URLs and HTML tags (left alone), Markdown
+// links and images, inline code, and bare paths. A link's target may hold one
+// level of parentheses, so that its label is never taken for a bare path.
+const FENCE = /^[ \t>]*(`{3,}|~{3,})/;
+const ITEM = /^ {0,3}(?:[-*+]|\d+[.)])[ \t]/;
 const INLINE = new RegExp([
   /(?<url>\b[a-z][\w+.-]*:\/\/[^\s<>()]+)/.source,
-  /(?<link>!?\[(?<label>(?:[^\[\]\\]|\\.)*)\]\((?<target><[^>\n]*>|[^\s()]+)(?<title>\s+"[^"\n]*")?\))/.source,
+  /(?<html><\/?[a-z][a-z0-9-]*(?:\s[^<>\n]*)?\/?>)/.source,
+  /(?<link>!?\[(?<label>(?:[^\[\]\\]|\\.)*)\]\((?<target><[^>\n]*>|(?:[^\s()]|\([^\s()]*\))+)(?<title>\s+"[^"\n]*")?\))/.source,
   /(?<code>(?<ticks>`+)(?<inner>[^`\n]+?)\k<ticks>(?!`))/.source,
   /(?<bare>(?<![\w/.~%@-])(?:~\/|\.{1,2}\/|\/)?[\w@+-][\w.@~+-]*(?:\/[\w.@~+-]+)*\.(?:md|markdown|mdx)(?:#[\w-]+)?(?![\w/]))/.source,
 ].join("|"), "gi");
@@ -99,16 +103,24 @@ export function linkDocs(markdown: string, cwd: string, url: (path: string, anch
     return resolved && exists(resolved.path) ? url(resolved.path, resolved.anchor) : undefined;
   };
   let fence: string | undefined;
+  // Four spaces make code only after a blank line and outside a list, where they continue an item.
+  let blank = true, list = false, code = false;
   return markdown.split("\n").map((line) => {
-    const marker = FENCE.exec(line)?.[1];
+    const marker = FENCE.exec(line);
     if (fence) {
-      if (marker && marker[0] === fence[0] && marker.length >= fence.length && !line.trim().slice(marker.length).trim()) fence = undefined;
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !line.slice(marker[0].length).trim()) fence = undefined;
       return line;
     }
-    if (marker) { fence = marker; return line; }
+    if (marker) { fence = marker[1]; blank = code = false; return line; }
+    if (!line.trim()) { blank = true; return line; }
+    const deep = /^(?: {4}|\t)/.test(line);
+    if (!deep) list = ITEM.test(line) || (list && /^\s/.test(line));
+    code = deep && !list && (blank || code);
+    blank = false;
+    if (code) return line;
     return line.replace(INLINE, (match, ...args) => {
       const groups = args.at(-1) as Record<string, string | undefined>;
-      if (groups.url) return match;
+      if (groups.url || groups.html) return match;
       if (groups.link !== undefined) {
         if (match.startsWith("!")) return match;
         const target = find(groups.target!);
