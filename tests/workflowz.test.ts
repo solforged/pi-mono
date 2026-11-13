@@ -100,6 +100,7 @@ test("the kernel prints, reports errors with cell frames and survives syntax err
   const syntax = await kernel.run("const = ;", { timeoutMs: 1000 });
   assert.match(syntax.error!, /SyntaxError/);
   assert.equal((await cell(kernel, "x")).value, "2");
+  // Cells are given no such globals. That is a convention, not isolation: see "Safety" in docs/workflowz.md.
   assert.equal((await cell(kernel, "typeof require + typeof process")).value, "undefinedundefined");
 });
 

@@ -21,12 +21,13 @@ not refill it.
 ## The kernel
 
 `eval` runs a JavaScript cell. Top-level declarations persist between cells,
-top-level `await` works, and the last expression is the result. The kernel has
-no `require`, `process` or file system: it reaches Pi tools through
-`await tools.read({ path })` and the like while a cell is awaited. The kernel's
-own functions (`pool`, `agent`, `log`, `wait`, `tools`, `budget` and the rest)
-cannot be redeclared or assigned at the top level: such a cell is refused with
-an error naming the variable, since it would break every later cell.
+top-level `await` works, and the last expression is the result. Cells get no
+`require`, `process` or file-system globals: they reach Pi tools through
+`await tools.read({ path })` and the like while a cell is awaited. That is a
+convention, not isolation (see [Safety](#safety)). The kernel's own functions
+(`pool`, `agent`, `log`, `wait`, `tools`, `budget` and the rest) cannot be
+redeclared or assigned at the top level: such a cell is refused with an error
+naming the variable, since it would break every later cell.
 
 The kernel is its own process (`kernel-child.cjs`, run by Pi's runtime) and
 keeps only variables; pools, agents and judges live in Pi. A kernel that stops
@@ -87,7 +88,9 @@ permissions, like Bash does. With it on, the kernel runs in the guest under its
 Node (`container exec`), so model-written cells reach only what Bash there can;
 turning the sandbox on or off restarts the kernel in the other place. Calls
 through `tools.*` go through Pi's tool hooks, so they follow the sandbox too.
-Delegated output is evidence, not instructions.
+The globals a cell lacks do not confine it: its code can still reach the
+kernel's own `process` and modules, past every tool hook. Only the sandbox
+does. Delegated output is evidence, not instructions.
 
 ## Differences from omp
 
