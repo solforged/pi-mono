@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { bounded } from "../workflows/process.ts";
-import { transformCell, wrapCell } from "./transform.ts";
+import { ReservedName, transformCell, wrapCell } from "./transform.ts";
 import type { Item, Jobs } from "./jobs.ts";
 
 export interface ToolBridge { call(name: string, args: unknown): Promise<unknown> }
@@ -50,11 +50,16 @@ const snapshot = (item: Item) => ({ id: item.id, status: item.status, label: ite
   ...(item.worktree ? { worktree: item.worktree } : {}), ...(item.transcript ? { transcript: item.transcript } : {}),
   ...(item.session ? { session: item.session } : {}) });
 
-/** Cell candidates for the child, most persistent first; the last one surfaces the code's own syntax error. */
+/**
+ * Cell candidates for the child, most persistent first; the last one surfaces
+ * the code's own syntax error. A declaration of a kernel name throws instead:
+ * running it with local declarations would hide the mistake until the next cell.
+ */
 export function candidates(code: string) {
   const list: Array<{ code: string; returnsValue: boolean; note?: string }> = [];
   for (const returnLast of [true, false]) {
-    try { const t = transformCell(code, returnLast); list.push({ code: wrapCell(t.body, t.prelude), returnsValue: t.returnsValue }); } catch { /* fall through */ }
+    try { const t = transformCell(code, returnLast); list.push({ code: wrapCell(t.body, t.prelude), returnsValue: t.returnsValue }); }
+    catch (error) { if (error instanceof ReservedName) throw error; /* otherwise fall through */ }
   }
   list.push({ code: wrapCell(code), returnsValue: false, note: "This cell's top-level declarations stay local: the kernel could not rewrite them." });
   return list;
@@ -302,7 +307,6 @@ export class Kernel {
     const earlier = this.late.splice(0);
     const notes: string[] = [];
     const cell = { n, lines: earlier.length ? ["[earlier background output]", ...earlier, "[this cell]"] : [], size: 0, onOutput: options.onOutput };
-    const list = candidates(code);
     this.relocate("the sandbox was turned on or off");
     let child = this.child;
     try {
@@ -313,6 +317,8 @@ export class Kernel {
     } catch (error) { return { output: cell.lines.join("\n"), error: String((error as Error).message) }; }
     if (this.restartNote) { notes.push(this.restartNote); this.restartNote = undefined; }
     this.active = cell; this.bridge = options.tools;
+    let list: ReturnType<typeof candidates>;
+    try { list = candidates(code); } catch (error) { return { output: "", error: String((error as Error).message) }; }
     const done = Promise.withResolvers<any>();
     this.runs.set(n, { resolve: done.resolve });
     this.send(child, { t: "run", cell: n, candidates: list });

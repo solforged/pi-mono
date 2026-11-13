@@ -22,7 +22,10 @@ is sent again after compaction drops it or its text changes.
 `eval` runs a JavaScript cell. Top-level declarations persist between cells,
 top-level `await` works, and the last expression is the result. The kernel has
 no `require`, `process` or file system: it reaches Pi tools through
-`await tools.read({ path })` and the like while a cell is awaited.
+`await tools.read({ path })` and the like while a cell is awaited. The kernel's
+own functions (`pool`, `agent`, `log`, `wait`, `tools`, `budget` and the rest)
+cannot be redeclared or assigned at the top level: such a cell is refused with
+an error naming the variable, since it would break every later cell.
 
 The kernel is its own process (`kernel-child.cjs`, run by Pi's runtime) and
 keeps only variables; pools, agents and judges live in Pi. A kernel that stops

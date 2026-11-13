@@ -8,7 +8,7 @@ import { callKernel, ToolServer } from "../extensions/workflowz/tool-server.ts";
 import { childArgs } from "../extensions/workflows/subagents.ts";
 import { Kernel, type KernelHooks } from "../extensions/workflowz/kernel.ts";
 import { budgetIn, keywordsIn, loadNotices, NOTICE_TYPE, noticeMessage, noticesInContext, renderNotice } from "../extensions/workflowz/notices.ts";
-import { statements, tokenize, transformCell, wrapCell } from "../extensions/workflowz/transform.ts";
+import { KERNEL_NAMES, statements, tokenize, transformCell, wrapCell } from "../extensions/workflowz/transform.ts";
 import { emptyUsage } from "../extensions/workflows/process.ts";
 import { root } from "./helpers.ts";
 
@@ -111,6 +111,28 @@ test("loop and branch bodies on their own line without braces stay part of their
   assert.equal((await cell(kernel, "let which\nif (i > 9)\n  which = 'big'\nelse\n  which = 'small'\nwhich")).value, "small");
   assert.equal((await cell(kernel, "do { i-- } while (i > 1)\ni")).value, "1");
   assert.deepEqual(statements(tokenize("a.for (x)\nb").tokens).length, 2);
+});
+
+test("kernel functions cannot be replaced by a cell's own names", async () => {
+  const { backend, state } = fake();
+  const jobs = new Jobs(backend, { concurrency: 1, outputBytes: 4000 });
+  const kernel = newKernel(jobs);
+  // Declarations are refused before anything runs, so no half-created pool is left behind.
+  for (const code of ["const pool = workpool({ name: 'r' })", "let agent", "var x = 1, log = []", "function wait() {}", "async function tools() {}", "class budget {}"]) {
+    const refused = await kernel.run(code, { timeoutMs: 2000 });
+    assert.match(refused.error!, /is a kernel function, and declaring it at the top level would replace it/, code);
+  }
+  assert.equal(jobs.pools.size, 0);
+  // Destructuring and bare assignment are refused where they assign.
+  assert.match((await kernel.run("const { handle } = { handle: 1 }", { timeoutMs: 2000 })).error!, /"handle" is a kernel function and cannot be assigned/);
+  assert.match((await kernel.run("sleep = 5", { timeoutMs: 2000 })).error!, /"sleep" is a kernel function/);
+  // Inside functions and blocks the names are ordinary locals, and the API is intact afterwards.
+  assert.equal((await cell(kernel, "const count = (() => { const pool = [1, 2]; return pool.length })()\ncount")).value, "2");
+  assert.equal((await cell(kernel, "for (const agent of ['a']) { print(agent) }\ntypeof pool + typeof agent + typeof wait")).value, "functionfunctionfunction");
+  assert.equal(state.tasks.length, 0);
+  // The list the transform checks is the kernel's own.
+  const names = JSON.parse((await cell(kernel, "JSON.stringify(Object.keys(globalThis).filter((k) => !['count', 'x'].includes(k)).sort())")).value!);
+  assert.deepEqual(names, [...KERNEL_NAMES].sort());
 });
 
 test("line and paragraph separators survive the kernel protocol in both directions", async () => {

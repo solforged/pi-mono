@@ -143,6 +143,16 @@ export function statements(tokens: Token[]): Array<[number, number]> {
   return result;
 }
 
+/** The kernel's globals (kernel-child.cjs). A top-level declaration would replace one for every later cell. */
+export const KERNEL_NAMES = new Set(["print", "console", "log", "phase", "workpool", "pool", "agent", "completion", "handle", "judge", "judgeBatch",
+  "wait", "tool", "budget", "tools", "sleep", "setTimeout", "setInterval", "clearTimeout", "clearInterval", "structuredClone", "URL", "URLSearchParams",
+  "TextEncoder", "TextDecoder", "AbortController", "AbortSignal", "atob", "btoa"]);
+/** Thrown before a cell runs, so nothing it starts is left half done. */
+export class ReservedName extends Error {
+  constructor(name: string) { super(`"${name}" is a kernel function, and declaring it at the top level would replace it for every later cell. Nothing ran: use another name.`); this.name = "ReservedName"; }
+}
+const declare = (token: Token | undefined) => { if (token?.type === "name" && KERNEL_NAMES.has(token.value)) throw new ReservedName(token.value); };
+
 const STATEMENT_WORDS = new Set(["var", "let", "const", "function", "class", "if", "for", "while", "do", "switch", "try",
   "return", "throw", "break", "continue", "import", "export", "with", "debugger"]);
 
@@ -169,6 +179,8 @@ export function transformCell(code: string, returnLast = true): Transformed {
       let depth = 0, declStart = s + 1;
       const finish = (from: number, to: number) => {
         const only = tokens[from];
+        // `const pool = ...` and `let pool`; destructuring is refused when it assigns, in the kernel.
+        if (to > from && (to - from === 1 || tokens[from + 1]?.value === "=")) declare(only);
         if (to - from !== 1 || only?.type !== "name") return;
         edits.push({ at: only.end, end: only.end, text: first.value === "var" ? ` = typeof ${only.value} === "undefined" ? undefined : ${only.value}` : " = undefined" });
       };
@@ -187,10 +199,12 @@ export function transformCell(code: string, returnLast = true): Transformed {
     if (first.type === "name" && (first.value === "function" || isAsyncFn)) {
       let k = s + (isAsyncFn ? 2 : 1);
       if (tokens[k]?.value === "*") k++;
+      declare(tokens[k]);
       if (tokens[k]?.type === "name") functions.push(tokens[k]!.value);
       return;
     }
     if (first.type === "name" && first.value === "class" && second?.type === "name" && second.value !== "extends") {
+      declare(second);
       edits.push({ at: first.start, end: first.start, text: `${second.value} = ` });
       if (!semi) edits.push({ at: last.end, end: last.end, text: ";" });
       return;

@@ -172,7 +172,20 @@ function globals() {
 /** Options cross to Pi as JSON; functions and handles do not. */
 function plain(value) { return JSON.parse(JSON.stringify(value === undefined ? null : value)) ?? {}; }
 
-const context = vm.createContext(globals());
+// A cell's top-level `const pool = ...` becomes an assignment to a global, which
+// would replace pool() for every later cell. The API therefore sits on
+// accessors that refuse assignment; the transform catches plain declarations
+// before the cell runs, and this stops destructuring and bare assignment.
+function protect(api) {
+  const target = {};
+  for (const [name, value] of Object.entries(api)) {
+    Object.defineProperty(target, name, { enumerable: true, get: () => value,
+      set: () => { throw new Error(`"${name}" is a kernel function and cannot be assigned; use another variable name`); } });
+  }
+  return target;
+}
+
+const context = vm.createContext(protect(globals()));
 
 async function run(message) {
   const cell = { n: message.cell, pending: new Set() };
