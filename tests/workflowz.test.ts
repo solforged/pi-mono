@@ -3,7 +3,7 @@ import test, { after } from "node:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import vm from "node:vm";
-import { Jobs, parseJudgment, parseStructured, type AgentTask, type Backend, type Item, type WatchBackend } from "../extensions/workflowz/jobs.ts";
+import { CALLS, Jobs, parseJudgment, parseStructured, type AgentTask, type Backend, type Item, type WatchBackend } from "../extensions/workflowz/jobs.ts";
 import { callKernel, ToolServer } from "../extensions/workflowz/tool-server.ts";
 import { childArgs } from "../extensions/workflows/subagents.ts";
 import { Kernel, type KernelHooks } from "../extensions/workflowz/kernel.ts";
@@ -346,6 +346,82 @@ test("a kernel stuck after an await is restarted while its jobs keep running", a
   assert.match((await kernel.run("workpool({ name: 'survives' })", { timeoutMs: 1000 })).error!, /taken/);
 });
 
+test("a wait whose kernel stops consumes nothing, so the results are delivered instead", async () => {
+  let where = "host", readied = 0;
+  const jobs = new Jobs(fake(undefined, 150).backend, { concurrency: 2, outputBytes: 4000 });
+  jobs.onReady = () => { readied++; };
+  const { localLaunch } = await import("../extensions/workflowz/kernel.ts");
+  const kernel = newKernel(jobs, { placement: () => where, launch: (source) => ({ ...localLaunch(source), where }) });
+  const waiting = await kernel.run("const p = workpool({ name: 'held' }); await p.push('a', 'b'); const h = agent('single'); await Promise.all([p.wait(), h.wait()])", { timeoutMs: 40 });
+  assert.equal(waiting.detached, "timeout");
+  assert.equal(jobs.pools.get("held")!.holds, 1);
+  // The sandbox is toggled: the kernel holding those waits is stopped.
+  where = "sandbox";
+  assert.equal(kernel.relocate("the sandbox was turned on or off"), true);
+  await tick(5);
+  assert.equal(jobs.pools.get("held")!.holds, 0);
+  assert.equal(jobs.items.get("agent-1")!.holds, 0);
+  assert.ok(readied > 0, "delivery is rescheduled when the holds drop");
+  await jobs.until(() => !jobs.busy(), 3000);
+  assert.deepEqual(jobs.ready().map((i) => i.id).sort(), ["agent-1", "held#1", "held#2"]);
+  assert.ok([...jobs.items.values()].every((i) => !i.consumed));
+});
+
+test("a reset keeps the budget spent and the usage not yet reported", async () => {
+  const { backend } = fake(undefined, 30);
+  const first = new Jobs(backend, { concurrency: 2, outputBytes: 4000 });
+  first.setBudget({ total: 150, hard: true });
+  first.agent("a"); first.agent("b");
+  await first.until(() => !first.busy(), 2000);
+  assert.equal(first.spent(), 200);
+  // eval({ reset: true }): the old jobs are cancelled and a new Jobs takes over.
+  first.dispose("Kernel reset");
+  const next = new Jobs(backend, { concurrency: 2, outputBytes: 4000 });
+  next.setBudget({ total: 150, hard: true });
+  next.inherit(first);
+  assert.equal(next.spent(), 200);
+  assert.throws(() => next.agent("c"), /Hard budget of 150 tokens is spent/);
+  assert.equal(next.takeUsage()?.totalTokens, 200, "unreported usage moves to the new Jobs");
+  assert.equal(first.takeUsage(), undefined);
+  // A cancelled child of the old Jobs that reports usage afterwards is still counted.
+  (first as any).record(usage(7));
+  assert.equal(next.takeUsage()?.totalTokens, 7);
+  assert.equal(next.usage.totalTokens, 207);
+});
+
+test("completions and judgments share a cap on model calls in flight", async () => {
+  let running = 0, peak = 0;
+  const backend: Backend = { ...fake().backend, async complete() { running++; peak = Math.max(peak, running); await tick(15); running--; return { text: '{"ok":{"value":true,"probability":1}}', usage: usage(1), provider: "p", model: "m" }; } };
+  const jobs = new Jobs(backend, { concurrency: 2, outputBytes: 4000 });
+  const items = Array.from({ length: CALLS + 20 }, (_, i) => jobs.completion(`q${i}`));
+  const question = { ok: { type: "bool", instructions: "?", criteria: { true: "y", false: "n" } } };
+  const batches = [jobs.judgeBatch(Array.from({ length: 40 }, (_, i) => ({ i })), question, { concurrency: 32 }), jobs.judgeBatch(Array.from({ length: 40 }, (_, i) => ({ i })), question, { concurrency: 32 })];
+  await tick(5);
+  assert.equal(items.filter((i) => i.status === "running").length, CALLS, "the rest queue");
+  await jobs.until(() => !jobs.busy(), 10_000);
+  assert.equal(peak, CALLS);
+  assert.ok(items.every((i) => i.status === "done"));
+  assert.ok(batches.every((b) => b.items.length === 40 && b.items.every((i) => i.ok)));
+  // Queued completions are cancelled with the kernel rather than left waiting.
+  const more = Array.from({ length: CALLS + 5 }, (_, i) => jobs.completion(`r${i}`));
+  jobs.dispose();
+  await tick(30);
+  assert.ok(more.slice(CALLS).every((i) => i.status === "cancelled"));
+});
+
+test("a named wait is scoped to that work, and unknown names are told apart from finished ones", () => {
+  const jobs = new Jobs(fake(undefined, 200).backend, { concurrency: 4, outputBytes: 4000 });
+  jobs.createPool("scout", { name: "slow" }); jobs.push("slow", ["a"]);
+  const named = (names: string[]) => (i: { job: string; id: string }) => names.some((n) => i.job === n || i.id === n);
+  assert.equal(jobs.busy(), true);
+  assert.equal(jobs.busy(named(["slow"])), true);
+  assert.equal(jobs.busy(named(["slow#1"])), true);
+  jobs.createPool("scout", { name: "idle" });
+  assert.equal(jobs.busy(named(["idle"])), false, "another pool's work does not keep a named wait going");
+  assert.deepEqual(["slow", "slow#1", "idle", "typo"].map((n) => jobs.known(n)), [true, true, true, false]);
+  jobs.dispose();
+});
+
 test("kernel functions registered with tool() can be invoked from outside", async () => {
   const kernel = newKernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }));
   await cell(kernel, "const seen = []; await tool('record', (args) => { seen.push(args.finding); return `noted ${seen.length}`; }, { description: 'Record a finding', parameters: { type: 'object', properties: { finding: { type: 'string' } }, required: ['finding'] } })");
@@ -413,6 +489,31 @@ test("watched pools run items on a few Rex children and close them when the pool
   assert.throws(() => headless.createPool("scout", { watch: true }), /needs interactive Pi running in Rex/);
 });
 
+test("a watched worker whose Rex child became unusable gets a new one for the next item", async () => {
+  const events: string[] = [];
+  let opened = 0;
+  const watch: WatchBackend = {
+    limit: 1,
+    open: async () => `child-${++opened}`,
+    // The user took the first pane over: every task sent to it is refused at once.
+    run: async (child, task) => {
+      events.push(`run ${child} ${task.task}`);
+      if (child === "child-1" && task.task !== "a") throw new Error("Child is not available for parent-directed work");
+      await tick(5);
+      return { id: child, agent: task.agent, provider: "p", model: "m", status: "done", text: `${child}: ${task.task}`, transcript: "/s.jsonl", cwd: "/", elapsedMs: 5, usage: usage(5) };
+    },
+    close: async (child) => { events.push(`close ${child}`); },
+  };
+  const jobs = new Jobs({ ...fake().backend, watch: () => watch }, { concurrency: 6, outputBytes: 4000 });
+  jobs.createPool("scout", { name: "w", watch: true, workers: 1 });
+  jobs.push("w", ["a", "b", "c", "d"]);
+  await jobs.until(() => !jobs.busy(), 3000);
+  const status = jobs.poolItems("w").map((i) => `${i.label} ${i.status}`);
+  assert.deepEqual(status, ["a done", "b failed", "c done", "d done"], "one item is lost to the dead child, not the rest of the queue");
+  assert.deepEqual(events.filter((e) => e.startsWith("run")), ["run child-1 a", "run child-1 b", "run child-2 c", "run child-2 d"]);
+  assert.ok(events.includes("close child-1"));
+});
+
 test("a configured classifier judges instead of the smol tier", async () => {
   const { backend, state } = fake();
   const seen: unknown[] = [];
@@ -442,10 +543,11 @@ test("kernel tools reach the kernel through a private socket, and children get t
 });
 
 test("second review: startup, placement, cell attribution and option checks", async () => {
-  // A child that never says ready is killed by the monitor rather than leaked.
+  // A child that never says ready is stopped by the startup limit rather than leaked,
+  // and not by the hang monitor, which would call a slow start a busy loop.
   const silent = newKernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }),
-    { hangMs: 500, launch: () => ({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], where: "host" }) });
-  assert.match((await silent.run("1", { timeoutMs: 10_000 })).error!, /could not start|stopped/);
+    { hangMs: 100, startupMs: 1500, launch: () => ({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], where: "host" }) });
+  assert.match((await silent.run("1", { timeoutMs: 10_000 })).error!, /did not start within 1\.5s/);
   // A kernel running where it no longer may restarts before the next cell.
   let where = "host";
   const jobs = new Jobs(fake(undefined, 20).backend, { concurrency: 4, outputBytes: 4000 });

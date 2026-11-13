@@ -16,7 +16,8 @@ export interface CellOptions {
   signal?: AbortSignal; timeoutMs?: number;
   /** True while the user has a message waiting; the cell then stops being awaited. */
   pending?: () => boolean;
-  onOutput?: (text: string) => void;
+  /** Every print so far, on each new one; the caller joins what it shows. */
+  onOutput?: (lines: readonly string[]) => void;
   tools?: ToolBridge;
 }
 /** How to start the child; `source` is the kernel program for `-e`. */
@@ -26,6 +27,8 @@ export interface KernelHooks {
   syncTimeoutMs?: number;
   /** A kernel silent this long (no heartbeat) is stuck and gets restarted. */
   hangMs?: number;
+  /** How long a new kernel may take to answer; a guest can be slow to start. */
+  startupMs?: number;
   launch?: (source: string) => Launch | Promise<Launch>;
   /** Where the kernel must run now ("host" or "sandbox"); a kernel elsewhere is stopped. */
   placement?: () => string;
@@ -68,14 +71,19 @@ export function candidates(code: string) {
 interface Child {
   proc: ChildProcessWithoutNullStreams; ready: Promise<void>; beat: number; stderr: string; where: string;
   dead?: string; monitor: ReturnType<typeof setInterval>;
+  /** Set once the child answers; until then the startup timer, not the hang monitor, decides. */
+  started: boolean;
+  /** Ends the waits this child's cells hold in Pi when it stops, so their results are delivered instead. */
+  waits: AbortController;
 }
 interface Pending { resolve: (message: any) => void }
 
 export class Kernel {
   private child?: Child;
   private cells = 0;
-  private active?: { n: number; lines: string[]; size: number; onOutput?: (text: string) => void };
+  private active?: { n: number; lines: string[]; size: number; onOutput?: (lines: readonly string[]) => void };
   private late: string[] = [];
+  private lateSize = 0;
   private bridge?: ToolBridge;
   private runs = new Map<number, Pending>();
   private invocations = new Map<number, Pending>();
@@ -92,7 +100,7 @@ export class Kernel {
   get where() { return this.child?.where; }
 
   /** Stops the child; the next cell starts a fresh one. */
-  reset() { this.generation++; this.stop("Kernel reset"); this.late = []; this.tools.clear(); this.restartNote = undefined; }
+  reset() { this.generation++; this.stop("Kernel reset"); this.late = []; this.lateSize = 0; this.tools.clear(); this.restartNote = undefined; }
   dispose() { this.generation++; this.stop("Kernel closed"); }
   /** Stops a kernel that runs somewhere it no longer may (the sandbox was toggled). */
   relocate(reason: string) {
@@ -107,6 +115,7 @@ export class Kernel {
     if (!child) return;
     this.child = undefined;
     child.dead = reason;
+    child.waits.abort(new Error(`Kernel stopped: ${reason}`));
     clearInterval(child.monitor);
     // SIGTERM reaches a guest process through `container exec`; SIGKILL would orphan it.
     child.proc.stdin.end();
@@ -126,10 +135,13 @@ export class Kernel {
     if (generation !== this.generation) throw new Error("The kernel was reset while it started");
     const proc = spawn(launch.command, launch.args, { env: { ...process.env, ...launch.env }, stdio: ["pipe", "pipe", "pipe"] });
     const ready = Promise.withResolvers<void>();
-    const child: Child = { proc, ready: ready.promise, beat: Date.now(), stderr: "", where: launch.where,
+    const child: Child = { proc, ready: ready.promise, beat: Date.now(), stderr: "", where: launch.where, started: false, waits: new AbortController(),
       monitor: setInterval(() => {
         const limit = this.hooks.hangMs ?? (this.hooks.syncTimeoutMs ?? SYNC_TIMEOUT_MS) + 5000;
-        if (Date.now() - child.beat > limit && this.child === child) this.crash(child, `it stopped responding for ${Math.round(limit / 1000)}s, probably a busy loop after an await`);
+        const silent = () => child.started && this.child === child && Date.now() - child.beat > limit;
+        // Pi may itself have been stalled, or the machine asleep, with beats
+        // waiting unread: look again once they have had time to arrive.
+        if (silent()) setTimeout(() => { if (silent()) this.crash(child, `it stopped responding for ${Math.round(limit / 1000)}s, probably a busy loop after an await`); }, 600).unref?.();
       }, 1000) };
     child.monitor.unref?.();
     proc.stderr.on("data", (chunk) => { child.stderr = (child.stderr + chunk).slice(-4000); });
@@ -150,7 +162,8 @@ export class Kernel {
     // Registered before it is ready, so the monitor, crashes, reset and dispose all reach it.
     this.child = child;
     this.send(child, { t: "init", counters: this.jobs.counterSnapshot(), syncTimeoutMs: this.hooks.syncTimeoutMs ?? SYNC_TIMEOUT_MS });
-    const timer = setTimeout(() => ready.reject(new Error(`Kernel did not start within ${STARTUP_MS / 1000}s`)), STARTUP_MS);
+    const startupMs = this.hooks.startupMs ?? STARTUP_MS;
+    const timer = setTimeout(() => ready.reject(new Error(`Kernel did not start within ${startupMs / 1000}s`)), startupMs);
     try { await ready.promise; } catch (error) {
       if (this.child === child) this.stop(String((error as Error).message));
       else if (!child.dead) { child.dead = "startup failed"; clearInterval(child.monitor); proc.kill("SIGKILL"); }
@@ -175,7 +188,7 @@ export class Kernel {
     try { message = JSON.parse(line); } catch { return; }
     child.beat = Date.now();
     switch (message.t) {
-      case "ready": ready(); break;
+      case "ready": child.started = true; ready(); break;
       case "print": {
         // Output from a detached earlier cell is labelled with that cell.
         const text = this.describe(String(message.text)), from = message.cell as number | undefined;
@@ -199,13 +212,15 @@ export class Kernel {
   private print(text: string) {
     const cell = this.active;
     if (!cell) {
-      this.late.push(text);
-      while (this.late.join("\n").length > 16_000) this.late.shift();
+      // Sizes are tracked, not recomputed: a detached cell can print tens of thousands of lines.
+      const line = text.length > 16_000 ? `${text.slice(0, 16_000)}…` : text;
+      this.late.push(line); this.lateSize += line.length + 1;
+      while (this.lateSize > 16_000 && this.late.length > 1) this.lateSize -= this.late.shift()!.length + 1;
       return;
     }
     if (cell.size > MAX_OUTPUT * 2) return;
     cell.lines.push(text); cell.size += text.length + 1;
-    cell.onOutput?.(cell.lines.join("\n"));
+    cell.onOutput?.(cell.lines);
   }
 
   /** Replaces handle tokens from the child with their current status. */
@@ -229,7 +244,7 @@ export class Kernel {
 
   private async answer(child: Child, message: { id: number; fn: string; args: unknown[] }) {
     try {
-      const value = await this.dispatch(message.fn, message.args ?? []);
+      const value = await this.dispatch(message.fn, message.args ?? [], child.waits.signal);
       this.send(child, { t: "reply", id: message.id, ok: true, value });
     } catch (error) {
       const e = error as Error;
@@ -238,7 +253,7 @@ export class Kernel {
   }
 
   /** The workflow API behind the child's handles. Values must survive JSON. */
-  private async dispatch(fn: string, args: any[]): Promise<unknown> {
+  private async dispatch(fn: string, args: any[], signal: AbortSignal): Promise<unknown> {
     const jobs = this.jobs;
     const ms = (value: unknown) => value === undefined || value === null ? undefined : Math.max(0, Number(value));
     const finished = (items: Item[]) => items.filter((i) => !["queued", "running"].includes(i.status));
@@ -248,16 +263,16 @@ export class Kernel {
       case "poolPush": return jobs.push(String(args[0]), Array.isArray(args[1]) ? args[1] : [args[1]]);
       case "poolPeek": return jobs.poolItems(String(args[0])).map(snapshot);
       case "poolResults": return finished(jobs.poolItems(String(args[0]))).map(snapshot);
-      case "poolWait": return (await jobs.poolWait(String(args[0]), ms(args[1]))).map(snapshot);
+      case "poolWait": return (await jobs.poolWait(String(args[0]), ms(args[1]), signal)).map(snapshot);
       case "poolClose": jobs.closePool(String(args[0])); return undefined;
       case "agent": return jobs.agent(args[0], args[1] ?? {}).id;
       case "completion": return jobs.completion(args[0], args[1] ?? {}).id;
       case "agentSend": { const item = jobs.followUp(String(args[0]), args[1], args[2] ?? {}); return { id: item.id, label: item.label }; }
-      case "itemWait": return jobs.itemWait(String(args[0]), ms(args[1]));
+      case "itemWait": return jobs.itemWait(String(args[0]), ms(args[1]), signal);
       case "itemStatus": { const item = jobs.items.get(String(args[0])); if (!item) throw new Error(`No job item ${args[0]}`); return item.status; }
-      case "judge": return jobs.judge(args[0], args[1]);
+      case "judge": return jobs.judge(args[0], args[1], signal);
       case "judgeBatch": return jobs.judgeBatch(args[0], args[1], args[2] ?? {}).id;
-      case "batchDrain": return (await jobs.batchDrain(String(args[0]), ms(args[1]) ?? 30_000)).map((i) => [i.key, i]);
+      case "batchDrain": return (await jobs.batchDrain(String(args[0]), ms(args[1]) ?? 30_000, signal)).map((i) => [i.key, i]);
       case "batchStatus": {
         const b = jobs.batch(String(args[0])), ok = b.items.filter((i) => i.ok).length;
         return { id: b.id, intent: b.intent, total: b.total, judged: b.items.length, ok, failed: b.items.length - ok, done: b.done, closed: b.closed, drainedAll: b.drained >= b.items.length };
@@ -303,8 +318,11 @@ export class Kernel {
   }
 
   async run(code: string, options: CellOptions = {}): Promise<CellResult> {
+    let list: ReturnType<typeof candidates>;
+    try { list = candidates(code); } catch (error) { return { output: "", error: String((error as Error).message) }; }
     const n = ++this.cells;
     const earlier = this.late.splice(0);
+    this.lateSize = 0;
     const notes: string[] = [];
     const cell = { n, lines: earlier.length ? ["[earlier background output]", ...earlier, "[this cell]"] : [], size: 0, onOutput: options.onOutput };
     this.relocate("the sandbox was turned on or off");
@@ -317,8 +335,6 @@ export class Kernel {
     } catch (error) { return { output: cell.lines.join("\n"), error: String((error as Error).message) }; }
     if (this.restartNote) { notes.push(this.restartNote); this.restartNote = undefined; }
     this.active = cell; this.bridge = options.tools;
-    let list: ReturnType<typeof candidates>;
-    try { list = candidates(code); } catch (error) { return { output: "", error: String((error as Error).message) }; }
     const done = Promise.withResolvers<any>();
     this.runs.set(n, { resolve: done.resolve });
     this.send(child, { t: "run", cell: n, candidates: list });

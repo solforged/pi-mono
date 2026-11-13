@@ -15,7 +15,8 @@ is sent again after compaction drops it or its text changes.
   it for research, audits, evaluations and migrations that fan out.
 
 `+500k` in a `workflowz` message sets an advisory token budget for kernel work;
-`+500k!` makes it hard, so new work is refused once it is spent.
+`+500k!` makes it hard, so new work is refused once it is spent. A reset does
+not refill it.
 
 ## The kernel
 
@@ -46,7 +47,8 @@ Agents are the [subagent](subagents.md) roles: `scout` (default), `researcher`
 (scout plus `web_search` and `web_fetch`), `advisor`, and `worker`, which
 edits a detached worktree you integrate. Each item gets a fresh headless child
 with the approved instructions; children cannot delegate or use the kernel.
-At most `subagents.evalConcurrency` (default 6) run at once across the kernel.
+At most `subagents.evalConcurrency` (default 6) run at once across the kernel;
+`completion()` and judge calls share a separate limit of 32 in flight.
 
 - **Long-lived workers.** `workers: n` gives a pool n agents that take its
   items in turn, each continuing its own saved conversation (and, for
@@ -54,7 +56,8 @@ At most `subagents.evalConcurrency` (default 6) run at once across the kernel.
 - **Watched pools.** `watch: true` runs the workers as Rex children in the
   deck, where you can watch, peek or take one over. It needs interactive Pi in
   Rex, defaults to 3 workers, counts against `subagents.rexConcurrency`, and
-  closes the children when the pool settles.
+  closes the children when the pool settles. A worker whose pane you take over
+  or close gets a new child for its next item.
 - **Kernel tools.** Children given `tools` call the kernel functions over a
   private Unix socket with a per-session token. They fail once the kernel
   restarts; define them again.
@@ -64,8 +67,10 @@ At most `subagents.evalConcurrency` (default 6) run at once across the kernel.
 
 Finished items the kernel did not `wait()` for are delivered to the model as
 `Workflow results` messages: between tool calls while it works, and as a new
-turn when it has stopped. The `wait` tool blocks until the next results; a
-message you type ends that wait. After Escape, results stop starting turns and
+turn when it has stopped. The same happens to results a cell was waiting for
+when its kernel stopped. The `wait` tool blocks until the next results, or
+with `jobs` until the named pools or items have some; a message you type ends
+that wait. After Escape, results stop starting turns and
 wait for your next message instead; the jobs keep running. Print and JSON runs
 (`pi -p`) wait for outstanding jobs before exiting, up to three empty
 10-minute waits. A widget above the editor lists running pools.

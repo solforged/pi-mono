@@ -34,6 +34,12 @@ export default async function (pi: ExtensionAPI) {
   const lifetime = new AbortController();
   let config: Config | undefined, ctxNow: ExtensionContext | undefined, instructions = "";
   let jobs: Jobs | undefined, kernel: Kernel | undefined, budget: { total: number; hard: boolean } | undefined;
+  // The Jobs a reset cancelled: the next one takes over its budget spend and unreported usage.
+  let retired: Jobs | undefined;
+  const reset = (reason: string) => {
+    if (jobs) { jobs.dispose(reason); retired = jobs; }
+    kernel?.dispose(); jobs = undefined; kernel = undefined;
+  };
   let flushTimer: ReturnType<typeof setTimeout> | undefined, widgetTimer: ReturnType<typeof setTimeout> | undefined;
   let waiting = 0, nudges = 0;
   // Results arriving while Pi is idle start a turn, until the user interrupts with Escape.
@@ -105,6 +111,7 @@ export default async function (pi: ExtensionAPI) {
     if (!jobs || !kernel) {
       jobs = new Jobs(backend, { concurrency: config.subagents.evalConcurrency, outputBytes: config.subagents.outputBytes });
       jobs.setBudget(budget);
+      if (retired) { jobs.inherit(retired); retired = undefined; }
       jobs.onChange = scheduleWidget;
       jobs.onReady = scheduleFlush;
       const k = kernel = new Kernel(jobs, { launch, placement: () => sandboxOn() ? "sandbox" : "host" });
@@ -112,6 +119,9 @@ export default async function (pi: ExtensionAPI) {
       jobs.kernelTools = {
         has: (name) => k.tools.has(name),
         extras: (names) => {
+          // A restarted kernel (a hang, or the sandbox toggled) has lost its tool() functions.
+          const gone = names.filter((n) => !k.tools.has(n));
+          if (gone.length) throw new Error(`The kernel restarted and no longer has ${gone.join(", ")}; define ${gone.length > 1 ? "them" : "it"} with tool() again`);
           toolServer ??= new ToolServer((name, args, signal) => kernel ? kernel.invoke(name, args, signal) : Promise.resolve({ ok: false, error: "The workflow kernel was reset" }));
           return { tools: names, extensions: [join(here, "child-tools.ts")],
             env: { PI_WORKFLOWZ_TOOLS: JSON.stringify({ socket: toolServer.socket, token: toolServer.token, tools: names.map((n) => k.tools.get(n)!) }) } };
@@ -165,7 +175,7 @@ export default async function (pi: ExtensionAPI) {
     jobs?.dispose("Session closed");
     kernel?.dispose();
     toolServer?.close(); toolServer = undefined;
-    const usage = jobs?.takeUsage();
+    const usage = (jobs ?? retired)?.takeUsage();
     if (usage) recordUsage(pi, undefined, { role: "eval", usage });
     if (ctxNow?.mode === "tui") ctxNow.ui.setWidget("workflowz", undefined);
   });
@@ -197,7 +207,9 @@ export default async function (pi: ExtensionAPI) {
    * signal aborts, or the user has a message waiting) with automatic flushing paused.
    */
   async function collect(j: Jobs, ctx: ExtensionContext, timeoutMs: number, signal: AbortSignal | undefined, filter?: (i: { job: string; id: string }) => boolean) {
-    const available = () => j.ready(filter).length > 0 || j.receipts.length > 0;
+    // A named wait ends on the named work only, not on another pool's receipt.
+    const available = () => j.ready(filter).length > 0 || (!filter && j.receipts.length > 0);
+    const busy = () => j.busy(filter);
     const user = new AbortController(), already = ctx.hasPendingMessages();
     // As with rex_result: a message already queued when the wait began does not end it.
     const poll = setInterval(() => { if (!already && ctx.hasPendingMessages()) user.abort(); }, 250);
@@ -206,11 +218,11 @@ export default async function (pi: ExtensionAPI) {
     let yielded = false;
     try {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal, user.signal]);
-      if (!available() && j.busy()) {
-        try { await j.until(() => available() || !j.busy(), timeoutMs, combined); }
+      if (!available() && busy()) {
+        try { await j.until(() => available() || !busy(), timeoutMs, combined); }
         catch (error) { if (!user.signal.aborted) throw error; yielded = true; }
         // Let near-simultaneous completions arrive together.
-        if (!yielded && available() && j.busy()) await j.until(() => false, 1500, combined).catch(() => { yielded = user.signal.aborted; });
+        if (!yielded && available() && busy()) await j.until(() => false, 1500, combined).catch(() => { yielded = user.signal.aborted; });
       }
     } finally { clearInterval(poll); waiting--; }
     return { batch: j.take(RESULT_BYTES, filter), yielded };
@@ -290,14 +302,14 @@ export default async function (pi: ExtensionAPI) {
     async execute(_id, params, signal, onUpdate, ctx) {
       ctxNow = ctx;
       await refreshConfig(ctx);
-      if (params.reset && jobs) { jobs.dispose("Kernel reset"); kernel?.dispose(); jobs = undefined; kernel = undefined; }
+      if (params.reset && jobs) reset("Kernel reset");
       const { jobs: j, kernel: k } = ensure();
       const timeoutMs = Math.min(3600, Math.max(1, params.timeout ?? 300)) * 1000;
       let last = 0;
       const tc = ctx as ExtensionContext & { executeTool?: (name: string, args: unknown, options?: { signal?: AbortSignal }) => Promise<any> };
       const result = await k.run(params.code, {
         signal: signal ?? lifetime.signal, timeoutMs, pending: () => ctx.hasPendingMessages(),
-        onOutput: (text) => { if (Date.now() - last > 400) { last = Date.now(); onUpdate?.({ content: [{ type: "text", text: bounded(text.split("\n").slice(-20).join("\n"), 4000) }], details: undefined }); } },
+        onOutput: (lines) => { if (Date.now() - last > 400) { last = Date.now(); onUpdate?.({ content: [{ type: "text", text: bounded(lines.slice(-20).join("\n").split("\n").slice(-20).join("\n"), 4000) }], details: undefined }); } },
         tools: {
           async call(name, args) {
             if (!tc.executeTool) throw new Error("This Pi does not let tools call other tools");
@@ -341,6 +353,8 @@ export default async function (pi: ExtensionAPI) {
       if (!jobs) return { content: [{ type: "text", text: "No workflow jobs in this session." }], details: undefined };
       const j = jobs;
       const names = params.jobs ?? [];
+      const unknown = names.filter((n) => !j.known(n));
+      if (unknown.length) throw new Error(`No pool, item or judge batch named ${unknown.join(", ")}. Running:\n${j.statusLines().join("\n") || "nothing"}`);
       const filter = names.length ? (i: { job: string; id: string }) => names.some((n) => i.job === n || i.id === n) : undefined;
       const timeoutMs = Math.min(3600, Math.max(1, params.timeout ?? 600)) * 1000;
       const ticker = setInterval(() => onUpdate?.({ content: [{ type: "text", text: j.statusLines().join("\n") || "waiting…" }], details: undefined }), 2000);
@@ -362,12 +376,13 @@ export default async function (pi: ExtensionAPI) {
     description: "Show eval-kernel jobs; /workflowz reset cancels them and clears the kernel",
     handler: async (args, ctx) => {
       if (args.trim() === "reset") {
-        jobs?.dispose("Reset by /workflowz reset"); kernel?.dispose(); jobs = undefined; kernel = undefined; renderWidget();
+        reset("Reset by /workflowz reset"); renderWidget();
         ctx.ui.notify("Workflow kernel reset; running jobs were cancelled", "info"); return;
       }
       if (args.trim()) throw new Error("Usage: /workflowz [reset]");
       const lines = jobs?.statusLines() ?? [];
-      const usage = jobs ? addUsage(emptyUsage(), jobs.usage) : emptyUsage();
+      const counted = jobs ?? retired;
+      const usage = counted ? addUsage(emptyUsage(), counted.usage) : emptyUsage();
       const text = [`Kernel: ${kernel?.where ? `running on the ${kernel.where === "sandbox" ? "sandbox guest" : "host"}` : "not started"}${jobs?.phase ? ` · phase ${jobs.phase}` : ""}`,
         `Kernel work: ${usage.totalTokens} tokens, $${usage.cost.total.toFixed(4)}${budget ? ` · budget ${budget.total}${budget.hard ? " (hard)" : ""}` : ""}`,
         ...(lines.length ? lines : ["No running jobs."])].join("\n");

@@ -39,6 +39,8 @@ export interface WatchBackend {
   close(child: string): Promise<void>;
 }
 export interface Limits { concurrency: number; outputBytes: number }
+/** One-shot model calls (completions and judgments) in flight at once, across the kernel. */
+export const CALLS = 32;
 
 export class Semaphore {
   private running = 0;
@@ -188,6 +190,9 @@ export class Jobs {
   private budgetBase = 0;
   phase = "";
   private semaphore: Semaphore;
+  private calls = new Semaphore(CALLS);
+  /** The Jobs that replaced this one at a reset; usage that arrives late goes there. */
+  private heir?: Jobs;
   private counters = new Map<string, number>();
   private waiters = new Set<() => void>();
   private readonly lifetime = new AbortController();
@@ -246,7 +251,22 @@ export class Jobs {
     this.live();
     if (this.budget.hard && this.budget.total !== undefined && this.spent() >= this.budget.total) throw new Error(`Hard budget of ${this.budget.total} tokens is spent; no new work starts`);
   }
-  private record(usage?: Partial<Usage>) { if (!usage) return; addUsage(this.usage, usage); addUsage(this.unreported, usage); }
+  private record(usage?: Partial<Usage>) {
+    if (!usage) return;
+    if (this.heir) { this.heir.record(usage); return; }
+    addUsage(this.usage, usage); addUsage(this.unreported, usage);
+  }
+  /**
+   * Takes over the accounting of the Jobs a reset replaced: what it spent still
+   * counts against the budget, and usage no tool result has reported is kept,
+   * including what its cancelled children report after this.
+   */
+  inherit(old: Jobs) {
+    addUsage(this.usage, old.usage); addUsage(this.unreported, old.unreported);
+    old.unreported = emptyUsage();
+    this.budgetBase = old.budgetBase;
+    old.heir = this;
+  }
   takeUsage(): Usage | undefined {
     const usage = this.unreported;
     if (!usage.totalTokens && !usage.cost.total) return undefined;
@@ -334,7 +354,9 @@ export class Jobs {
     const pool = this.pool(name);
     pool.holds++;
     try { await this.until(() => pool.settled || !pool.items.length, timeoutMs, signal); }
-    finally { pool.holds--; }
+    // A wait that ends with its kernel consumes nothing: the results go to the model instead.
+    catch (error) { pool.holds--; this.onReady(); throw error; }
+    pool.holds--;
     const finished = pool.items.filter((i) => !["queued", "running"].includes(i.status));
     for (const item of finished) item.consumed = true;
     this.onChange();
@@ -397,7 +419,8 @@ export class Jobs {
     item.holds++;
     let finished: boolean;
     try { finished = await this.until(() => !["queued", "running"].includes(item.status), timeoutMs, signal); }
-    finally { item.holds--; }
+    catch (error) { item.holds--; this.onReady(); throw error; }
+    item.holds--;
     if (!finished) { this.onReady(); throw new Error(`Timed out waiting for ${item.id}; it keeps running and is delivered when done`); }
     item.consumed = true;
     this.onChange();
@@ -415,6 +438,7 @@ export class Jobs {
   }
   /** One judgment on the configured classifier, or the smol tier as structured JSON. Records usage either way. */
   private async judgeOnce(state: unknown, checked: Record<string, Question>, signal: AbortSignal): Promise<Record<string, Answer>> {
+    await this.calls.acquire(signal);
     try {
       const classified = this.backend.classify?.(state && typeof state === "object" && !Array.isArray(state) ? state as Record<string, unknown> : { value: state }, checked, signal);
       if (classified) {
@@ -426,6 +450,7 @@ export class Jobs {
       this.record(run.usage);
       return parseJudgment(run.text, checked);
     } catch (error) { this.record((error as { usage?: Partial<Usage> })?.usage); throw error; }
+    finally { this.calls.release(); }
   }
   judgeBatch(states: unknown, questions: unknown, options: { concurrency?: unknown; retries?: unknown; minOk?: unknown; intent?: unknown; id?: unknown } = {}) {
     if (!Array.isArray(states) || !states.length) throw new Error("judgeBatch needs a non-empty array of states");
@@ -495,7 +520,13 @@ export class Jobs {
         // The slot's Rex child takes the pool's items in turn, in its own pane.
         await this.runAgentItem(item, task, pool.abort.signal, async (s) => {
           slot.child ??= await watch.open(pool.agent, `${pool.name} ${workers.slots.indexOf(slot) + 1}`, s);
-          return watch.run(slot.child, task, s, item.label);
+          try { return await watch.run(slot.child, task, s, item.label); }
+          catch (error) {
+            // The pane was taken over or closed, or the child reached its task
+            // limit: the next item opens a new one instead of failing the same way.
+            if (!s.aborted) { const gone = slot.child; slot.child = undefined; void watch.close(gone).catch(() => {}); }
+            throw error;
+          }
         });
       } else {
         item.session = { dir: "", id: slot.session };
@@ -538,6 +569,8 @@ export class Jobs {
     } finally { this.semaphore.release(); }
   }
   private async runCompletion(item: Item, tier: Tier, system: string, prompt: string, signal: AbortSignal) {
+    try { await this.calls.acquire(signal); }
+    catch { if (item.status === "queued") this.finish(item, "cancelled", "Cancelled before starting"); return; }
     item.status = "running"; item.started = Date.now(); this.onChange();
     try {
       const result = await this.backend.complete(tier, system, prompt, signal);
@@ -547,7 +580,7 @@ export class Jobs {
     } catch (error) {
       this.record((error as { usage?: Partial<Usage> })?.usage);
       this.finish(item, signal.aborted ? "cancelled" : "failed", String((error as Error)?.message ?? error));
-    }
+    } finally { this.calls.release(); }
   }
   private complete(item: Item, text: string) {
     if (item.schema !== undefined) {
@@ -587,7 +620,13 @@ export class Jobs {
   // ----- delivery -----
   running() { return [...this.items.values()].filter((i) => i.status === "queued" || i.status === "running"); }
   activeBatches() { return [...this.batches.values()].filter((b) => !b.done); }
-  busy() { return this.running().length > 0 || this.activeBatches().length > 0; }
+  /** Whether work is still running; with a filter, only work it names (a batch by its id). */
+  busy(filter?: (job: { job: string; id: string }) => boolean) {
+    return (filter ? this.running().filter(filter) : this.running()).length > 0
+      || this.activeBatches().some((b) => !filter || filter({ job: b.id, id: b.id }));
+  }
+  /** Whether a pool, item or judge batch has this name. */
+  known(name: string) { return this.pools.has(name) || this.items.has(name) || this.batches.has(name); }
   private held(item: Item) { return item.holds > 0 || (item.kind === "pool" && (this.pools.get(item.job)?.holds ?? 0) > 0); }
   ready(filter?: (item: Item) => boolean) {
     return [...this.items.values()].filter((i) => !["queued", "running"].includes(i.status) && !i.consumed && !i.delivered && !this.held(i) && (!filter || filter(i)));
