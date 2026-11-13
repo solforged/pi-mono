@@ -22,7 +22,9 @@ export interface CellOptions {
 }
 /** How to start the child; `source` is the kernel program for `-e`. */
 export interface Launch {
-  command: string; args: string[]; env?: Record<string, string>; where: string;
+  command: string; args: string[]; where: string;
+  /** The child's whole environment. Left out, the child inherits Pi's, as a guest's client on the host must. */
+  env?: Record<string, string>;
   /** Ends the process where it runs, for a guest whose client does not pass signals on. */
   stop?: () => void;
 }
@@ -46,10 +48,16 @@ const SYNC_TIMEOUT_MS = 10_000;
 const STARTUP_MS = 60_000;
 export const SOURCE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "kernel-child.cjs"), "utf8");
 
+// A cell can reach the kernel's `process`. A host kernel therefore gets only
+// what its runtime, dates and locale read from Pi's environment, and none of
+// the credentials there. A guest kernel has the guest's environment either way.
+const KEPT_ENV = /^(PATH|HOME|TMPDIR|TZ|LANG|LC_\w+)$/;
+
 /** Runs the child with the runtime Pi itself runs on: Bun inside Pi, Node in tests. */
 export function localLaunch(source: string): Launch {
-  const bun = Boolean(process.versions.bun);
-  return { command: process.execPath, args: ["-e", source], env: bun ? { BUN_BE_BUN: "1" } : {}, where: "host" };
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => KEPT_ENV.test(name))) as Record<string, string>;
+  if (process.versions.bun) env.BUN_BE_BUN = "1";
+  return { command: process.execPath, args: ["-e", source], env, where: "host" };
 }
 
 const snapshot = (item: Item) => ({ id: item.id, status: item.status, label: item.label, agent: item.agent, text: item.text,
@@ -139,7 +147,7 @@ export class Kernel {
     const generation = this.generation;
     const launch = await (this.hooks.launch ?? localLaunch)(SOURCE);
     if (generation !== this.generation) throw new Error("The kernel was reset while it started");
-    const proc = spawn(launch.command, launch.args, { env: { ...process.env, ...launch.env }, stdio: ["pipe", "pipe", "pipe"] });
+    const proc = spawn(launch.command, launch.args, { env: launch.env ?? process.env, stdio: ["pipe", "pipe", "pipe"] });
     const ready = Promise.withResolvers<void>();
     const child: Child = { proc, ready: ready.promise, beat: Date.now(), stderr: "", where: launch.where, halt: launch.stop, started: false, waits: new AbortController(),
       monitor: setInterval(() => {

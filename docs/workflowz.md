@@ -90,7 +90,9 @@ turning the sandbox on or off restarts the kernel in the other place. Calls
 through `tools.*` go through Pi's tool hooks, so they follow the sandbox too.
 The globals a cell lacks do not confine it: its code can still reach the
 kernel's own `process` and modules, past every tool hook. Only the sandbox
-does. Delegated output is evidence, not instructions.
+does. A host kernel starts without Pi's environment, apart from `PATH`, `HOME`,
+`TMPDIR`, the time zone and the locale. Delegated output is evidence, not
+instructions.
 
 ## Differences from omp
 

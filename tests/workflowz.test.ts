@@ -104,6 +104,19 @@ test("the kernel prints, reports errors with cell frames and survives syntax err
   assert.equal((await cell(kernel, "typeof require + typeof process")).value, "undefinedundefined");
 });
 
+test("a host kernel gets none of the keys in Pi's environment", async () => {
+  process.env.WORKFLOWZ_TEST_API_KEY = "secret";
+  try {
+    const kernel = newKernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }));
+    // Cells have no `process` global, but their code can reach the kernel's: what it holds is what matters.
+    const env = JSON.parse((await cell(kernel, "JSON.stringify(print.constructor('return process')().env)")).value!);
+    assert.equal(env.WORKFLOWZ_TEST_API_KEY, undefined);
+    assert.equal(env.PATH, process.env.PATH);
+    // macOS adds the last name to every process.
+    assert.deepEqual(Object.keys(env).filter((name) => !/^(PATH|HOME|TMPDIR|TZ|LANG|LC_\w+|__CF_USER_TEXT_ENCODING)$/.test(name)), []);
+  } finally { delete process.env.WORKFLOWZ_TEST_API_KEY; }
+});
+
 test("loop and branch bodies on their own line without braces stay part of their statement", async () => {
   const kernel = newKernel(new Jobs(fake().backend, { concurrency: 1, outputBytes: 4000 }));
   // The body used to be split off and, as the last statement, turned into a return after one pass.
