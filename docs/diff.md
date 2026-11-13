@@ -27,7 +27,8 @@ forgets it. Open panes are remembered by worktree in
 `~/.pi/agent/diff-panes.json` for up to 30 days.
 
 Each check runs `git status` without optional locks after a tool that can
-change files, and stops once the pane is open. Configure it in
+change files. Checks are skipped while the pane could not open anyway, and
+stop once it is open. Configure it in
 `~/.pi/agent/settings.json`:
 
 ```json

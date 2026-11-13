@@ -2,7 +2,8 @@
 // own once Pi starts changing files, and writes refresh hints into a private
 // IPC directory. No runtime Pi imports, so tests can drive it with a fake API.
 import { execFile, execFileSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -155,11 +156,12 @@ export function tick(dir: string, piPid: number, message: { event: string; path?
  */
 export async function treeState(exec: Run, root: string): Promise<string> {
   const entries = (await exec("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], root)).split("\0").filter(Boolean);
-  return entries.map((entry, i) => {
+  // Not synchronously: this runs in Pi's own process after each tool that can change files.
+  return (await Promise.all(entries.map(async (entry, i) => {
     if (i >= MAX_STATS) return entry;
-    try { const stat = statSync(join(root, entry.slice(3))); return `${entry}\t${stat.size}\t${stat.mtimeMs}`; }
+    try { const info = await stat(join(root, entry.slice(3))); return `${entry}\t${info.size}\t${info.mtimeMs}`; }
     catch { return entry; }
-  }).join("\n");
+  }))).join("\n");
 }
 
 /**
@@ -332,11 +334,13 @@ export function registerDiff(pi: ExtensionAPI, options: Options): DiffPane {
         auto.again = false;
         await auto.ready;
         const session = auto.session;
+        // Before asking Git: while the pane could not open anyway, the tree's state is not needed.
+        if (!auto.armed) continue;
+        if (columns() < settings().minColumns) continue; // Stay armed: the window may widen.
+        if (options.held?.()) continue; // Stay armed until the document pane closes.
         const state = await treeState(exec, auto.root).catch(() => undefined);
         if (!auto.armed || session !== auto.session || state === undefined || state === auto.baseline) continue;
         if (viewerPid(dir, pid) !== undefined) { auto.armed = false; return; }
-        if (columns() < settings().minColumns) continue; // Stay armed: the window may widen.
-        if (options.held?.()) continue; // Stay armed until the document pane closes.
         auto.armed = false;
         try { await open(ctx, "uncommitted", auto.focus); }
         catch (error) {

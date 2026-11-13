@@ -527,6 +527,7 @@ test("opens on its own once Pi changes the working tree, once per session", asyn
   end(h, "3", "write", "src/new.ts");
   await settle();
   assert.equal(h.splits().length, 0, "too narrow: stays armed");
+  assert.equal(h.calls.filter(([, args]) => args[0] === "status").length, 1, "and asks Git nothing after the baseline, while it could not open");
   h.state.columns = 200;
   end(h, "4", "edit", "src/new.ts");
   await settle();
