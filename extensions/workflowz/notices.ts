@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -45,13 +46,46 @@ export function dispatchLine(state: NoticeState): string {
   return parts.join(" ");
 }
 
-export function renderNotice(template: string, state: NoticeState): string {
-  const budget = state.budget
-    ? `This request set a ${state.budget.hard ? "hard" : "advisory"} budget of ${state.budget.total.toLocaleString("en-US")} tokens${state.budget.hard ? "; new work is refused once it is spent" : ""}.`
+export function budgetLine(budget: NoticeState["budget"]): string {
+  return budget
+    ? `This request set a ${budget.hard ? "hard" : "advisory"} budget of ${budget.total.toLocaleString("en-US")} tokens${budget.hard ? "; new work is refused once it is spent" : ""}.`
     : "No budget was set (the user can add `+500k`, or `+500k!` for a hard limit).";
+}
+
+export function renderNotice(template: string, state: NoticeState): string {
   return template
     .replaceAll("{{concurrency}}", String(state.concurrency))
-    .replaceAll("{{budget}}", budget)
+    .replaceAll("{{budget}}", budgetLine(state.budget))
     .replaceAll("{{judge}}", state.judge ? `classifier ${state.judge}` : "estimated by a small chat model")
     .replaceAll("{{dispatch}}", dispatchLine(state));
+}
+
+export const NOTICE_TYPE = "workflowz-notice";
+export interface NoticeDetails { keywords: Keyword[]; budget?: NoticeState["budget"]; sent?: Partial<Record<Keyword, string>> }
+
+/** What a notice says apart from its budget, which every request restates. */
+const fingerprint = (template: string, state: NoticeState) =>
+  createHash("sha256").update(renderNotice(template, { ...state, budget: undefined })).digest("hex").slice(0, 16);
+
+/** The notices still in context, by keyword. `entries` is the branch with compaction applied, so a compacted notice is sent again. */
+export function noticesInContext(entries: readonly any[]): Partial<Record<Keyword, string>> {
+  const seen: Partial<Record<Keyword, string>> = {};
+  for (const entry of entries) if (entry?.type === "custom_message" && entry.customType === NOTICE_TYPE) Object.assign(seen, (entry.details as NoticeDetails | undefined)?.sent);
+  return seen;
+}
+
+/**
+ * The message for a prompt that used `words`. A notice runs to thousands of
+ * characters and stays in history, so one that is already in context
+ * unchanged is pointed at rather than repeated; only its budget is restated.
+ */
+export function noticeMessage(words: Keyword[], templates: Record<Keyword, string>, state: NoticeState, seen: Partial<Record<Keyword, string>> = {}) {
+  const sent: Partial<Record<Keyword, string>> = {};
+  const parts = words.map((word) => {
+    const mark = fingerprint(templates[word], state);
+    if (seen[word] !== mark) { sent[word] = mark; return renderNotice(templates[word], state); }
+    return `The \`${word}\` notice earlier in this conversation still applies.${templates[word].includes("{{budget}}") ? ` ${budgetLine(state.budget)}` : ""}`;
+  });
+  const details: NoticeDetails = { keywords: words, budget: state.budget, sent };
+  return { content: parts.join("\n\n"), details };
 }

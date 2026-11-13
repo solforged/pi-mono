@@ -3,6 +3,9 @@
 Ports of omp's `workflowz` and `orchestrate` magic keywords. Write either word
 on its own anywhere in a message (not inside code or a path) and Pi attaches a
 hidden notice to that message; a `⚙ … notice attached` row shows it fired.
+The full notice is sent once: while it is still in the conversation, a later
+keyword adds one line that points back to it (`notice still applies`), and it
+is sent again after compaction drops it or its text changes.
 
 - **`orchestrate`**: a contract to decompose, dispatch in parallel, verify each
   phase and not stop until every item is closed. It names whichever delegation

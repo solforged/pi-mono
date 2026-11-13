@@ -7,7 +7,7 @@ import { Jobs, parseJudgment, parseStructured, type AgentTask, type Backend, typ
 import { callKernel, ToolServer } from "../extensions/workflowz/tool-server.ts";
 import { childArgs } from "../extensions/workflows/subagents.ts";
 import { Kernel, type KernelHooks } from "../extensions/workflowz/kernel.ts";
-import { budgetIn, keywordsIn, loadNotices, renderNotice } from "../extensions/workflowz/notices.ts";
+import { budgetIn, keywordsIn, loadNotices, NOTICE_TYPE, noticeMessage, noticesInContext, renderNotice } from "../extensions/workflowz/notices.ts";
 import { statements, tokenize, transformCell, wrapCell } from "../extensions/workflowz/transform.ts";
 import { emptyUsage } from "../extensions/workflows/process.ts";
 import { root } from "./helpers.ts";
@@ -266,6 +266,18 @@ test("notices render without placeholders and describe the tools that are active
   assert.match(orchestrate, /`subagent` tool: one call with up to 6 tasks/);
   assert.match(renderNotice(notices.orchestrate, { ...state, active: ["read", "rex_agent"] }), /`rex_agent`/);
   assert.match(renderNotice(notices.orchestrate, { ...state, active: ["read"] }), /No subagent tool is active/);
+  // A notice already in context is pointed at, with only the budget restated; a changed one is sent again.
+  const first = noticeMessage(["workflowz", "orchestrate"], notices, state);
+  assert.equal(first.content, `${workflowz}\n\n${orchestrate}`);
+  const entry = (details: object) => ({ type: "custom_message", customType: NOTICE_TYPE, details });
+  const seen = noticesInContext([{ type: "message" }, entry(first.details)]);
+  const again = noticeMessage(["workflowz"], notices, { ...state, budget: undefined }, seen);
+  assert.equal(again.content, "The `workflowz` notice earlier in this conversation still applies. No budget was set (the user can add `+500k`, or `+500k!` for a hard limit).");
+  assert.deepEqual(again.details.sent, {});
+  assert.equal(noticeMessage(["orchestrate"], notices, state, seen).content, "The `orchestrate` notice earlier in this conversation still applies.");
+  assert.equal(noticeMessage(["orchestrate"], notices, { ...state, active: ["read", "rex_agent"] }, seen).content, renderNotice(notices.orchestrate, { ...state, active: ["read", "rex_agent"] }));
+  // Compaction drops the notice from context, and notices from before this record count as unseen.
+  assert.equal(noticeMessage(["workflowz"], notices, state, noticesInContext([entry({ keywords: ["workflowz"] })])).content, workflowz);
   // The researcher definition exists for the runner.
   assert.match(await readFile(join(root, "agent-definitions/researcher.md"), "utf8"), /primary/);
 });

@@ -13,7 +13,7 @@ import { Jobs, type Backend, type Tier } from "./jobs.ts";
 import { GUEST_COMMAND, SANDBOX_CHANGED, type GuestCommandRequest } from "../sandbox/guest.ts";
 import { REX_WORKERS, type RexWorkersRequest } from "../rex/workers.ts";
 import { Kernel, localLaunch, type CellResult, type Launch } from "./kernel.ts";
-import { budgetIn, keywordsIn, loadNotices, renderNotice } from "./notices.ts";
+import { budgetIn, keywordsIn, loadNotices, NOTICE_TYPE, noticeMessage, noticesInContext, type NoticeDetails } from "./notices.ts";
 import { ToolServer } from "./tool-server.ts";
 
 const TOOLS = ["eval", "wait"];
@@ -189,8 +189,7 @@ export default async function (pi: ExtensionAPI) {
     const state = { active: event.systemPromptOptions.selectedTools ?? pi.getActiveTools(), concurrency: current.subagents.evalConcurrency,
       subagentConcurrency: current.subagents.concurrency, maxTasks: current.subagents.maxTasks, budget,
       judge: current.subagents.judge ? `${current.subagents.judge.provider}/${current.subagents.judge.model}` : undefined };
-    const content = words.map((word) => renderNotice(notices[word], state)).join("\n\n");
-    return { message: { customType: "workflowz-notice", content, display: true, details: { keywords: words, budget } } };
+    return { message: { customType: NOTICE_TYPE, display: true, ...noticeMessage(words, notices, state, noticesInContext(ctx.sessionManager.buildContextEntries())) } };
   });
 
   /**
@@ -239,9 +238,12 @@ export default async function (pi: ExtensionAPI) {
     else if (jobs?.ready().length) scheduleFlush();
   });
 
-  pi.registerMessageRenderer("workflowz-notice", (message, options, theme) => {
-    const words: string[] = (message.details as any)?.keywords ?? [];
-    const line = theme.fg("accent", "⚙ ") + theme.fg("muted", `${words.join(" + ") || "workflow"} notice attached`);
+  pi.registerMessageRenderer(NOTICE_TYPE, (message, options, theme) => {
+    const details = message.details as Partial<NoticeDetails> | undefined;
+    const words: string[] = details?.keywords ?? [];
+    // Older notices carry no record of what was sent; they were always in full.
+    const repeat = details?.sent !== undefined && !Object.keys(details.sent).length;
+    const line = theme.fg("accent", "⚙ ") + theme.fg("muted", `${words.join(" + ") || "workflow"} notice ${repeat ? "still applies" : "attached"}`);
     return new Text(options.expanded ? `${line}\n${theme.fg("dim", String(message.content))}` : line, options.outputPad, 0);
   });
   pi.registerMessageRenderer("workflowz-results", (message, options, theme) => {
