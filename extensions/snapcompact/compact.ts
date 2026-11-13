@@ -66,10 +66,12 @@ export function usesSnapcompact(model?: { input?: string[]; provider?: string } 
   return isVision(model) && !TEXT_SUMMARY_PROVIDERS.has(model?.provider ?? "");
 }
 
+/** An archive's transcript as stored: whole, or the two ends an older archive kept as text. */
+const storedText = (archive?: Archive) => archive?.text ?? [archive?.textHead, archive?.textTail].filter(Boolean).join(NEWLINE_GLYPH);
+
 /** The archived transcript as plain text, for a later text summary to build on. */
 export function archiveText(details: unknown): string | undefined {
-  const archive = getArchive(details);
-  const text = archive?.text ?? [archive?.textHead, archive?.textTail].filter(Boolean).join(NEWLINE_GLYPH);
+  const text = storedText(getArchive(details));
   return text ? toPlain(text) : undefined;
 }
 
@@ -407,7 +409,7 @@ export function compactMessages(
 ): CompactResult {
   const shape = resolveShape(opts.model);
   const packed = compactText(serializeConversation(messages), shape, {
-    previousText: opts.previousArchive?.text ?? [opts.previousArchive?.textHead, opts.previousArchive?.textTail].filter(Boolean).join(NEWLINE_GLYPH),
+    previousText: storedText(opts.previousArchive),
     previousSummary: opts.previousSummary,
     maxFrameTokens: opts.maxFrameTokens,
   });
