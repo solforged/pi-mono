@@ -119,8 +119,10 @@ test("the recorder streams PCM until stopped and reports a microphone that fails
   const levels: number[] = [];
   const recorder = record({ onLive: () => live++, onLevel: (level) => levels.push(level), onError: assert.fail }, fake);
   await new Promise((resolve) => setTimeout(resolve, 400));
+  assert.equal(recorder.bytes(), recorder.pcm().length);
   const pcm = await recorder.stop();
   assert.equal(pcm.length, 4 * 3200);
+  assert.equal(recorder.bytes(), 4 * 3200);
   assert.equal(live, 1);
   assert.ok(levels.length >= 1 && levels.every((level) => level === 0));
 

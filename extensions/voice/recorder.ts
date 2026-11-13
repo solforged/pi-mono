@@ -14,6 +14,8 @@ export const TAIL_MS = 250;
 const KILL_MS = 1000;
 
 export interface Recorder {
+  /** How much is recorded so far, without copying it. */
+  bytes(): number;
   /** Everything recorded so far. */
   pcm(): Buffer;
   /** Stops after the tail and resolves with the whole recording. */
@@ -47,6 +49,7 @@ export function record(events: RecorderEvents, command = "ffmpeg"): Recorder {
   ], { env: { ...process.env, PATH }, stdio: ["ignore", "pipe", "pipe"] });
 
   const chunks: Buffer[] = [];
+  let size = 0;
   let stderr = "";
   let stopping = false;
   let live = false;
@@ -55,6 +58,7 @@ export function record(events: RecorderEvents, command = "ffmpeg"): Recorder {
 
   child.stdout.on("data", (chunk: Buffer) => {
     chunks.push(chunk);
+    size += chunk.length;
     if (!live) {
       live = true;
       events.onLive();
@@ -70,6 +74,7 @@ export function record(events: RecorderEvents, command = "ffmpeg"): Recorder {
 
   const pcm = () => Buffer.concat(chunks);
   return {
+    bytes: () => size,
     pcm,
     async stop() {
       stopping = true;

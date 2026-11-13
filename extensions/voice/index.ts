@@ -108,12 +108,13 @@ class Dictation {
     this.#render();
     const recorder = this.#recorder;
     if (!recorder || this.#partialBusy || Date.now() - this.#partialAt < PARTIAL_MS) return;
-    const pcm = recorder.pcm();
-    if (seconds(pcm.length) < 0.8 || pcm.length === this.#partialBytes) return;
+    // Asked before the recording is copied: a tick with nothing new to hear costs nothing.
+    const recorded = recorder.bytes();
+    if (seconds(recorded) < 0.8 || recorded === this.#partialBytes) return;
     this.#partialBusy = true;
     this.#partialAt = Date.now();
-    this.#partialBytes = pcm.length;
-    transcribe(this.url, wav(pcm), { partial: true, signal: AbortSignal.timeout(5000) }).then(
+    this.#partialBytes = recorded;
+    transcribe(this.url, wav(recorder.pcm()), { partial: true, signal: AbortSignal.timeout(5000) }).then(
       ({ text }) => {
         if (generation !== this.#generation || this.phase === "transcribing") return;
         this.#partial = text;
