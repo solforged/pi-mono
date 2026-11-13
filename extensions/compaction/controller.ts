@@ -27,10 +27,10 @@ export type Deps = { compact: Compact; estimateTokens: Estimate };
 type Speculation = {
   key: string;
   plan: Plan;
-  /** Context size when planned; a much larger context needs a newer plan. */
-  tokens: number;
   controller: AbortController;
   promise: Promise<Result | undefined>;
+  /** Set once the summary is written. */
+  result?: Result;
   done: boolean;
   failed: boolean;
 };
@@ -79,7 +79,11 @@ export function register(pi: ExtensionAPI, deps: Deps) {
       const same = speculation.key === key && speculation.plan.previousCompactionId === previousCompaction(entries)?.id;
       // One attempt per compaction: a failure falls back to summarizing when Pi compacts.
       if (same && (!speculation.done || speculation.failed)) return;
-      if (same && tokens - speculation.tokens <= limits.keepRecentTokens) return;
+      // A finished summary is replaced only when it could no longer commit. Growth
+      // alone is no reason: the band is wider than the recent window, so replanning
+      // by distance bought two summaries per compaction, and threw a good one away
+      // when a single turn crossed the threshold.
+      if (same && speculation.result && !staleReason(speculation.plan, speculation.result.summary, entries, limits, deps.estimateTokens)) return;
       drop(ctx);
     }
     // Past the threshold Pi compacts before the next request; that path summarizes directly.
@@ -88,10 +92,11 @@ export function register(pi: ExtensionAPI, deps: Deps) {
     if (!plan) return;
 
     const controller = new AbortController();
-    const current: Speculation = { key, plan, tokens, controller, promise: Promise.resolve(undefined), done: false, failed: false };
+    const current: Speculation = { key, plan, controller, promise: Promise.resolve(undefined), done: false, failed: false };
     current.promise = summarize(ctx, plan.preparation, undefined, controller.signal).then(
       (result) => {
         current.done = true;
+        current.result = result;
         if (speculation === current) status(ctx, "summary ready");
         return result;
       },

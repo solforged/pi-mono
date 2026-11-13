@@ -19,7 +19,8 @@ extension writes that summary instead:
 The threshold is Pi's window minus reserve, or compact-ratio's share when that
 is lower. A prepared summary is discarded when another compaction ran, its
 history left the branch, summarized entries were edited, or the context would
-stay above 80% of the threshold; a much larger context replans it. One failed
+stay above 80% of the threshold; inside the band, a finished summary that has
+gone stale this way is written again. One failed
 attempt is not retried before the next compaction. Every other case, including
 `/compact` with instructions, summarizes Pi's own preparation at low thinking;
 if that fails, Pi's default runs with a warning. Virtual models stay with Pi.

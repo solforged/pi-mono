@@ -219,20 +219,40 @@ test("a failed summary is not retried until the next compaction", async () => {
   assert.equal(state.calls.length, 2);
 });
 
-test("much more context than when planned replaces the summary", async () => {
+test("a finished summary is replaced only when it could no longer commit", async () => {
+  const { state, turn, compactNow, summary } = harness();
+  state.tokens = 79_000;
+  turn();
+  state.calls[0]!.settle(summary(state.calls[0]!.preparation, "PREPARED"));
+  await new Promise((resolve) => setImmediate(resolve));
+  // The band is wider than the recent window: growth alone must not buy a second summary.
+  state.entries.push(user("u4"), assistant("a4"));
+  state.tokens = 85_000;
+  turn();
+  assert.equal(state.calls.length, 1, "more context keeps a summary that still fits");
+  // One turn that crosses the threshold must not discard it either.
+  state.entries.push(user("u5", 9_000), assistant("a5"));
+  state.tokens = 95_000;
+  turn();
+  assert.equal(state.calls.length, 1);
+  assert.equal(state.status, "summary ready");
+  assert.equal((await compactNow().result).compaction.summary, "PREPARED");
+  assert.equal(state.calls.length, 1, "the threshold compaction commits it without a new summary");
+});
+
+test("a finished summary that went stale is replanned inside the band", async () => {
   const { state, turn, summary } = harness();
   state.tokens = 79_000;
   turn();
   state.calls[0]!.settle(summary(state.calls[0]!.preparation));
   await new Promise((resolve) => setImmediate(resolve));
-  state.tokens = 79_005;
+  // More than 80% of the threshold would stay after it.
+  state.entries.push(user("u4", 73_000), assistant("a4"), user("u5"), assistant("a5"));
+  state.tokens = 85_000;
   turn();
-  assert.equal(state.calls.length, 1, "a few tokens more keeps it");
-  state.entries.push(user("u4"), assistant("a4"));
-  state.tokens = 79_011;
-  turn();
-  assert.equal(state.calls.length, 2, "more than keepRecentTokens replans");
-  assert.equal(state.calls[1]!.preparation.firstKeptEntryId, "u4");
+  assert.equal(state.calls.length, 2);
+  assert.equal(state.calls[1]!.preparation.firstKeptEntryId, "u5");
+  assert.equal(state.status, "summarizing");
 });
 
 test("a model switch cancels a summary under way", () => {
