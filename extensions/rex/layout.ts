@@ -32,7 +32,7 @@ export class DeckManager {
   private readonly opts: {
     rex: LayoutBackend; session: string; parent: string; cwd: string; rosterFile: string; stripFile: string;
     children: () => DeckChild[]; roster: () => string[];
-    /** The Agents tab's label, naming the parent; recomputed every settle. */
+    /** The Agents tab's label, with child and attention counts; recomputed every settle. */
     tabLabel?: () => string;
     /** Defaults to the parent pane's terminal size (stale if its window was never viewed). */
     size?: (signal: AbortSignal) => Promise<{ columns: number; rows: number }>; onState: (state: LayoutState) => void; onPause: (reason: string) => void;
@@ -105,7 +105,7 @@ export class DeckManager {
     }
   }
 
-  /** Once panes settle: the Agents tab follows the parent's tab and carries its label. */
+  /** Once panes settle: the Agents tab follows the parent's tab and updates its counts. */
   private tabs(view: Record<string, any>): TabOp | undefined {
     if (!this.grid) return undefined;
     const before: TabState = { order: this.tabOrder, label: this.tabLabel, unfollowed: this.grid.unfollowed, renamed: this.grid.renamed };

@@ -1,6 +1,6 @@
 // Ties the Agents tab to its parent's tab in Rex's tab bar. Rex has no tab
 // groups, so the link is order (the Agents tab sits right after the parent's)
-// and a label naming the parent. Like the deck, this never overrides the user:
+// and a compact child count. Like the deck, this never overrides the user:
 // once they move or rename the Agents tab, that aspect is left alone.
 
 type Obj = Record<string, any>;
@@ -51,12 +51,9 @@ export function tabPlan(input: { view: Obj; parent: string; grid: string; label?
   return { state };
 }
 
-const NAME_MAX = 24;
-/** "↳ 🟦 !1 · 4 agents · fix-login": what needs you first, since narrow tabs truncate the end. */
-export function agentsTabLabel(parentName: string, count: number, attention: number, mark = "") {
-  const clean = parentName.replace(/[\u0000-\u001f\u007f-\u009f\s]+/g, " ").trim();
-  const name = [...clean].length > NAME_MAX ? `${[...clean].slice(0, NAME_MAX - 1).join("").trimEnd()}…` : clean;
-  return ["↳", mark, [attention ? `!${attention}` : "", `${count} agent${count === 1 ? "" : "s"}`, name].filter(Boolean).join(" · ")].filter(Boolean).join(" ");
+/** Adjacency carries the parent link; the tab needs only the count and attention. */
+export function agentsTabLabel(count: number, attention: number) {
+  return `Agents · ${count}${attention ? ` · !${attention}` : ""}`;
 }
 
 /** Tab bars take no colours from programs, but they draw colour emoji. Squares, not

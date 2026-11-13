@@ -7,11 +7,11 @@
 // --keep leaves the test window and files for inspection.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RexClient } from "../../extensions/rex/client.ts";
-import { atomicWrite, privateDir } from "../../extensions/workflows/state.ts";
+import { atomicWrite, privateDir, scopeRoot } from "../../extensions/workflows/state.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const session = process.env.REX_SESSION, me = process.env.REX_BLOCK;
@@ -46,7 +46,15 @@ const show = (label: string, text: string, from: string) => {
   const lines = text.split("\n"), at = lines.findLastIndex(l => l.includes(from));
   console.log(`\n── ${label}\n${lines.slice(at < 0 ? -20 : at).join("\n")}`);
 };
-const blockNamed = (prefix: string) => api("session.list_blocks", {}).blocks.find((b: any) => b.label?.startsWith(prefix))?.block_id as string | undefined;
+const stateDir = join(await scopeRoot(agentDir, "personal", process.cwd()), "rex");
+// Read this fixture's records, not display labels (which can carry a colour mark).
+async function childRuns() {
+  const dirs = await readdir(stateDir, { withFileTypes: true }).catch(() => []);
+  const runs = await Promise.all(dirs.filter(d => d.isDirectory()).map(async d => {
+    try { return JSON.parse(await readFile(join(stateDir, d.name, "run.json"), "utf8")); } catch { return undefined; }
+  }));
+  return runs.filter(r => r?.rexSession === session && r.parentBlock === created[0]);
+}
 
 const activeWindow = api("session.view", {}).active_window_id as string;
 const created: string[] = [], existing = new Set(api("session.list_blocks", {}).blocks.map((b: any) => b.block_id));
@@ -63,9 +71,14 @@ try {
 
   await type(parent, "Spawn hub fixture\r");
   await until(parent, t => /● birch/.test(t) && /✓ cedar/.test(t) && t.includes("← agents"), "one running and one finished child", 60_000);
-  const birch = blockNamed("birch ·"), cedar = blockNamed("cedar ·");
+  const runs = await childRuns();
+  const birch = runs.find(r => r.name === "birch")?.block, cedar = runs.find(r => r.name === "cedar")?.block;
   assert(birch && cedar); created.push(birch, cedar);
   await until(birch, t => t.includes("← on an empty prompt returns to it"), "the child header");
+  await until(parent, () => {
+    const grid = api("session.view", {}).windows.find((w: any) => w.layers.some((l: any) => l.blocks.some((b: any) => b.block_id === birch)));
+    return grid?.label === "Agents · 2";
+  }, "the compact Agents tab label");
 
   await sleep(1200); // ← right after the prompt was emptied only arms.
   await type(parent, "\x1b[D");
@@ -151,7 +164,8 @@ finally {
   try { if (api("session.view", {}).active_window_id !== activeWindow) api("session.focus_window", { window_id: activeWindow }); } catch {}
   if (!keep) {
     // Children first are retired by their parent; then the deck's roster and strip panes this run created.
-    for (const block of created.reverse()) await rex.close(session, block).catch(() => {});
+    const children = (await childRuns()).map(r => r.block).filter(Boolean);
+    for (const block of [...new Set([...created, ...children])].reverse()) await rex.close(session, block).catch(() => {});
     await sleep(500);
     for (const b of api("session.list_blocks", {}).blocks) if (!existing.has(b.block_id) && ["agents", "not in the deck"].includes(b.label)) await rex.close(session, b.block_id).catch(() => {});
     if (!failed) await rm(dir, { recursive: true, force: true });

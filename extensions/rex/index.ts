@@ -1,5 +1,5 @@
 import { realpath, rm } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -31,8 +31,8 @@ export default async function (pi: ExtensionAPI) {
   const root = resolve(dirname(await realpath(fileURLToPath(import.meta.url))), "../..");
   const rex = new RexClient(), runner = new RexRunner(pi, root, getAgentDir(), rex), lifetime = new AbortController();
   let instructions = "", currentCtx: ExtensionContext | undefined, deck: DeckManager | undefined;
-  // This parent's colour, on its title, its Agents tab and its children's panes and
-  // titles; picked at the first child and kept with the session.
+  // This parent's colour, on its title and its children's panes and titles;
+  // picked at the first child and kept with the session. The Agents tab stays plain.
   let mark: string | undefined, picking: Promise<string> | undefined;
   runner.markFor = (session, signal) => mark ? Promise.resolve(mark) : picking ??= (async () => {
     try {
@@ -90,10 +90,10 @@ export default async function (pi: ExtensionAPI) {
     return [{ block: run.block, name: run.name, priority: priority(row, !!last && !last.collected && !running(last)),
       pinned: !!run.pinned, background: run.view === "background", line: activityLine(row) }];
   });
-  /** Names the parent as its tab does: the session name, else the directory. */
+  /** A quiet label: the tab's position already links it to its parent. */
   const agentsTab = () => {
     const kids = deckChildren();
-    return agentsTabLabel(pi.getSessionName() || basename(currentCtx?.cwd ?? process.cwd()), kids.length, kids.filter(k => k.priority === 4).length, mark);
+    return agentsTabLabel(kids.length, kids.filter(k => k.priority === 4).length);
   };
   const rosterLines = () => {
     const items = rows(runner.runs.values(), runner.tasks);

@@ -119,14 +119,15 @@ Children are arranged automatically, designed for up to about 14 at once:
   since smaller cells are no longer readable) with a roster pane listing every
   child in the same format. It never takes focus; switch to it like any Rex tab.
   It closes when it holds no children. Rex has no tab groups, so the tab sits
-  right after the parent's and is labelled after it, what needs you first:
-  `↳ 🟦 !1 · 4 agents · fix-login`. It follows the parent's tab when that moves;
-  once you drag the Agents tab elsewhere or rename it, it is left as you set it.
+  right after the parent's with a compact label: `Agents · 4`, or
+  `Agents · 4 · !1` when one needs you. It follows the parent's tab when that
+  moves; once you drag the Agents tab elsewhere or rename it, it is left as
+  you set it. The tab omits the arrow, colour square and repeated parent name.
 - **Colour mark:** at its first child a parent picks a coloured square (🟦🟩🟧…),
   preferring one no other parent in the Rex session uses, and keeps it with the
-  session. It leads the parent's title while it has children, the Agents tab
-  label, and each child's pane label, title and header, so a parent's tabs and
-  panes match wherever you drag them. Tab bars take no colours from programs;
+  session. It leads the parent's title while it has children and each child's
+  pane label, title and header, so the panes match wherever you drag them.
+  The Agents tab stays plain. Tab bars take no colours from programs;
   emoji are the one colour they draw.
 - **Overflow:** beyond that, children stay detached and keep running. They are
   listed in the strip and roster, and the hub reaches them.
