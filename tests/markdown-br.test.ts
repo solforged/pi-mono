@@ -9,7 +9,7 @@ import {
   REREVIEW_DATE,
   rereviewNotice,
 } from "../extensions/markdown-br/patch.ts";
-import { root } from "./helpers.ts";
+import { noModel, root } from "./helpers.ts";
 
 test("normalizeBrTokens maps inline HTML <br> tags to Marked br tokens and leaves other tokens intact", () => {
   const original = [{ type: "text", text: "plain" }, { type: "codespan", text: "<br>" }];
@@ -75,6 +75,30 @@ test("patchMarkdown wraps idempotently and skips when upstream already renders <
   assert.deepEqual(patchMarkdown(FixedUpstreamMarkdown), { active: false, upstreamFixed: true });
 });
 
+test("the wrappers pass on every argument Pi gives, and the probe sees a fix that uses its instance", () => {
+  const seen: unknown[][] = [];
+  class WiderMarkdown {
+    renderInlineTokens(tokens: any[], ...rest: unknown[]): string { seen.push(rest); return tokens.map((t) => t.type).join(","); }
+    renderToken(token: any, ...rest: unknown[]): string[] { seen.push(rest); return [token.type]; }
+  }
+  assert.deepEqual(patchMarkdown(WiderMarkdown), { active: true, upstreamFixed: false });
+  const wide = new WiderMarkdown();
+  assert.equal(wide.renderInlineTokens([{ type: "html", raw: "<br>" }], "style", "added later"), "br");
+  assert.deepEqual(wide.renderToken({ type: "paragraph" }, 80, "space", "style", "added later"), ["paragraph"]);
+  assert.deepEqual(seen.slice(-2), [["style", "added later"], [80, "space", "style", "added later"]]);
+
+  // A fixed renderer that draws the break through its theme and a method of its own.
+  class FixedThroughInstance {
+    theme: { text: (text: string) => string };
+    constructor(_text: string, _paddingX: number, _paddingY: number, theme: any) { this.theme = theme; }
+    lineBreak() { return this.theme.text("\n"); }
+    renderInlineTokens(tokens: any[]): string {
+      return tokens.map((t) => (t.type === "br" || (t.type === "html" && t.raw === "<br>") ? this.lineBreak() : t.text ?? "")).join("");
+    }
+  }
+  assert.deepEqual(patchMarkdown(FixedThroughInstance), { active: false, upstreamFixed: true });
+});
+
 test("rereviewNotice stays silent before REREVIEW_DATE and reports status once due", () => {
   assert.equal(REREVIEW_DATE, "2026-12-10");
   const before = Date.parse("2026-11-25T00:00:00Z");
@@ -98,6 +122,7 @@ test("installed Pi renders <br> inside Markdown tables as line breaks", (t) => {
       "--no-session",
       "-e",
       join(root, "tests/fixtures/markdown-br-smoke.ts"),
+      ...noModel,
       "-p",
       "/markdown-br-smoke",
     ],

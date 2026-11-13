@@ -14,9 +14,10 @@ export interface PatchStatus {
   upstreamFixed: boolean;
 }
 
+// Only the first parameter is ours; the rest are Pi's and may grow.
 interface OrigMethods {
-  renderInlineTokens: (tokens: any[], styleContext?: any) => string;
-  renderToken?: (token: any, width: number, nextTokenType?: string, styleContext?: any) => string[];
+  renderInlineTokens: (tokens: any[], ...rest: any[]) => string;
+  renderToken?: (token: any, ...rest: any[]) => string[];
 }
 
 /** Replace inline HTML <br> tokens with Marked "br" tokens; leave other tokens untouched. */
@@ -57,15 +58,15 @@ export function blockBrCount(token: unknown): number {
   return raw.match(BR_TAG_RE)?.length ?? 1;
 }
 
-function rendersBrNatively(renderInlineTokens: OrigMethods["renderInlineTokens"]): boolean {
+// A theme that leaves text as it is, whichever style the renderer asks for.
+const PLAIN_THEME = new Proxy({}, { get: () => (text: string) => text });
+
+function rendersBrNatively(MarkdownClass: any, renderInlineTokens: OrigMethods["renderInlineTokens"]): boolean {
   try {
-    const probe = {
-      options: {},
-      theme: {},
-      getDefaultInlineStyleContext: () => ({ applyText: (text: string) => text, stylePrefix: "" }),
-    };
-    const out = renderInlineTokens.call(probe, [{ type: "html", raw: "<br>", text: "<br>" }]);
-    return out === "\n";
+    // A real instance: a stand-in lacks whatever fields and methods a fix
+    // upstream comes to use, and the throw would read as "still literal".
+    const probe = new MarkdownClass("", 0, 0, PLAIN_THEME);
+    return renderInlineTokens.call(probe, [{ type: "html", raw: "<br>", text: "<br>" }]) === "\n";
   } catch {
     return false;
   }
@@ -82,22 +83,22 @@ export function patchMarkdown(MarkdownClass: { prototype?: any }): PatchStatus {
     renderToken: typeof proto.renderToken === "function" ? proto.renderToken : undefined,
   });
 
-  if (rendersBrNatively(orig.renderInlineTokens)) {
+  if (rendersBrNatively(MarkdownClass, orig.renderInlineTokens)) {
     proto.renderInlineTokens = orig.renderInlineTokens;
     if (orig.renderToken) proto.renderToken = orig.renderToken;
     return { active: false, upstreamFixed: true };
   }
 
-  proto.renderInlineTokens = function (tokens: any[], styleContext?: any): string {
-    return orig.renderInlineTokens.call(this, normalizeBrTokens(tokens) as any[], styleContext);
+  proto.renderInlineTokens = function (tokens: any[], ...rest: any[]): string {
+    return orig.renderInlineTokens.call(this, normalizeBrTokens(tokens) as any[], ...rest);
   };
 
   if (orig.renderToken) {
     const origRenderToken = orig.renderToken;
-    proto.renderToken = function (token: any, width: number, nextTokenType?: string, styleContext?: any): string[] {
+    proto.renderToken = function (token: any, ...rest: any[]): string[] {
       const count = blockBrCount(token);
       if (count > 0) return Array(count).fill("");
-      return origRenderToken.call(this, token, width, nextTokenType, styleContext);
+      return origRenderToken.call(this, token, ...rest);
     };
   }
 
