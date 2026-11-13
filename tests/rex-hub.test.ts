@@ -4,13 +4,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { root } from "./helpers.ts";
+import { noModel, root } from "./helpers.ts";
 
 test("the hub fits Pi's native frame, preserves its editor cursor and uses transient hints", t => {
   const dir = mkdtempSync(join(tmpdir(), "pi-rex-hub-check-"));
   try {
     const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session",
-      "-e", join(root, "tests/fixtures/rex-hub-check.ts"), "-p", "/rex-hub-check"], {
+      "-e", join(root, "tests/fixtures/rex-hub-check.ts"), ...noModel, "-p", "/rex-hub-check"], {
       cwd: root, encoding: "utf8", timeout: 30_000, env: { ...process.env, PI_CODING_AGENT_DIR: dir },
     });
     if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
