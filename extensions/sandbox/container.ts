@@ -95,6 +95,16 @@ done
 if [ -n "$run" ]; then kill -TERM $run; elif [ -n "$all" ]; then kill -TERM $all; fi
 exit 0`;
 
+// Waits for its input to close, deletes the container, then removes the lock
+// it was handed. A deletion that hangs is given up after a minute, so the lock
+// cannot be held for good.
+const REMOVE_SCRIPT = `read -r _
+"$0" delete --force "$1" & job=$!
+(trap 'kill "$nap"' TERM; sleep 60 & nap=$!; wait "$nap" && kill "$job") 2>/dev/null & guard=$!
+wait "$job"
+kill "$guard" 2>/dev/null
+[ -z "$2" ] || rm -rf "$2"`;
+
 export class ContainerCli {
   readonly run: Runner;
   readonly bin: string;
@@ -136,11 +146,18 @@ export class ContainerCli {
   }
   async start(args: string[]) { await this.call(args, { timeoutMs: 120000 }); }
   async remove(name: string) { await this.run(this.bin, ["delete", "--force", name], { timeoutMs: 60000 }); }
-  // Detached so Pi can exit without waiting for the VM to stop.
-  removeDetached(name: string) {
-    const child = spawn(this.bin, ["delete", "--force", name], { stdio: "ignore", detached: true });
+  /**
+   * Deletes a container from a process that outlives this one, so Pi can exit
+   * without waiting for the VM to stop. Given a lock, that process is told its
+   * owner through `handOver` before it begins, and removes the lock when done.
+   */
+  async removeDetached(name: string, handOver?: (pid: number) => Promise<void>, lock = "") {
+    const child = spawn("sh", ["-c", REMOVE_SCRIPT, this.bin, name, lock], { stdio: ["pipe", "ignore", "ignore"], detached: true });
     child.on("error", () => {});
+    child.stdin!.on("error", () => {});
     child.unref();
+    try { if (child.pid && handOver) await handOver(child.pid); }
+    finally { child.stdin!.end(); }
   }
   exec(name: string, argv: string[], options: RunOptions & { cwd?: string; env?: Record<string, string> } = {}) {
     const id = this.execId();

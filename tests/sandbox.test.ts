@@ -295,6 +295,56 @@ test("locks wait for live holders and break dead ones", async (t) => {
   await assert.rejects(withLock(dir, async () => "never", () => true, 300), /Timed out/);
 });
 
+test("of several waiters that find a lock stale, one takes it at a time", async (t) => {
+  const dir = join(await temporary(t), "lock");
+  for (let round = 0; round < 5; round++) {
+    await mkdir(dir);
+    await writeFile(join(dir, "pid"), "999999");
+    let inside = 0, most = 0;
+    await Promise.all(Array.from({ length: 6 }, () => withLock(dir, async () => {
+      most = Math.max(most, ++inside);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inside--;
+    }, (pid) => pid !== 999999)));
+    assert.equal(most, 1);
+    assert(!existsSync(dir));
+  }
+  // A lock nobody has signed yet belongs to a holder that is about to, unless it stays unsigned.
+  await mkdir(dir);
+  await writeFile(join(dir, "pid"), "");
+  await assert.rejects(withLock(dir, async () => "never", () => false, 300), /Timed out/);
+  await rm(join(dir, "pid"));
+  await assert.rejects(withLock(dir, async () => "never", () => false, 300), /Timed out/);
+  const old = new Date(Date.now() - 60_000);
+  await utimes(dir, old, old);
+  assert.equal(await withLock(dir, async () => "taken", () => false), "taken");
+});
+
+test("a lock handed to another process is that process's to remove", async (t) => {
+  const dir = join(await temporary(t), "lock");
+  await withLock(dir, (handOver) => handOver(4242));
+  assert.equal(await readFile(join(dir, "pid"), "utf8"), "4242");
+  await assert.rejects(withLock(dir, async () => "never", (pid) => pid === 4242, 300), /Timed out/);
+  assert.equal(await withLock(dir, async () => "taken", () => false), "taken");
+});
+
+test("a detached deletion starts once it owns the lock, and removes the lock when done", async (t) => {
+  const dir = await temporary(t);
+  const bin = join(dir, "container"), log = join(dir, "log"), lock = join(dir, "lock");
+  await writeFile(bin, `#!/bin/sh\necho "$@" >> '${log}'\n`, { mode: 0o755 });
+  const cli = new ContainerCli(runProcess, bin);
+  await withLock(lock, async (handOver) => {
+    await cli.removeDetached("pi-sbx-app-0000000000", async (pid) => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert(!existsSync(log), "the deletion waits to be told it owns the lock");
+      await handOver(pid);
+    }, lock);
+  });
+  for (let i = 0; i < 100 && existsSync(lock); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert(!existsSync(lock));
+  assert.equal(await readFile(log, "utf8"), "delete --force pi-sbx-app-0000000000\n");
+});
+
 // A plan whose host directories live under a temporary directory.
 const livePlan = (dir: string) => buildPlan(probe({}, {
   root: join(dir, "app"), home: "/nonexistent", commonDir: undefined, wikiDir: undefined, contextDirs: [], cacheRoot: join(dir, "cache"),
@@ -329,7 +379,7 @@ function fakeCli() {
     }
     return ok();
   });
-  cli.removeDetached = (name) => { running.delete(name); };
+  cli.removeDetached = async (name) => { running.delete(name); };
   // Queued outcomes for the next exec calls against a running container.
   const execs: Array<(name: string) => RunResult> = [];
   return { cli, running, calls, execs, ok };
@@ -386,6 +436,31 @@ test("processes in one worktree share a container; the last one out removes it",
   assert(running.has(plan.name));
   await two.release();
   assert(!running.has(plan.name));
+});
+
+test("a session starting while its container is being deleted waits, then starts a fresh one", async (t) => {
+  const stateRoot = await temporary(t);
+  const { cli, running, calls } = fakeCli();
+  const plan = livePlan(stateRoot);
+  const alive = new Set([1, 2, 77]);
+  let finish = async () => {};
+  cli.removeDetached = async (name, handOver, lock) => {
+    await handOver!(77); // The deleting process, which is still at it.
+    finish = async () => { running.delete(name); alive.delete(77); await rm(lock!, { recursive: true }); };
+  };
+  const options = { cli, stateRoot, alive: (pid: number) => alive.has(pid) };
+  const one = new Sandbox(plan, { ...options, pid: 1 });
+  await one.ensure();
+  await one.release();
+  let started = false;
+  const two = new Sandbox(plan, { ...options, pid: 2 });
+  const starting = two.ensure().then(() => { started = true; });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(started, false, "adopting the container now would lose it to the deletion");
+  await finish();
+  await starting;
+  assert.equal(calls.filter(([cmd]) => cmd === "run").length, 2);
+  assert(running.has(plan.name));
 });
 
 test("a stale container from a dead session is replaced, and orphans are swept", async (t) => {

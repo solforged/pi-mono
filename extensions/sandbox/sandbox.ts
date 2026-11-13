@@ -14,7 +14,35 @@ export const isAlive = (pid: number) => {
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function withLock<T>(dir: string, fn: () => Promise<T>, alive = isAlive, timeoutMs = 600000): Promise<T> {
+/**
+ * Takes over a lock whose owner is gone, or that has had no owner for ten
+ * seconds. Each step is one that a single contender wins, so of two that judge
+ * the same lock stale, the second never removes the first one's fresh lock.
+ */
+async function takeOver(dir: string, alive: (pid: number) => boolean): Promise<boolean> {
+  const file = join(dir, "pid"), mine = String(process.pid);
+  const text = await readFile(file, "utf8").catch(() => undefined);
+  const owner = Number(text ?? "");
+  // No owner yet is a holder between creating the lock and signing it, unless it stays that way.
+  if (owner ? alive(owner) : (await stat(dir).then((s) => Date.now() - s.mtimeMs, () => 0)) <= 10000) return false;
+  if (text === undefined) return writeFile(file, mine, { flag: "wx" }).then(() => true, () => false);
+  const claim = join(dir, `claim.${process.pid}`);
+  if (!(await rename(file, claim).then(() => true, () => false))) return false;
+  if ((await readFile(claim, "utf8").catch(() => "")) !== text) {
+    // Someone took over in between, and this is their signature: put it back.
+    await rename(claim, file).catch(() => {});
+    return false;
+  }
+  await writeFile(file, mine);
+  await rm(claim, { force: true });
+  return true;
+}
+
+/**
+ * Runs `fn` while holding the lock directory `dir`. `fn` can hand the lock to
+ * another process, which then owns it and removes the directory when done.
+ */
+export async function withLock<T>(dir: string, fn: (handOver: (pid: number) => Promise<void>) => Promise<T>, alive = isAlive, timeoutMs = 600000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   await mkdir(dirname(dir), { recursive: true });
   for (;;) {
@@ -26,14 +54,14 @@ export async function withLock<T>(dir: string, fn: () => Promise<T>, alive = isA
       // The parent can go between attempts, when a sweep removes an unused container's state.
       if (error?.code === "ENOENT") { await mkdir(dirname(dir), { recursive: true }); continue; }
       if (error?.code !== "EEXIST") throw error;
-      const owner = Number(await readFile(join(dir, "pid"), "utf8").catch(() => ""));
-      const age = await stat(dir).then((s) => Date.now() - s.mtimeMs, () => 0);
-      if ((owner && !alive(owner)) || (!owner && age > 10000)) { await rm(dir, { recursive: true, force: true }); continue; }
+      if (await takeOver(dir, alive)) break;
       if (Date.now() > deadline) throw new Error(`Timed out waiting for ${dir}`);
       await sleep(150);
     }
   }
-  try { return await fn(); } finally { await rm(dir, { recursive: true, force: true }); }
+  let held = true;
+  const handOver = async (pid: number) => { await writeFile(join(dir, "pid"), String(pid)); held = false; };
+  try { return await fn(handOver); } finally { if (held) await rm(dir, { recursive: true, force: true }); }
 }
 
 /**
@@ -173,10 +201,22 @@ export class Sandbox {
       for (const info of await this.options.cli.list()) {
         if (info.labels["pi.sandbox"] !== "1" || info.id === this.plan.name) continue;
         if (await stat(join(this.dir(info.id), "lock")).then(() => true, () => false)) continue;
-        if (!(await this.liveLeases(info.id)).length) this.options.cli.removeDetached(info.id);
+        if ((await this.liveLeases(info.id)).length) continue;
+        await this.removeUnused(info.id, 2000);
       }
       await this.sweepDirs();
     } catch (error) { void this.log(`sweep failed: ${(error as Error).message}`); }
+  }
+
+  // Deletes a container no live session holds. The deletion keeps the lock
+  // until it is done: a session starting meanwhile waits and starts a fresh
+  // container, where it would otherwise adopt one that is about to go.
+  private removeUnused(name: string, timeoutMs: number, before?: () => Promise<unknown>) {
+    return withLock(join(this.dir(name), "lock"), async (handOver) => {
+      await before?.();
+      if ((await this.liveLeases(name)).filter((pid) => pid !== this.pid || name !== this.plan.name).length) return;
+      await this.options.cli.removeDetached(name, handOver, join(this.dir(name), "lock"));
+    }, this.alive, timeoutMs).catch(() => {});
   }
 
   private dirsOf(name: string) {
@@ -269,12 +309,7 @@ export class Sandbox {
       clearTimeout(timer);
     }
     this.set("idle");
-    let last = false;
-    await withLock(join(this.dir(), "lock"), async () => {
-      await rm(join(this.dir(), "leases", String(this.pid)), { force: true });
-      last = !(await this.liveLeases(this.plan.name)).filter((pid) => pid !== this.pid).length;
-    }, this.alive, 10000).catch(() => {});
-    if (last) this.options.cli.removeDetached(this.plan.name);
+    await this.removeUnused(this.plan.name, 10000, () => rm(join(this.dir(), "leases", String(this.pid)), { force: true }));
   }
 
   // Whether this sandbox, kept from the previous session in this process, fits a new plan.
