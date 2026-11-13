@@ -70,17 +70,19 @@ export function registerHerdrTitle(pi: ExtensionAPI, env = process.env, report: 
     desiredTitle = paneTitle(pi.getSessionName());
     stopHeartbeat ??= schedule(() => { void publish(desiredTitle !== undefined); }, REFRESH_INTERVAL_MS);
     // A fixed source replaces or clears stale metadata from a crashed runtime.
-    return publish(true);
+    // Pi waits for what a handler returns, and a hung CLI takes its whole
+    // time limit, so outside shutdown reports are started and not awaited.
+    void publish(true);
   });
   pi.on("session_info_changed", (event, ctx) => {
     if (!active || stopped || ctx.mode !== "tui") return;
     desiredTitle = paneTitle(event.name);
-    return publish();
+    void publish();
   });
   pi.on("agent_settled", (_event, ctx) => {
     if (!active || stopped || ctx.mode !== "tui") return;
     desiredTitle = paneTitle(pi.getSessionName());
-    return publish();
+    void publish();
   });
   pi.on("session_shutdown", () => {
     if (shutdown) return shutdown;

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,9 +27,10 @@ function harness(env: NodeJS.ProcessEnv = environment, report?: Report) {
   return {
     calls, ctx, handlers, intervals,
     get stops() { return stops; },
-    async emit(type: string, event = {}) { await handlers[type]?.(event, ctx); },
-    async start(value?: string, reason = "startup") { name = value; await handlers.session_start?.({ reason }, ctx); },
-    async title(value: string | undefined) { name = value; await handlers.session_info_changed?.({ name: value }, ctx); },
+    // Only shutdown returns its report; the others start one, which these helpers let finish.
+    async emit(type: string, event = {}) { await handlers[type]?.(event, ctx); await setImmediate(); },
+    async start(value?: string, reason = "startup") { name = value; await this.emit("session_start", { reason }); },
+    async title(value: string | undefined) { name = value; await this.emit("session_info_changed", { name: value }); },
     async tick() { refresh?.(); await setImmediate(); },
     name(value: string | undefined) { name = value; },
   };
@@ -59,6 +61,17 @@ test("autonames and manual names publish; unnamed sessions clear instead of usin
   await h.title("Another task");
   await h.title(undefined);
   assert.deepEqual(h.calls.map((call) => call.title), [undefined, "Automatic session name", "My manual name", undefined, "Another task", undefined]);
+});
+
+test("startup, renames and settled runs do not wait for a report that hangs", async () => {
+  let reports = 0;
+  const h = harness(environment, () => { reports++; return new Promise(() => {}); });
+  h.name("A task title");
+  assert.equal(h.handlers.session_start({ reason: "startup" }, h.ctx), undefined);
+  assert.equal(h.handlers.session_info_changed({ name: "Renamed" }, h.ctx), undefined);
+  assert.equal(h.handlers.agent_settled({}, h.ctx), undefined);
+  await setImmediate();
+  assert.equal(reports, 1);
 });
 
 test("unchanged event titles are skipped but heartbeat renews the latest title", async () => {
@@ -209,7 +222,9 @@ test("the subprocess runner uses guarded, expiring metadata and a source-scoped 
   const pi = { on: (event: string, fn: any) => { handlers[event] = fn; }, getSessionName: () => title } as any;
   registerHerdrTitle(pi, { ...environment, HERDR_BIN_PATH: binary }, undefined, () => () => {});
   const ctx = { mode: "tui" };
-  await handlers.session_start({ reason: "startup" }, ctx);
+  handlers.session_start({ reason: "startup" }, ctx);
+  // Shutdown aborts a report still in flight, so let the first one land.
+  for (let i = 0; i < 200 && !existsSync(captured); i++) await new Promise((resolve) => setTimeout(resolve, 25));
   await handlers.session_shutdown({ reason: "quit" }, ctx);
   const commands = (await readFile(captured, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
   const prefix = ["pane", "report-metadata", "w1:p5", "--source", TITLE_SOURCE, "--agent", "pi"];
@@ -227,7 +242,8 @@ test("the real timer starts at session_start, refreshes, and stops on shutdown",
   registerHerdrTitle(pi, environment, async (_binary, _pane, title) => { titles.push(title); });
   t.mock.timers.tick(REFRESH_INTERVAL_MS);
   assert.deepEqual(titles, []);
-  await handlers.session_start({}, { mode: "tui" });
+  handlers.session_start({}, { mode: "tui" });
+  await setImmediate();
   t.mock.timers.tick(REFRESH_INTERVAL_MS);
   await setImmediate();
   assert.deepEqual(titles, ["Idle task title", "Idle task title"]);

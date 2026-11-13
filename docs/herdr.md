@@ -46,7 +46,9 @@ clear only this source's title. Cleanup is bounded and best-effort; a crash or
 unavailable server leaves at most the last report's TTL. A new runtime uses the
 same source to immediately replace or clear stale metadata. Unchanged event
 updates are skipped, but heartbeat always renews a live title. Command failures
-are quiet and retry on heartbeat or subsequent events.
+are quiet and retry on heartbeat or subsequent events. Reports run in the
+background, so a slow or hung `herdr` never holds up startup or the end of a
+run; only shutdown waits, for its cleanup.
 
 Only interactive TUI sessions inside Herdr write or clear metadata. Commands
 target the inherited `HERDR_PANE_ID`, never focus. Print, JSON, and RPC child
