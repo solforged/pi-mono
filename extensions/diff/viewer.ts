@@ -3,7 +3,7 @@
 import { mkdirSync, readFileSync, realpathSync, rmSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { parseArgs } from "node:util";
-import { changedHunks, collect, SOURCES, type FileDiff, type Snapshot, type Source } from "./git.ts";
+import { changedHunks, collect, SOURCES, type Collected, type FileDiff, type Source, type Untracked } from "./git.ts";
 import { DEFAULT_PALETTE, fileBody, layout, maxScroll, sameTarget, type Layout, type Palette, type Target, type View } from "./render.ts";
 import { loadHighlighter } from "./syntax.ts";
 import { paint } from "./text.ts";
@@ -131,6 +131,8 @@ let running = false;
 let queued = false;
 let queuedFocus: string | undefined;
 let signature = "";
+/** Untracked files already read from this root, so a refresh reads only what changed. */
+const seen: Untracked = new Map();
 
 async function refresh(focusPath?: string) {
   if (focusPath) queuedFocus = focusPath;
@@ -142,11 +144,11 @@ async function refresh(focusPath?: string) {
       const target = queuedFocus;
       queuedFocus = undefined;
       const from = root;
-      let next: Snapshot | undefined, error: string | undefined;
-      try { next = await collect(from, source); }
+      let next: Collected | undefined, error: string | undefined;
+      try { next = await collect(from, source, undefined, seen); }
       catch (failure) { error = (failure as Error).message; }
       if (from !== root) { queued = true; continue; } // Moved meanwhile: collect again there.
-      const nextSignature = error ?? JSON.stringify(next);
+      const nextSignature = error ?? next!.signature;
       if (nextSignature === signature && !target) continue;
       signature = nextSignature;
       apply(next, error, target);
@@ -157,7 +159,7 @@ async function refresh(focusPath?: string) {
   }
 }
 
-function apply(next: Snapshot | undefined, error: string | undefined, target?: string) {
+function apply(next: Collected | undefined, error: string | undefined, target?: string) {
   const previous = view.snapshot;
   const keep = selectedFile()?.path;
   view.loading = false;
@@ -188,6 +190,7 @@ function moveTo(next: string) {
   tree?.close();
   tree = watchTree();
   positions.clear();
+  seen.clear();
   lastEdited = undefined;
   view.snapshot = undefined;
   view.selected = 0;
@@ -255,7 +258,7 @@ function key(name: string) {
       if (view.follow && lastEdited) focus(lastEdited);
       break;
     case "s": cycleSource(); return;
-    case "r": signature = ""; void refresh(); return;
+    case "r": signature = ""; seen.clear(); void refresh(); return;
     default: return;
   }
   draw();

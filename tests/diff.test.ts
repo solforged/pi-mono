@@ -111,6 +111,39 @@ test("collects uncommitted, staged and branch diffs from a real repository", asy
   assert.deepEqual(branch.files.map((file) => file.path), ["a.txt", "blob.bin", "new.txt", "staged.txt"]);
 });
 
+test("a refresh reads again only the untracked files that changed", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "diff-seen-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  git(root, "init", "-q", "-b", "main");
+  await writeFile(join(root, "tracked.txt"), "one\n");
+  git(root, "add", "-A");
+  git(root, "commit", "-qm", "init");
+  await writeFile(join(root, "same.txt"), "same\n");
+  await writeFile(join(root, "edited.txt"), "before\n");
+  const seen = new Map();
+  const file = (snapshot: { files: Array<{ path: string }> }, path: string) => snapshot.files.find((entry) => entry.path === path);
+
+  const first = await collect(root, "uncommitted", undefined, seen);
+  const again = await collect(root, "uncommitted", undefined, seen);
+  assert.equal(again.signature, first.signature);
+  assert.equal(file(again, "edited.txt"), file(first, "edited.txt"), "the same object: not read again");
+
+  await writeFile(join(root, "edited.txt"), "before\nand after\n");
+  const edited = await collect(root, "uncommitted", undefined, seen);
+  assert.notEqual(edited.signature, first.signature);
+  assert.equal(file(edited, "same.txt"), file(first, "same.txt"));
+  assert.equal((file(edited, "edited.txt") as { added: number }).added, 2);
+
+  // A change to a tracked file, and a file that goes away, both show.
+  await writeFile(join(root, "tracked.txt"), "one\ntwo\n");
+  await rm(join(root, "same.txt"));
+  const last = await collect(root, "uncommitted", undefined, seen);
+  assert.notEqual(last.signature, edited.signature);
+  assert.deepEqual(last.files.map((entry) => entry.path), ["edited.txt", "tracked.txt"]);
+  assert.deepEqual([...seen.keys()], ["edited.txt"]);
+  assert.equal((await collect(root, "staged", undefined, seen)).signature === last.signature, false);
+});
+
 test("a refresh cannot stall on a pipe behind an untracked link, or on Git", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "diff-stall-"));
   t.after(() => rm(root, { recursive: true, force: true }));

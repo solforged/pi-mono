@@ -1,7 +1,8 @@
 // Collects and parses Git diffs for the viewer. No Pi imports: the viewer runs
 // as a plain Node process in its own Rex pane.
 import { execFile } from "node:child_process";
-import { constants } from "node:fs";
+import { createHash } from "node:crypto";
+import { constants, type Stats } from "node:fs";
 import { lstat, open, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import { hostGit } from "../sandbox/hostgit.ts";
@@ -24,6 +25,10 @@ export interface FileDiff {
   hunks: Hunk[];
 }
 export interface Snapshot { source: Source; label: string; files: FileDiff[] }
+/** A snapshot as collected, with a value that changes whenever what it shows does. */
+export interface Collected extends Snapshot { signature: string }
+/** Untracked files as last read, by path, with what `lstat` said of them then. */
+export type Untracked = Map<string, { stamp: string; file: FileDiff }>;
 
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const MAX_OUTPUT = 64 * 1024 * 1024;
@@ -55,8 +60,12 @@ async function defaultBranch(git: Git): Promise<string | undefined> {
   return undefined;
 }
 
-/** Diff for one source. Untracked files count as added in the working-tree sources. */
-export async function collect(root: string, source: Source, git: Git = gitRunner(root)): Promise<Snapshot> {
+/**
+ * Diff for one source. Untracked files count as added in the working-tree
+ * sources; given the `seen` of an earlier call, only those whose size or times
+ * changed are read again.
+ */
+export async function collect(root: string, source: Source, git: Git = gitRunner(root), seen: Untracked = new Map()): Promise<Collected> {
   const head = await ok(git, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]);
   let base = head ?? EMPTY_TREE;
   let label = "uncommitted";
@@ -70,20 +79,31 @@ export async function collect(root: string, source: Source, git: Git = gitRunner
   if (staged) label = "staged";
   const text = await git(staged ? [...DIFF_FLAGS, "--cached", "--"] : [...DIFF_FLAGS, base, "--"]);
   const files = parseDiff(text);
+  // A digest, not the snapshot as JSON: that string could outgrow what V8 allows.
+  const signature = createHash("sha256").update(label).update("\0").update(text);
   if (!staged) {
-    const listed = (await git(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
-    for (const path of listed.slice(0, MAX_UNTRACKED)) files.push(await untracked(root, path));
+    const listed = (await git(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean).slice(0, MAX_UNTRACKED);
+    for (const path of listed) {
+      const info = await lstat(join(root, path)).catch((error: Error) => error);
+      const stamp = info instanceof Error ? info.message : `${info.dev}:${info.ino}:${info.mode}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+      let entry = seen.get(path);
+      if (entry?.stamp !== stamp) seen.set(path, entry = { stamp, file: await untracked(root, path, info) });
+      files.push(entry.file);
+      signature.update(`\0${path}\0${stamp}`);
+    }
+    const current = new Set(listed);
+    for (const path of seen.keys()) if (!current.has(path)) seen.delete(path);
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
-  return { source, label, files };
+  return { source, label, files, signature: signature.digest("hex") };
 }
 
-async function untracked(root: string, path: string): Promise<FileDiff> {
+async function untracked(root: string, path: string, info: Stats | Error): Promise<FileDiff> {
   const file: FileDiff = { path, status: "untracked", binary: false, notes: [], added: 0, removed: 0, hunks: [] };
   const full = join(root, path);
   let handle;
   try {
-    const info = await lstat(full);
+    if (info instanceof Error) throw info;
     let text: string;
     if (info.isSymbolicLink()) {
       // As Git stores a link: its target, never what that points at.
