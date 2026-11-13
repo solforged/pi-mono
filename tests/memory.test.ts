@@ -143,6 +143,18 @@ test("stale or oversized context and a broken wiki warn once; a machine without 
   assert.deepEqual(absent.notes, []);
 });
 
+test("a failed reload keeps the last good context and says so once", async t => {
+  const { binary } = await fakeWiki(t, JSON.stringify(context()));
+  const h = harness(binary);
+  const sections = (await h.prompt("one")).sections;
+  const good = sections[SECTION];
+  await writeFile(binary, "#!/bin/sh\necho 'wiki: index is locked' >&2\nexit 1\n");
+  await h.prompt("two", sections);
+  assert.ok((await h.prompt("the PRR", sections)).message, "the kept glossary still matches");
+  assert.equal(sections[SECTION], good);
+  assert.deepEqual(h.notes.map(([, text]) => text), ["Memory wiki not reloaded, keeping what was loaded earlier: index is locked"]);
+});
+
 test("/memory reports the scope, now.md and the terms in context", async t => {
   const { binary } = await fakeWiki(t, JSON.stringify(context()));
   const h = harness(binary);

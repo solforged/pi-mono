@@ -55,8 +55,14 @@ export function register(pi: ExtensionAPI, binary = wikiBinary()): Session {
 
   pi.on("before_agent_start", async (event, ctx) => {
     const options = event.systemPromptOptions;
-    last = await load(binary, ctx.cwd);
-    const context = last.context;
+    const fresh = await load(binary, ctx.cwd);
+    // A failed load keeps the last good context. Dropping the section for one
+    // run and restoring it on the next patched the prompt twice and left that
+    // run without the context.
+    const loaded = fresh.context || !last?.context ? fresh : last;
+    if (loaded !== fresh) warnOnce(ctx, "kept", `Memory wiki not reloaded, keeping what was loaded earlier: ${fresh.error}`);
+    last = loaded;
+    const context = loaded.context;
     const text = context && section(context, binary, options.selectedTools?.includes(TOOL) ?? false);
     if (options.sections) {
       if (text) options.sections[SECTION] = text;
@@ -64,7 +70,7 @@ export function register(pi: ExtensionAPI, binary = wikiBinary()): Session {
     }
     if (!context) {
       // A machine without the wiki is not an error; a broken one is.
-      if (!last.missing || process.env.LLM_WIKI_SCOPE) warnOnce(ctx, "error", `Memory wiki not loaded: ${last.error}`);
+      if (!loaded.missing || process.env.LLM_WIKI_SCOPE) warnOnce(ctx, "error", `Memory wiki not loaded: ${loaded.error}`);
       return;
     }
     for (const page of context.now) {

@@ -23,7 +23,9 @@ command, and on the work machine `LLM_WIKI_SCOPE=work` covers every directory.
   such as goal continuations, are not matched.
 - **Warnings.** A stale or oversized `now.md` and a broken wiki each raise one
   notice per session. A machine with no built `wiki` stays quiet unless
-  `LLM_WIKI_SCOPE` is set.
+  `LLM_WIKI_SCOPE` is set. When `wiki context` fails after it has worked in
+  the session, for example on a timeout, the context loaded earlier stays in
+  the prompt and one notice says so.
 
 ## The memory tool
 
