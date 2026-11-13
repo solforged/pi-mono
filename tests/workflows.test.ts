@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { isTransientError, loadTitlePrompt, MAX_TRANSIENT_FAILURES, parseTitle, registerAutoname } from "../extensions/workflows/autoname.ts";
 import { applyDraft, evidenceChunks, evidenceFromBranch, inventoryInput, inventorySkills, parseCandidates, readDrafts, renderDraft, skillRef, stageCandidate } from "../extensions/workflows/learning.ts";
 import { atomicWrite, hash, readSkill, withLock } from "../extensions/workflows/state.ts";
-import { childArgs, childExtensions, createWorktree } from "../extensions/workflows/subagents.ts";
+import { agents, childArgs, childExtensions, createWorktree } from "../extensions/workflows/subagents.ts";
 import { runProcess } from "../extensions/workflows/process.ts";
 import { config, registry, root, skill, temporary } from "./helpers.ts";
 
@@ -172,6 +172,17 @@ test("children get explicit resource allowlists and inherit parent tool routing"
   for (const flag of ["--no-extensions", "--no-skills", "--no-context-files", "--no-approve"]) assert.ok(args.includes(flag));
   assert.ok(args.includes("apple-gemini/gemini-3.8-flash"));
   assert.ok(!args.includes("subagent"));
+});
+
+test("researchers load the web tools' extension, which is not sandbox routing", async () => {
+  const web = join(root, "extensions/web-search/index.ts"), self = join(root, "extensions/workflows/index.ts");
+  const tools = agents.researcher.tools;
+  const builtin = (name: string) => ({ name, sourceInfo: { source: "builtin" } });
+  const loaded = [...["read", "grep", "find", "ls"].map(builtin), { name: "web_search", sourceInfo: { source: "extension", path: web } }, { name: "web_fetch", sourceInfo: { source: "extension", path: web } }];
+  assert.deepEqual(await childExtensions({ getAllTools: () => loaded } as any, config, tools, self), [web]);
+  await assert.rejects(childExtensions({ getAllTools: () => loaded.slice(0, 4) } as any, config, tools, self), /not loaded in this Pi: web_search, web_fetch/);
+  const required = { ...config, subagents: { ...config.subagents, sandbox: "required" as const } };
+  await assert.rejects(childExtensions({ getAllTools: () => loaded } as any, required, tools, self), /No parent tool-routing extension/);
 });
 
 test("workers use separate worktrees, preserve the parent checkout, and reject dirty inputs", async (t) => {

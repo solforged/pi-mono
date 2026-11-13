@@ -8,7 +8,7 @@
 | `/autoname` | Generate another title; confirm before replacing an existing name. |
 | `/commit [replan\|apply\|show\|clear]` | Split the working tree into commits, down to hunks; cache the plan. |
 | `/advisor <task>` | Ask the advisor with a bounded recent-conversation excerpt. |
-| `/subagent <advisor\|scout\|worker> <task>` | Run a named agent with bounded context. |
+| `/subagent <advisor\|scout\|researcher\|worker> <task>` | Run a named agent with bounded context. |
 | `/learn [flow]` | Have the current model author a managed skill. |
 | `/learn-sessions` | Pick sessions to mine; the current session starts checked. |
 | `/learn-review` | Inspect, approve, or dismiss a queued proposal. |

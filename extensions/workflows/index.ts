@@ -83,7 +83,7 @@ export default async function (pi: ExtensionAPI) {
 
   const run = createRunner(pi, getConfig, root, agentDir, lifetime.signal);
   const item = Type.Object({
-    agent: StringEnum(["advisor", "scout", "worker"] as const),
+    agent: StringEnum(["advisor", "scout", "researcher", "worker"] as const),
     task: Type.String(),
     context: Type.Optional(Type.String()),
   });
@@ -93,7 +93,7 @@ export default async function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent", label: "Subagent",
     // Sent with every request: keep it short. The runner validates tasks; limits are in docs/subagents.md.
-    description: `Run 1-${config.subagents.maxTasks} independent bounded tasks in parallel. advisor/scout only read; worker edits a clean-HEAD worktree, which you must review and integrate. Give each task its context (not the whole conversation) and the expected result.`,
+    description: `Run 1-${config.subagents.maxTasks} independent bounded tasks in parallel. advisor/scout/researcher (web) only read; worker edits a clean-HEAD worktree you review and integrate. Give each task its context (not the whole conversation) and the expected result.`,
     parameters: Type.Object({ tasks: Type.Array(item) }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const results = await run(params.tasks, ctx, approvedInstructions, signal ?? lifetime.signal, (text) => {
@@ -105,11 +105,11 @@ export default async function (pi: ExtensionAPI) {
   });
   for (const command of ["advisor", "subagent"] as const) {
     pi.registerCommand(command, {
-      description: command === "advisor" ? "Ask the advisor about the current conversation/repository" : "Run /subagent <advisor|scout|worker> <task>",
+      description: command === "advisor" ? "Ask the advisor about the current conversation/repository" : "Run /subagent <advisor|scout|researcher|worker> <task>",
       handler: async (args, ctx) => {
         await ctx.waitForIdle(); lifetime.signal.throwIfAborted();
-        const match = command === "advisor" ? ["", "advisor", args] : /^(advisor|scout|worker)\s+([\s\S]+)$/.exec(args.trim());
-        if (!match || !match[2]?.trim()) throw new Error(`Usage: /${command} ${command === "subagent" ? "<advisor|scout|worker> " : ""}<task>`);
+        const match = command === "advisor" ? ["", "advisor", args] : /^(advisor|scout|researcher|worker)\s+([\s\S]+)$/.exec(args.trim());
+        if (!match || !match[2]?.trim()) throw new Error(`Usage: /${command} ${command === "subagent" ? "<advisor|scout|researcher|worker> " : ""}<task>`);
         const recent = ctx.sessionManager.getBranch().filter((e: any) => e.type === "message" && ["user", "assistant"].includes(e.message.role)).slice(-8).map((e: any) => {
           const content = e.message.content;
           return `${e.message.role}: ${typeof content === "string" ? content : content.filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n")}`;

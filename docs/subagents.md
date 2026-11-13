@@ -15,8 +15,9 @@ The model-callable `subagent` tool accepts `tasks`, an array of objects with
 }
 ```
 
-Advisor/scout have `read`, `grep`, `find`, and `ls`, not Bash. Workers also get
-Bash, edit, and write. Each child gets approved context-file instructions and
+Advisor/scout have `read`, `grep`, `find`, and `ls`, not Bash. The researcher
+adds `web_search` and `web_fetch`, so it needs the web-search extension loaded.
+Workers also get Bash, edit, and write. Each child gets approved context-file instructions and
 its authored definition from [agent-definitions/](../agent-definitions/); it
 does not inherit the whole conversation or discover project resources.
 Headless children cannot [ask you questions](ask.md#subagents); they list them

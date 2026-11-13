@@ -198,8 +198,8 @@ export default async function (pi: ExtensionAPI) {
     name: "rex_agent", label: "Rex agent", executionMode: "sequential",
     // Declarations are sent with every request: keep them short. The runner validates
     // names, lengths and limits; layout and lifecycle details are in docs/rex.md.
-    description: "Start a named Pi child in a Rex pane for independent work; returns at once. advisor/scout only read; worker edits a clean-HEAD worktree you must review. Give a 2-6 word title, a self-contained task and selected context. Collect with rex_result next=true.",
-    parameters: Type.Object({ agent: StringEnum(["advisor", "scout", "worker"] as const), name: str(), title: str(), task: Type.String(),
+    description: "Start a named Pi child in a Rex pane for independent work; returns at once. advisor/scout/researcher (web) only read; worker edits a clean-HEAD worktree you review. Give a 2-6 word title, a self-contained task and selected context. Collect with rex_result next=true.",
+    parameters: Type.Object({ agent: StringEnum(["advisor", "scout", "researcher", "worker"] as const), name: str(), title: str(), task: Type.String(),
       context: str(), wait: Type.Optional(Type.Boolean()), view: Type.Optional(StringEnum(["deck", "background"] as const)) }),
     async execute(_id, params, signal, onUpdate, ctx) {
       const combined = AbortSignal.any([signal ?? lifetime.signal, lifetime.signal]);

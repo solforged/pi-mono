@@ -50,7 +50,7 @@ and project tools.
 
 The model has three tools:
 
-- `rex_agent`: start an advisor, scout, or worker and its first task.
+- `rex_agent`: start an advisor, scout, researcher, or worker and its first task.
 - `rex_send`: addressed by `child` name. `followup` starts another task in an
   idle child; `steer` sends a message to an exact active `taskId`; `cancel`
   stops the current task; `close` ends an idle child once all its results have
@@ -230,8 +230,8 @@ arbitrates takeover against terminal closure, including lost receipts.
 
 ## Policy and lifetime
 
-The existing [workflow roles](roles.md) apply: advisor uses `advisor`; scout and
-worker use `task`. A child retains its original model, tools, instructions, and
+The existing [workflow roles](roles.md) apply: advisor uses `advisor`; scout,
+researcher and worker use `task`. A child retains its original model, tools, instructions, and
 working directory across tasks. Each task receives fresh turn/time limits and
 separate usage accounting. Parent model selection never changes. Missing models,
 authentication, Rex identity, or required routing fail without fallback.

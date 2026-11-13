@@ -11,6 +11,7 @@ import { responseText } from "./requests.ts";
 export const agents = {
   advisor: { role: "advisor", tools: ["read", "grep", "find", "ls"] },
   scout: { role: "task", tools: ["read", "grep", "find", "ls"] },
+  researcher: { role: "task", tools: ["read", "grep", "find", "ls", "web_search", "web_fetch"] },
   worker: { role: "task", tools: ["read", "grep", "find", "ls", "bash", "edit", "write"] },
 } satisfies Record<string, { role: RoleName; tools: string[] }>;
 export type AgentName = keyof typeof agents;
@@ -26,16 +27,21 @@ export function piInvocation(args: string[]) {
   return { command: "pi", args };
 }
 
+const BUILTIN_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "edit", "write"]);
 export async function childExtensions(pi: Pick<ExtensionAPI, "getAllTools">, config: Config, tools: string[], self: string) {
   const paths = new Set(config.subagents.childExtensions);
   const metadata = pi.getAllTools();
   let routed = false;
+  // Extension tools such as web_search must exist in the parent to be reproduced.
+  const missing = tools.filter((name) => !BUILTIN_TOOLS.has(name) && !metadata.some((item) => item.name === name));
+  if (missing.length) throw new Error(`Child tools not loaded in this Pi: ${missing.join(", ")}`);
   for (const tool of metadata.filter((item) => tools.includes(item.name))) {
     if (tool.sourceInfo.source === "builtin") continue;
     const source = tool.sourceInfo.path;
     if (!source || !source.startsWith("/")) throw new Error(`Cannot reproduce ${tool.name} tool routing in a child: ${source}`);
     paths.add(source);
-    routed = true;
+    // Only wrapped built-in tools count as sandbox routing.
+    if (BUILTIN_TOOLS.has(tool.name)) routed = true;
   }
   if (config.subagents.sandbox === "required" && !routed) throw new Error("No parent tool-routing extension to inherit; refusing an unsandboxed child");
   const result: string[] = [];
