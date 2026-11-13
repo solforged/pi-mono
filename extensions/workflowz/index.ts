@@ -364,7 +364,8 @@ export default async function (pi: ExtensionAPI) {
       const { batch, yielded } = collected;
       const status = j.statusLines();
       const parts = [batch.text || (yielded ? "Stopped waiting: the user sent a message. Answer it first; jobs keep running, so call wait again afterwards."
-        : j.busy() ? `No results within ${Math.round(timeoutMs / 1000)}s.` : "No running jobs and no undelivered results.")];
+        : j.busy(filter) ? `No results within ${Math.round(timeoutMs / 1000)}s.`
+        : filter ? "The named work has finished and has no undelivered results." : "No running jobs and no undelivered results.")];
       if (batch.more) parts.push(`${batch.more} more result(s) are ready; call wait again.`);
       parts.push(status.length ? `Still running:\n${status.join("\n")}` : "Nothing is running.");
       if (j.ready().length) scheduleFlush();
