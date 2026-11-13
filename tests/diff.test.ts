@@ -9,6 +9,7 @@ import { changedHunks, collect, gitRunner, parseDiff, unquote } from "../extensi
 import { bundledHighlighter, DEFAULT_SETTINGS, paneSize, readPanes, readSettings, registerDiff, run, tick, treeState, which } from "../extensions/diff/pane.ts";
 import { body, DEFAULT_PALETTE, emphasis, fileBody, hunkAt, layout, type View } from "../extensions/diff/render.ts";
 import { createHighlighter, loadHighlighter, piecesFromHtml, tokenFor } from "../extensions/diff/syntax.ts";
+import { decoder } from "../extensions/diff/terminal.ts";
 import { paint, sanitize, width, wrapSpans } from "../extensions/diff/text.ts";
 
 const plain = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, "");
@@ -291,6 +292,22 @@ test("shows hover, a key bar, a change counter and a scrollbar", () => {
   const hovered = layout({ ...base, hover: { area: "file", index: 1 }, follow: false });
   assert.notDeepEqual(hovered.rows[screen.list.top + 1], screen.rows[screen.list.top + 1]);
   assert.notEqual(paint(hovered.rows[23], 60), paint(screen.rows[23], 60));
+});
+
+test("decodes keys, mouse reports and the background reply however the reads split them", async () => {
+  const events: string[] = [];
+  const feed = decoder({
+    key: (name) => events.push(name), mouse: (...report) => events.push(`mouse ${report.join(" ")}`), background: (color) => events.push(color),
+  }, 10);
+  for (const read of ["j\x1b[A", "\x1b[<35;6", ";12M", "\x1b", "[1;2B", "\x1b]11;rgb:1e1e/2f", "2f/ffff\x1b", "\\\x7fq"]) feed(read);
+  assert.deepEqual(events, ["j", "up", "mouse 35 6 12 true", "shift-down", "#1e2fff", "backspace", "q"]);
+
+  // A sequence that never finishes was not typed: its `[` is "previous file" as a key.
+  events.length = 0;
+  feed("\x1b[");
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  feed("k");
+  assert.deepEqual(events, ["k"]);
 });
 
 /** Replays the viewer's frames into rows of plain text. */

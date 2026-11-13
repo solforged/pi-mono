@@ -11,6 +11,7 @@ import { docUrl, parseDocUrl, resolveTarget } from "./links.ts";
 import { docWidth, layoutDoc, loadMarked, plainLexer, renderDoc, type Doc, type DocLayout, type DocView } from "./markdown.ts";
 import { DEFAULT_PALETTE, maxScroll, type Palette } from "./render.ts";
 import { loadHighlighter } from "./syntax.ts";
+import { decoder } from "./terminal.ts";
 import { paint, width } from "./text.ts";
 
 const { values } = parseArgs({ options: {
@@ -276,36 +277,7 @@ function mouse(button: number, column: number, row: number, press: boolean) {
   else if (target?.area === "link") follow(target.url);
 }
 
-const KEYS: Record<string, string> = {
-  "\x1b[A": "up", "\x1b[B": "down", "\x1b[C": "right", "\x1b[D": "left", "\x1bOA": "up", "\x1bOB": "down",
-  "\x1bOC": "right", "\x1bOD": "left", "\x1b[5~": "pageup", "\x1b[6~": "pagedown", "\x1b[H": "home", "\x1b[F": "end",
-  "\x1b[O": "blur", "\x1b[1~": "home", "\x1b[4~": "end", "\x1bOH": "home", "\x1bOF": "end", "\x7f": "backspace", "\b": "backspace",
-  "\x03": "ctrl-c", "\x04": "ctrl-d", "\x15": "ctrl-u", "\x06": "ctrl-f", "\x02": "ctrl-b", "\x05": "ctrl-e", "\x19": "ctrl-y",
-};
-
-function input(data: string) {
-  for (let rest = data; rest.length;) {
-    const color = /^\x1b\]11;rgb:([0-9a-f]+)\/([0-9a-f]+)\/([0-9a-f]+)(?:\x07|\x1b\\)/i.exec(rest);
-    if (color) {
-      const channel = (hex: string) => Math.round(parseInt(hex, 16) / (16 ** hex.length - 1) * 255).toString(16).padStart(2, "0");
-      palette = view.palette = { ...palette, bg: `#${channel(color[1])}${channel(color[2])}${channel(color[3])}` };
-      draw(true);
-      rest = rest.slice(color[0].length);
-      continue;
-    }
-    const pointer = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])/.exec(rest);
-    if (pointer) {
-      mouse(Number(pointer[1]), Number(pointer[2]), Number(pointer[3]), pointer[4] === "M");
-      rest = rest.slice(pointer[0].length);
-      continue;
-    }
-    const sequence = /^(?:\x1b\[[0-9;?]*[A-Za-z~]|\x1bO[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))/.exec(rest);
-    const token = sequence?.[0] ?? String.fromCodePoint(rest.codePointAt(0)!);
-    rest = rest.slice(token.length);
-    const name = KEYS[token] ?? (token.length === 1 && token >= " " ? token : undefined);
-    if (name) key(name);
-  }
-}
+const input = decoder({ key, mouse, background: (bg) => { palette = view.palette = { ...palette, bg }; draw(true); } });
 
 // ── Start ───────────────────────────────────────────────────────────────────
 
