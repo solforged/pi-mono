@@ -5,7 +5,7 @@ import { lstat, mkdir, readFile, readlink, symlink, writeFile } from "node:fs/pr
 import { homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { create, editsMainCheckout, followTitle, inside, inspect, land, owned, remove, slugify, worktreeRoot, worktrees } from "../extensions/worktree/git.ts";
+import { create, editsMainCheckout, followTitle, inside, inspect, land, owned, owner, remove, slugify, worktreeRoot, worktrees } from "../extensions/worktree/git.ts";
 import { copyIncluded, included } from "../extensions/worktree/include.ts";
 import { relocate, repositorySessionDirs, sessionBucket, sessionChoices, sessionDirFor, sessionFileFor } from "../extensions/worktree/session.ts";
 import { root, temporary } from "./helpers.ts";
@@ -329,4 +329,56 @@ test("Pi moves a session into a worktree, renames its branch and returns", async
   assert.deepEqual(sh(main, "log", "--format=%s").split("\n"), ["feat: made", "feat: b", "chore: setup files", "chore: init"]);
   assert.ok(!existsSync(batched));
   assert.equal(sh(main, "branch", "--list", "pi/batched"), "");
+});
+
+test("a path belongs to the deepest worktree that holds it", () => {
+  const trees = [{ path: "/r/main", bare: false }, { path: "/r/main/.wt/x", bare: false }, { path: "/w/y", bare: false }];
+  assert.equal(owner(trees, "/r/main/src")?.path, "/r/main");
+  assert.equal(owner(trees, "/r/main/.wt/x/src")?.path, "/r/main/.wt/x");
+  assert.equal(owner(trees, "/w/y")?.path, "/w/y");
+  assert.equal(owner(trees, "/w/yonder"), undefined);
+});
+
+test("Pi keeps a session in the subfolder it started in, and takes back a worktree the session did not reach", async (t) => {
+  if (spawnSync("pi", ["--version"]).error) { t.skip("Pi is not installed"); return; }
+  const { dir, main, wt } = await repo(t);
+  const agentDir = join(dir, "agent");
+  const pi = (cwd: string, extra: NodeJS.ProcessEnv, ...args: string[]) => {
+    const result = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates",
+      "-e", join(root, "extensions/worktree/index.ts"), "-e", join(root, "tests/fixtures/worktree-provider.ts"),
+      "--provider", "worktree-smoke", "--model", "worktree-smoke/fixture", ...args],
+    { cwd, encoding: "utf8", timeout: 60_000, env: { ...env, PI_CODING_AGENT_DIR: agentDir, PI_WORKTREE_DIR: wt, PI_REX_CHILD: "", PI_WORKFLOW_CHILD_CONFIG: "", ...extra } });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    return result.stdout;
+  };
+  const sessions = (cwd: string) => {
+    const folder = join(agentDir, "sessions", sessionBucket(cwd));
+    try { return readdirSync(folder).map((name) => readFileSync(join(folder, name), "utf8").trim().split("\n").map((line) => JSON.parse(line))); } catch { return []; }
+  };
+  const sub = join(main, "pkg", "app");
+  await mkdir(sub, { recursive: true });
+  await writeFile(join(sub, "x.txt"), "x\n");
+  sh(main, "add", "."); sh(main, "commit", "-qm", "chore: app");
+
+  // A move that is turned down leaves no worktree or branch, and the model is told it did not move.
+  pi(sub, { WORKTREE_FIXTURE_REFUSE: "1" }, "-p", "Start the worktree fixture");
+  const path = join(wt, "proj--fixture-task");
+  assert.ok(!existsSync(path));
+  assert.equal(sh(main, "branch", "--list", "pi/*"), "");
+  const [refused] = sessions(sub);
+  assert.match(refused.find((entry) => entry.customType === "worktree")?.content ?? "", /^The session did not move to a worktree: the switch was cancelled\. Removed .*proj--fixture-task and pi\/fixture-task\. It is still in .*pkg\/app\.$/);
+  assert.equal(refused[0].cwd, sub);
+
+  // The next one moves to the same folder of the worktree, under the same name, and its file stays put.
+  pi(sub, {}, "-p", "Start the worktree fixture");
+  assert.ok(existsSync(join(path, "pkg", "app", "made.txt")), "the relative write lands in the subfolder");
+  const moved = sessions(sub).find((lines) => lines[0].cwd === join(path, "pkg", "app"))!;
+  assert.ok(moved, "the session works in the worktree's pkg/app");
+  assert.match(moved.find((entry) => entry.customType === "worktree")?.content ?? "", /Work in .*proj--fixture-task\/pkg\/app from now on/);
+  assert.deepEqual([sessions(sub).length, sessions(main).length, sessions(path).length], [2, 0, 0]);
+
+  // Returning goes back to the subfolder too.
+  pi(sub, {}, "--session", moved[0].id, "-p", "/wt exit keep");
+  assert.equal(sessions(sub).find((lines) => lines[0].id === moved[0].id)![0].cwd, sub);
+  assert.deepEqual([sessions(sub).length, sessions(main).length], [2, 0]);
 });

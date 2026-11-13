@@ -50,6 +50,10 @@ export async function worktrees(cwd: string, run = git): Promise<Worktree[]> {
 
 export const inside = (root: string, path: string) => { const rel = relative(root, path); return !rel.startsWith("..") && !isAbsolute(rel); };
 
+/** The worktree that `path` is in: the deepest one, since a worktree can sit inside another's folder. */
+export const owner = (trees: Worktree[], path: string) => trees.filter((tree) => inside(resolve(tree.path), resolve(path)))
+  .sort((a, b) => resolve(b.path).length - resolve(a.path).length)[0];
+
 /** Whether an edit/write `path` argument, resolved like Pi's tools, falls in the main checkout. */
 export function editsMainCheckout(checkout: Checkout | undefined, cwd: string, path: unknown) {
   if (!checkout || checkout.linked || typeof path !== "string") return false;

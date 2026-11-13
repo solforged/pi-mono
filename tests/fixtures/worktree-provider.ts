@@ -8,6 +8,8 @@ export default function (pi: ExtensionAPI) {
   globalThis.fetch = async () => { throw new Error("Network access forbidden in the worktree fixture"); };
   // Print mode has no /name; this stands in for a manual or automatic title.
   pi.registerCommand("fixture-name", { handler: async (args) => { pi.setSessionName(args.trim()); } });
+  // Stands in for a user or extension that turns the move down.
+  if (process.env.WORKTREE_FIXTURE_REFUSE) pi.on("session_before_switch", () => ({ cancel: true }));
   pi.registerProvider("worktree-smoke", {
     baseUrl: "https://invalid.example", apiKey: "test-only-not-a-credential", api: "worktree-smoke",
     models: [{ id: "fixture", name: "Worktree fixture", reasoning: false, input: ["text"],

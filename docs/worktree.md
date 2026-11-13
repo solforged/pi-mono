@@ -17,7 +17,9 @@ through, so trivial fixes stay put.
 The tool ends the current response; once Pi is idle the session moves and
 continues the task. Any call batched with the move is blocked so nothing lands
 in the main checkout. Expect one prompt-cache miss, since the prompt names the
-working directory.
+working directory. A session started in a subfolder moves to the same
+subfolder of the worktree, and returns to it. If the move fails or is
+cancelled, the new worktree and branch are removed again.
 
 Nothing happens in linked worktrees, outside Git, with `--no-session`, or in
 Rex and workflow children, which already have worker worktrees.
@@ -55,7 +57,7 @@ files in the worktree are never touched.
 ## The session file
 
 The session keeps its ID and file. Only its header `cwd` changes; the file
-stays in the main checkout's session folder. From the main checkout,
+stays in the session folder of the directory it started in. From there,
 `pi --resume`, `/resume` and `pi --session <id>` open it in the worktree,
 and `/wt resume` finds it from any checkout. `pi -c` runs the newest session
 in the current directory, so from the main checkout it would run a worktree
