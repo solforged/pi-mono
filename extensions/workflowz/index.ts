@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { userStarted } from "../continue/started.ts";
 import { addUsage, bounded, emptyUsage } from "../workflows/process.ts";
 import { completeRole } from "../workflows/requests.ts";
 import { loadConfig, type Config, type RoleName } from "../workflows/roles.ts";
@@ -183,8 +184,9 @@ export default async function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     ctxNow = ctx;
     instructions = (event.systemPromptOptions.contextFiles ?? []).map((f) => `Instructions from ${f.path}:\n${f.content}`).join("\n\n");
+    // "." and /retry are the user speaking too, though they carry no prompt to scan.
+    if (userStarted(event)) { nudges = 0; wake = true; }
     if (event.messageType !== "user") return;
-    nudges = 0; wake = true;
     const prompt = event.prompt ?? "";
     const words = keywordsIn(prompt);
     if (!words.length) return;

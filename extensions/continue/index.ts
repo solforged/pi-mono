@@ -1,7 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { planRetry } from "../retry/retry.ts";
+import { CONTINUE_TYPE } from "./started.ts";
 
-export const CONTINUE_TYPE = "continue";
+export { CONTINUE_TYPE };
 
 export default function (pi: ExtensionAPI) {
   pi.on("input", (event, ctx) => {

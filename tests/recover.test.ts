@@ -41,6 +41,11 @@ test("an empty stop is dropped from context and continued, twice per prompt", ()
   assert.equal(end(assistant("stop")), undefined);
   handlers.before_agent_start({ messageType: "user" });
   assert.equal(end(assistant("stop")).continue, true);
+  // So do "." and /retry, which start their run with a hidden message of their own.
+  end(assistant("stop"));
+  assert.equal(end(assistant("stop")), undefined);
+  handlers.before_agent_start({ messageType: "custom", message: { customType: "continue" } });
+  assert.equal(end(assistant("stop")).continue, true);
 });
 
 test("a reply cut at the output limit keeps its text; reasoning cut there is dropped", () => {

@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { DISCUSS } from "../ask/model.ts";
+import { userStarted } from "../continue/started.ts";
 import { showPanel } from "./panel.ts";
 import {
   apply, counts, empty, format, limits, open, reminder, restated, restore, section, statuses, tally, withParentTodos,
@@ -48,7 +49,7 @@ export default function (pi: ExtensionAPI) {
   pi.events.on(DISCUSS, () => { discussing = true; });
   pi.on("before_agent_start", (event) => {
     discussing = false;
-    if (event.messageType === "user") { reminders = 0; progressed = false; }
+    if (userStarted(event)) { reminders = 0; progressed = false; }
     const sections = event.systemPromptOptions.sections;
     const text = event.systemPromptOptions.selectedTools?.includes("todo") ? section(list) : undefined;
     if (text) sections.todos = text; else delete sections.todos;

@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { userStarted } from "../continue/started.ts";
 
 // Pi retries provider errors and repairs unrun tool calls by itself. Three turn
 // endings are left to the user (tests/fixtures/fault-smoke.ts shows them):
@@ -46,7 +47,7 @@ export function registerRecover(pi: ExtensionAPI) {
   const reset = () => { nudges = 0; loop = { key: "", count: 0, calls: [] }; };
 
   pi.on("session_start", reset);
-  pi.on("before_agent_start", (event) => { if (event.messageType === "user") reset(); });
+  pi.on("before_agent_start", (event) => { if (userStarted(event)) reset(); });
 
   pi.on("turn_end", (event) => {
     // Failed and aborted turns belong to Pi's retries and to /retry.

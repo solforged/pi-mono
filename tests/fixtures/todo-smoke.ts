@@ -97,6 +97,10 @@ export default function (pi: ExtensionAPI) {
         await events.before_agent_start(prompt("custom"), fake);
         await events.tool_execution_end({});
         assert.equal(await settle(), undefined);
+        // "." is the user speaking, though its run starts from a hidden message: reminders renew.
+        await events.before_agent_start({ ...prompt("custom"), message: { customType: "continue" } }, fake);
+        await events.tool_execution_end({});
+        assert.match((await settle()).entries[0].content, /Reminder 1\/3/);
         await events.before_agent_start(prompt(), fake);
         await events.tool_execution_end({});
         active = [];

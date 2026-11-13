@@ -6,6 +6,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { userStarted } from "../continue/started.ts";
 import { cards, describe, escapeTags, MAX_TEXT, newId, request, resolve, shortPath, Station, wrap, type Answer, type Card, type Delivery, type Envelope } from "./station.ts";
 
 const MAX_REPLY = 4000;
@@ -159,6 +160,8 @@ export default function intercom(pi: ExtensionAPI) {
     await old?.close().catch(() => {});
   });
   pi.on("input", event => { if (event.source !== "extension") wakes = 0; });
+  // "." is handled before this extension sees the input, so its run renews the budget here.
+  pi.on("before_agent_start", event => { if (userStarted(event)) wakes = 0; });
   pi.on("agent_start", () => update({ busy: true }));
   pi.on("agent_settled", () => update({ busy: false, title: pi.getSessionName() ?? null }));
   pi.on("session_info_changed", () => update({ title: pi.getSessionName() ?? null }));

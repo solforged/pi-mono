@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import registerContinue from "../extensions/continue/index.ts";
+import { userStarted } from "../extensions/continue/started.ts";
 
 type Options = { source?: string; mode?: string; images?: unknown[]; streamingBehavior?: string };
 
@@ -88,4 +89,13 @@ test("a dot accompanying images remains literal input", () => {
   assert.deepEqual(sent, []);
   assert.deepEqual(input(".", { images: [] }), { action: "handled" });
   assert.equal(sent.length, 1);
+});
+
+test("a run counts as the user's when a prompt, \".\" or /retry started it", () => {
+  assert.equal(userStarted({ messageType: "user" }), true);
+  assert.equal(userStarted({ messageType: "custom", message: { customType: "continue" } }), true);
+  assert.equal(userStarted({ messageType: "custom", message: { customType: "retry" } }), true);
+  // A goal continuation, a reminder or a steering message is not the user speaking.
+  assert.equal(userStarted({ messageType: "custom", message: { customType: "goal" } }), false);
+  assert.equal(userStarted({ messageType: "custom" }), false);
 });
