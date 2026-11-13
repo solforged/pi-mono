@@ -47,9 +47,16 @@ Everything keeps its host path, so paths in sessions and tool output stay valid.
 | A linked worktree's shared Git directory | read-write |
 | `$LLM_WIKI_DIR` | read-write (setting `wiki`) |
 | Shared folders from settings | read-only unless set otherwise |
-| `~/.agents/skills`, Pi's installation and docs, `~/.config/git` | read-only |
+| `~/.agents/skills`, Pi's installation and docs | read-only |
+| Files in `~/.config/git`, except `credentials` | read-only copies |
 | `/cache` (`~/.cache/pi-sandbox/shared`) | mise, Cargo, Go, npm, and uv caches |
 | `~/.cache/pi-sandbox/output/<container>` | read-only: full output of long bash commands |
+
+The guest cannot follow a link out of its mounts. A linked skill folder is
+therefore mounted at the link's own path, which is the path Pi gives the
+model. Files in `~/.config/git` (the ignore file, your notes) and files linked
+into a skills folder are copied when the sandbox starts, so an edit shows up
+at the next start. Links deeper inside a skill are not resolved.
 
 Pi saves bash output it had to cut to a file in the host's temp folder. With
 the sandbox on, that file moves to the output folder above, so the path in the

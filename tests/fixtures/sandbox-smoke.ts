@@ -3,8 +3,9 @@
 // Uses a throwaway repository; no model calls.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import install from "../../extensions/sandbox/index.ts";
@@ -71,6 +72,20 @@ export default function (pi: ExtensionAPI) {
         const started = Date.now();
         assert.match(text(await call("bash", { command: "uname -s && id -u" })), /Linux\n0/);
         console.log(`first command after ${Date.now() - started} ms (includes any image build and container start)`);
+        // Skills and the user's Git files are often links to somewhere the guest
+        // does not have. They must read the same there, by the paths Pi names.
+        const names = (dir: string) => { try { return readdirSync(dir); } catch { return []; } };
+        const skills = join(homedir(), ".agents", "skills"), gitFiles = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "git");
+        const shared = [
+          ...names(skills).map((skill) => join(skills, skill, "SKILL.md")),
+          ...names(gitFiles).filter((file) => !file.startsWith("credentials")).map((file) => join(gitFiles, file)),
+        ].filter((file) => { try { return statSync(file).isFile() && !file.includes("'"); } catch { return false; } });
+        if (shared.length) {
+          const sums = text(await call("bash", { command: `sha256sum ${shared.map((file) => `'${file}'`).join(" ")}` }));
+          for (const file of shared) assert(sums.includes(`${createHash("sha256").update(readFileSync(file)).digest("hex")}  ${file}`), `${file} differs in the guest:\n${sums}`);
+          console.log(`${shared.length} skill and Git files read the same in the guest`);
+        }
+        assert.doesNotMatch(text(await call("bash", { command: `ls -a '${gitFiles}' 2>/dev/null; true` })), /credentials|hooks/);
         // The marker shows only while the sandbox is on.
         assert.deepEqual(marker(), { key: "sandbox", text: "\u{F01A6}", color: "success", priority: 8 });
 

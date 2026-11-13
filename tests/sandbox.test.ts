@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { sharedTarget, shareCargoTarget } from "../extensions/sandbox/cargo.ts";
@@ -9,7 +9,8 @@ import { ContainerCli, EXEC_ID, runProcess, STOP_SCRIPT, type RunOptions, type R
 import { commandEnv, fdArgs, GREP_SCRIPT, GrepCollector, guestError, parseListing, rgArgs, sniffImage } from "../extensions/sandbox/guest.ts";
 import { repath, shareOutput } from "../extensions/sandbox/output.ts";
 import { buildPlan, containerName, promptNote, runArgs, type Probe } from "../extensions/sandbox/plan.ts";
-import { imageTag, Sandbox, withLock } from "../extensions/sandbox/sandbox.ts";
+import { contextOf, gitContext } from "../extensions/sandbox/probe.ts";
+import { imageTag, Sandbox, syncStage, withLock } from "../extensions/sandbox/sandbox.ts";
 import { chooseEnabled, DEFAULTS, inheritedSwitch, resolveSettings } from "../extensions/sandbox/settings.ts";
 import { savedToggle, saveToggle, togglesFile } from "../extensions/sandbox/toggles.ts";
 import { temporary } from "./helpers.ts";
@@ -555,4 +556,70 @@ test("host bash in a linked Rust worktree builds into the main checkout's target
   const own = { ...spawn, env: { CARGO_TARGET_DIR: "/tmp/isolated" } };
   assert.equal(shareCargoTarget(own), own);
   assert.equal(shareCargoTarget({ ...spawn, cwd: main }).env, spawn.env);
+});
+
+test("a context folder with links is planned entry by entry", () => {
+  const skills = "/Users/me/.agents/skills";
+  const plan = buildPlan(probe({}, { contextDirs: ["/opt/pi"], contextViews: [{ target: skills, entries: [
+    { name: "plain", source: `${skills}/plain`, kind: "dir" },
+    { name: "linked", source: "/nix/store/abc-skill", kind: "dir" },
+    { name: "notes.md", source: "/nix/store/def-notes.md", kind: "file" },
+    // A link to a folder that holds the home directory would show all of it.
+    { name: "wide", source: "/Users", kind: "dir" },
+  ] }] }), DEFAULTS, "img");
+  const [stage] = plan.stages;
+  assert.match(stage.dir, /^\/Users\/me\/\.cache\/pi-sandbox\/context\/skills-[0-9a-f]+$/);
+  assert.deepEqual([stage.dirs, stage.files], [["plain", "linked"], [{ name: "notes.md", from: "/nix/store/def-notes.md" }]]);
+  // The staging folder first: the others are mounted on folders inside it.
+  assert.deepEqual(plan.mounts.filter((m) => m.label === "context").map((m) => [m.source, m.target, m.readonly]), [
+    ["/opt/pi", "/opt/pi", true], [stage.dir, skills, true], [`${skills}/plain`, `${skills}/plain`, true], ["/nix/store/abc-skill", `${skills}/linked`, true],
+  ]);
+  assert.doesNotMatch(promptNote(plan), /\.agents|nix/);
+  assert.deepEqual(buildPlan(probe(), DEFAULTS, "img").stages, []);
+});
+
+test("links in context folders are resolved on the host, and the Git folder never shows credentials", async (t) => {
+  const dir = await temporary(t);
+  const skills = join(dir, "skills"), store = join(dir, "store"), git = join(dir, "git");
+  await mkdir(join(skills, "plain"), { recursive: true });
+  await mkdir(join(store, "skill"), { recursive: true });
+  assert.deepEqual(contextOf(skills), { dir: skills }, "a folder without links is mounted as it is");
+  assert.deepEqual(contextOf(join(dir, "missing")), {});
+  await symlink(join(store, "skill"), join(skills, "linked"));
+  await symlink(join(dir, "missing"), join(skills, "dangling"));
+  await writeFile(join(store, "notes.md"), "notes\n");
+  await symlink(join(store, "notes.md"), join(skills, "notes.md"));
+  assert.deepEqual(contextOf(skills), { view: { target: skills, entries: [
+    { name: "linked", source: join(store, "skill"), kind: "dir" },
+    { name: "notes.md", source: join(store, "notes.md"), kind: "file" },
+    { name: "plain", source: join(skills, "plain"), kind: "dir" },
+  ] } });
+  // A folder that is itself a link keeps the path Pi names it by.
+  await symlink(skills, join(dir, "alias"));
+  assert.equal(contextOf(join(dir, "alias")).view?.target, join(dir, "alias"));
+
+  await mkdir(join(git, "hooks"), { recursive: true });
+  for (const name of ["credentials", "credentials.lock", "config"]) await writeFile(join(git, name), "x\n");
+  await symlink(join(store, "notes.md"), join(git, "ignore"));
+  assert.deepEqual(gitContext(git), { target: git, entries: [
+    { name: "config", source: join(git, "config"), kind: "file" }, { name: "ignore", source: join(store, "notes.md"), kind: "file" },
+  ] });
+  assert.equal(gitContext(join(dir, "missing")), undefined);
+});
+
+test("a staging folder holds copies of the files and a mount point for each folder, and nothing else", async (t) => {
+  const dir = await temporary(t);
+  const stage = join(dir, "stage"), from = join(dir, "ignore");
+  await writeFile(from, "one\n");
+  await chmod(from, 0o444); // As files in a Nix store are.
+  await mkdir(join(stage, "old-skill", "left"), { recursive: true });
+  await writeFile(join(stage, "old.md"), "stale\n");
+  await mkdir(join(stage, "ignore")); // Was a folder last time.
+  await syncStage({ dir: stage, files: [{ name: "ignore", from }, { name: "gone", from: join(dir, "missing") }], dirs: ["skill"] });
+  assert.deepEqual((await readdir(stage)).sort(), ["ignore", "skill"]);
+  assert.equal(await readFile(join(stage, "ignore"), "utf8"), "one\n");
+  await chmod(from, 0o644);
+  await writeFile(from, "two\n");
+  await syncStage({ dir: stage, files: [{ name: "ignore", from }], dirs: ["skill"] });
+  assert.equal(await readFile(join(stage, "ignore"), "utf8"), "two\n");
 });

@@ -2,10 +2,10 @@
 // holds a lease file named by PID, and the last one out deletes the container.
 // A mkdir lock serializes start and stop; dead holders are detected by PID.
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { EXEC_ID, type ContainerCli, type RunOptions, type RunResult } from "./container.ts";
-import { CACHE_DIRS, runArgs, type Plan } from "./plan.ts";
+import { CACHE_DIRS, runArgs, type Plan, type Stage } from "./plan.ts";
 
 export type Phase = "idle" | "building" | "starting" | "ready" | "error";
 
@@ -34,6 +34,26 @@ export async function withLock<T>(dir: string, fn: () => Promise<T>, alive = isA
     }
   }
   try { return await fn(); } finally { await rm(dir, { recursive: true, force: true }); }
+}
+
+/**
+ * Brings a staging folder up to date: copies of the files, an empty folder for
+ * each mount point, and nothing else. Containers of other projects may have it
+ * mounted, so files are replaced by rename and never truncated.
+ */
+export async function syncStage({ dir, files, dirs }: Stage) {
+  await mkdir(dir, { recursive: true });
+  const wanted = new Map<string, "file" | "dir">([...files.map((f) => [f.name, "file"] as const), ...dirs.map((name) => [name, "dir"] as const)]);
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const kind = entry.isDirectory() ? "dir" : "file";
+    if (wanted.get(entry.name) !== kind) await rm(join(dir, entry.name), { recursive: true, force: true });
+  }
+  for (const name of dirs) await mkdir(join(dir, name), { recursive: true });
+  for (const { name, from } of files) {
+    const temporary = join(dir, `.${name}.${process.pid}.tmp`);
+    // A file that went away since the probe is simply missing in the guest.
+    await copyFile(from, temporary).then(() => rename(temporary, join(dir, name))).catch(() => rm(temporary, { force: true }));
+  }
 }
 
 export async function imageTag(dir: string) {
@@ -123,6 +143,7 @@ export class Sandbox {
     this.set("starting");
     for (const dir of this.plan.hostDirs) await mkdir(dir, { recursive: true });
     for (const file of this.plan.hostFiles) await appendFile(file, "");
+    for (const stage of this.plan.stages) await syncStage(stage);
     let fresh = false;
     await withLock(join(this.dir(), "lock"), async () => {
       const leases = join(this.dir(), "leases");

@@ -16,9 +16,19 @@ export interface Probe {
   worktreeConfig?: boolean;
   wikiDir?: string;
   contextDirs: string[];
+  /** Context folders that cannot be mounted as they are; see `ContextView`. */
+  contextViews?: ContextView[];
   identity: { name?: string; email?: string };
   kind: (path: string) => "file" | "dir" | undefined;
 }
+/**
+ * A host folder shown read-only at `target`, entry by entry. The guest cannot
+ * follow a link that leaves its mounts, and cannot be given a single file, so
+ * a linked folder is mounted where its link was and files are copied into a
+ * staging folder. It also lets a folder be shown without some of its entries.
+ */
+export interface ContextView { target: string; entries: Array<{ name: string; source: string; kind: "file" | "dir" }> }
+export interface Stage { dir: string; files: Array<{ name: string; from: string }>; dirs: string[] }
 export interface Mount { source: string; target: string; readonly: boolean; label: string }
 export interface Plan {
   name: string;
@@ -31,6 +41,8 @@ export interface Plan {
   hostDirs: string[];
   /** Empty files to create on the host when missing, so that they can be read-only in the guest. */
   hostFiles: string[];
+  /** Staging folders to bring up to date on the host before each start. */
+  stages: Stage[];
   /** Where long bash output is kept: Pi writes it to the host's temp folder, which the guest cannot see. */
   outputDir: string;
   env: Record<string, string>;
@@ -52,8 +64,9 @@ export function containerName(root: string) {
   return `pi-sbx-${slug}-${hash(root)}`;
 }
 
+const broad = (path: string, home: string) => path === "/" || isInside(path, home);
 function refuseBroad(path: string, home: string, what: string) {
-  if (path === "/" || isInside(path, home)) throw new Error(`Refusing to mount ${path} as ${what}: it contains your home directory. Start Pi in a project directory, or turn the sandbox off.`);
+  if (broad(path, home)) throw new Error(`Refusing to mount ${path} as ${what}: it contains your home directory. Start Pi in a project directory, or turn the sandbox off.`);
   if (path.includes(",")) throw new Error(`Cannot mount ${path}: commas are not supported in sandbox mount paths`);
 }
 
@@ -82,6 +95,20 @@ export function buildPlan(probe: Probe, settings: Settings, image: string): Plan
     add(extra.path, extra.readonly, "shared");
   }
   for (const dir of probe.contextDirs) add(dir, true, "context");
+  const stages: Stage[] = [];
+  for (const view of probe.contextViews ?? []) {
+    const stage: Stage = { dir: join(cacheRoot, "context", `${basename(view.target)}-${hash(view.target)}`), files: [], dirs: [] };
+    stages.push(stage);
+    mounts.push({ source: stage.dir, target: view.target, readonly: true, label: "context" });
+    for (const entry of view.entries) {
+      if (entry.kind === "file") { stage.files.push({ name: entry.name, from: entry.source }); continue; }
+      // A link to somewhere that holds the home directory is left dangling, not followed.
+      if (broad(entry.source, home) || entry.source.includes(",") || entry.name.includes(",")) continue;
+      // The mount point has to exist: nothing can be created in a read-only folder.
+      stage.dirs.push(entry.name);
+      mounts.push({ source: entry.source, target: join(view.target, entry.name), readonly: true, label: "context" });
+    }
+  }
 
   const hostDirs: string[] = [];
   const shared = join(cacheRoot, "shared");
@@ -183,7 +210,7 @@ export function buildPlan(probe: Probe, settings: Settings, image: string): Plan
 
   const plan: Plan = {
     name: containerName(root), root, image, cpus: settings.cpus, memory: settings.memory,
-    mounts, readOnlyPaths, hostDirs, hostFiles, outputDir, env, labels: {}, wiki, wikiBuild,
+    mounts, readOnlyPaths, hostDirs, hostFiles, stages, outputDir, env, labels: {}, wiki, wikiBuild,
   };
   plan.labels = { "pi.sandbox": "1", "pi.sandbox.root": root, "pi.sandbox.config": configHash(plan) };
   return plan;
