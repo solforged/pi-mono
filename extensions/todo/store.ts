@@ -153,11 +153,15 @@ export function restated(list: List): string {
   return `The todo list has changed since the <todos> section above was written. ${text ? `Open items now:\n${text}` : "No items are open now."}`;
 }
 
-// Sent when the agent stops with open items.
-export function reminder(list: List, count: number): string | undefined {
-  const text = section(list);
-  if (!text) return undefined;
-  return `You stopped with ${open(list).length} open todo item(s):\n${text}\n\n`
+// Sent when the agent stops with open items. Ids and statuses only: the texts
+// are in the prompt section and the agent's own calls, and up to three
+// reminders per prompt each repeated them.
+export function reminder(list: List, count: number, maxItems = 20): string | undefined {
+  const items = open(list);
+  if (!items.length) return undefined;
+  const shown = items.slice(0, maxItems).map((item) => `#${item.id} ${item.status}`);
+  if (shown.length < items.length) shown.push(`… ${items.length - shown.length} more`);
+  return `You stopped with ${items.length} open todo item(s): ${shown.join(", ")}.\n\n`
     + "Continue working on them, or mark them done or remove them if they are finished or no longer needed. "
     + `If you are waiting on the user, say so briefly and stop. (Reminder ${count}/${limits.reminders})`;
 }

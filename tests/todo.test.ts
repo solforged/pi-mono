@@ -62,7 +62,11 @@ test("listings, prompt section, reminder and child context stay bounded", () => 
   list = apply(list, { action: "update", id: 1, change: { status: "done" } }).list;
   assert.equal(format(list), "2 open, 1 done\n#3 [in_progress] c\n#2 [pending] b\n#1 [done] a");
   assert.equal(section(list), "#3 [in_progress] c\n#2 [pending] b");
-  assert.match(reminder(list, 2)!, /^You stopped with 2 open todo item\(s\):\n#3 \[in_progress\] c\n#2 \[pending\] b\n\n.*waiting on the user.*\(Reminder 2\/3\)$/s);
+  // Reminders name the items; their texts are already in the section and the agent's calls.
+  assert.match(reminder(list, 2)!, /^You stopped with 2 open todo item\(s\): #3 in_progress, #2 pending\.\n\n.*waiting on the user.*\(Reminder 2\/3\)$/s);
+  const many = reminder(build(Array.from({ length: 30 }, (_, i) => `a long description of item ${i} `.repeat(10))), 1)!;
+  assert.match(many, /^You stopped with 30 open todo item\(s\): #1 pending, .*#20 pending, … 10 more\.\n\n/);
+  assert.ok(many.length < 600, `${many.length} characters`);
   const finished = apply(build(["x"]), { action: "update", id: 1, change: { status: "done" } }).list;
   assert.equal(section(finished), undefined);
   assert.equal(reminder(finished, 1), undefined);

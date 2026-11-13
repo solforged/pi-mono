@@ -38,9 +38,11 @@ no prompt cache.
 
 ## Reminders
 
-When the agent stops with open items, the extension adds a reminder listing
-them and asks the agent to continue, mark them done, remove them, or say that
-it is waiting for the user. The terminal shows a one-line notice. A reminder is
+When the agent stops with open items, the extension adds a reminder naming
+them by ID and status and asks the agent to continue, mark them done, remove
+them, or say that it is waiting for the user. Their texts are left out: the
+agent has them from the prompt section and its own calls. The terminal shows a
+one-line notice. A reminder is
 sent only if a tool has run since the user's prompt or the previous reminder,
 and at most three times per prompt. Aborted runs, print and JSON modes, and
 sessions with the tool disabled receive none; nor does a run that ended in a
