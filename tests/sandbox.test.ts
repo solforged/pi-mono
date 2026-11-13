@@ -282,11 +282,17 @@ function fakeCli() {
       return ok(name);
     }
     if (cmd === "delete") { running.delete(args.at(-1)!); return ok(); }
-    if (cmd === "exec") return args.some((arg) => running.has(arg)) ? ok("out") : ok("", 1, "Error: container not found");
+    if (cmd === "exec") {
+      const name = args.find((arg) => arg.startsWith("pi-sbx-"))!;
+      if (!running.has(name)) return ok("", 1, `Error: get failed: container ${name} not found`);
+      return execs.shift()?.(name) ?? ok("out");
+    }
     return ok();
   });
   cli.removeDetached = (name) => { running.delete(name); };
-  return { cli, running, calls };
+  // Queued outcomes for the next exec calls against a running container.
+  const execs: Array<(name: string) => RunResult> = [];
+  return { cli, running, calls, execs, ok };
 }
 
 test("a cancelled exec is stopped inside the guest, not by signalling the client", async () => {
@@ -364,6 +370,34 @@ test("an exec against a vanished container starts it once more", async (t) => {
   running.delete(plan.name);
   const result = await box.exec(["true"]);
   assert.equal(result.code, 0);
+  assert(running.has(plan.name));
+});
+
+test("a failing command is not mistaken for a missing container, and a killed one is not repeated", async (t) => {
+  const stateRoot = await temporary(t);
+  const { cli, running, calls, execs, ok } = fakeCli();
+  const plan = livePlan(stateRoot);
+  const box = new Sandbox(plan, { cli, stateRoot, pid: 4, alive: () => true });
+  await box.ensure();
+  const count = (cmd: string) => calls.filter((args) => args[0] === cmd).length;
+  const inspects = count("inspect");
+  // An ordinary failure, even one that talks about things not found, costs no inspect.
+  execs.push(() => ok("", 1, "grep: needle: not found"), () => ok("", 2));
+  assert.equal((await box.exec(["grep", "needle"], { onData: () => {} })).code, 1);
+  assert.equal((await box.exec(["false"])).code, 2);
+  assert.equal(count("inspect"), inspects);
+  // Killed while the container still runs (an out-of-memory kill, say): its own failure.
+  execs.push(() => ok("", 137));
+  assert.equal((await box.exec(["big"])).stderr, "");
+  // Killed because the container went away: restarted, reported, and not run again.
+  const streamed: string[] = [];
+  execs.push((name) => { running.delete(name); return ok("", 137); });
+  const execsBefore = count("exec");
+  const killed = await box.exec(["sh", "-c", "deploy"], { onData: (chunk) => { streamed.push(chunk.toString()); } });
+  assert.equal(killed.code, 137);
+  assert.match(killed.stderr, /container stopped while this command was running/);
+  assert.match(streamed.join(""), /Repeat the command if that is safe/);
+  assert.equal(count("exec"), execsBefore + 1);
   assert(running.has(plan.name));
 });
 

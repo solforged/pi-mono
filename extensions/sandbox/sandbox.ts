@@ -49,7 +49,11 @@ export interface SandboxOptions {
   onPhase?: (phase: Phase, detail?: string) => void;
 }
 
-const GONE = /not ?found|not running|no such container|does not exist/i;
+// What `container exec` prints, with exit status 1, when the container is not there to run in.
+const GONE = /container[^\n]*(not ?found|not running|does not exist)|no such container/i;
+// The exit status of a command whose container was deleted under it; the CLI prints nothing.
+const KILLED = 137;
+const STOPPED = "The sandbox container stopped while this command was running, and has been started again. Repeat the command if that is safe.";
 
 export class Sandbox {
   phase: Phase = "idle";
@@ -166,16 +170,21 @@ export class Sandbox {
 
   async exec(argv: string[], options: RunOptions & { cwd?: string; env?: Record<string, string> } = {}): Promise<RunResult> {
     await this.ensure();
-    const result = await this.options.cli.exec(this.plan.name, argv, options);
-    // Streamed output has no separate stderr to inspect, so check the container itself.
-    const suspect = options.onData || GONE.test(result.stderr);
-    if (result.code !== 0 && !result.aborted && !result.timedOut && suspect && !(await this.options.cli.inspect(this.plan.name))?.running) {
-      // Stopped underneath us (another session's cleanup, a crash, or a reboot): start once more.
-      this.starting = undefined;
-      await this.ensure();
-      return this.options.cli.exec(this.plan.name, argv, options);
-    }
-    return result;
+    const { cli } = this.options;
+    const result = await cli.exec(this.plan.name, argv, options);
+    if (result.code === 0 || result.aborted || result.timedOut) return result;
+    // Only these two say the container may be gone; any other failure is the command's own.
+    const refused = result.code !== KILLED && GONE.test(result.stderr);
+    if (!refused && result.code !== KILLED) return result;
+    if ((await cli.inspect(this.plan.name))?.running) return result;
+    // Stopped underneath us (another session's cleanup, a crash, or a reboot): start once more.
+    this.starting = undefined;
+    await this.ensure();
+    // A refused command never started, so it runs now. One that was killed may
+    // have changed files already: the caller decides whether to repeat it.
+    if (refused) return cli.exec(this.plan.name, argv, options);
+    options.onData?.(Buffer.from(`\n[${STOPPED}]\n`));
+    return { ...result, stderr: `${result.stderr}${STOPPED}\n` };
   }
 
   async release() {

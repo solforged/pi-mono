@@ -158,7 +158,9 @@ container and workers get their own.
 Esc and a bash `timeout` stop the command inside the guest: a `bash` command's
 process group, which leaves what it detached with `setsid`, or the process
 itself for other tools. This does not rely on `container exec` passing signals
-on, which container 1.5.0 fails to do.
+on, which container 1.5.0 fails to do. If the container stops under a running
+command, the command is not repeated: its result says so, and the container is
+started again for the next call.
 
 ## Limits
 

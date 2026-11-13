@@ -61,8 +61,9 @@ export const runProcess: Runner = (command, args, options = {}) => new Promise((
     chunks.push(chunk); size += chunk.length;
   });
   child.stderr.on("data", (chunk: Buffer) => {
-    if (options.onData) options.onData(chunk);
-    else if (stderr.length < 65536) stderr += chunk.toString("utf8");
+    // Kept even when streamed: the caller tells a container failure from the command's own by it.
+    if (stderr.length < 65536) stderr += chunk.toString("utf8");
+    options.onData?.(chunk);
   });
   child.on("error", (error) => { cleanup(); reject(error); });
   child.on("close", (code) => { cleanup(); resolve({ code, stdout: Buffer.concat(chunks), stderr, aborted, timedOut, truncated }); });
