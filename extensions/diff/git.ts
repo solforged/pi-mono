@@ -169,6 +169,8 @@ export function parseDiff(text: string): FileDiff[] {
   let file: FileDiff | undefined;
   let hunk: Hunk | undefined;
   let oldNo = 0, newNo = 0;
+  /** Lines the hunk's header still promises on each side. */
+  let oldLeft = 0, newLeft = 0;
   let previousOld: string | undefined;
   for (const raw of text.split("\n")) {
     if (raw.startsWith("diff --git ")) {
@@ -181,11 +183,12 @@ export function parseDiff(text: string): FileDiff[] {
     }
     if (!file) continue;
     if (hunk) {
-      const kind = raw[0];
+      // With diff.suppressBlankEmpty set, Git writes a blank context line as an empty one.
+      const kind = raw === "" && oldLeft > 0 && newLeft > 0 ? " " : raw[0];
       if (kind === "+" || kind === "-" || kind === " ") {
         const line: DiffLine = { kind, text: raw.slice(1).replace(/\r$/, "") };
-        if (kind !== "+") line.old = oldNo++;
-        if (kind !== "-") line.new = newNo++;
+        if (kind !== "+") { line.old = oldNo++; oldLeft--; }
+        if (kind !== "-") { line.new = newNo++; newLeft--; }
         if (kind === "+") file.added++;
         if (kind === "-") file.removed++;
         hunk.lines.push(line);
@@ -193,10 +196,11 @@ export function parseDiff(text: string): FileDiff[] {
       }
       if (raw.startsWith("\\")) continue; // "\ No newline at end of file"
     }
-    const header = raw.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@ ?(.*)$/);
+    const header = raw.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/);
     if (header) {
-      oldNo = Number(header[1]); newNo = Number(header[2]);
-      hunk = { oldStart: oldNo, newStart: newNo, context: header[3], lines: [] };
+      oldNo = Number(header[1]); newNo = Number(header[3]);
+      oldLeft = Number(header[2] ?? 1); newLeft = Number(header[4] ?? 1);
+      hunk = { oldStart: oldNo, newStart: newNo, context: header[5], lines: [] };
       file.hunks.push(hunk);
       continue;
     }

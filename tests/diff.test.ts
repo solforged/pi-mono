@@ -70,6 +70,30 @@ test("parses modified, renamed, deleted, binary, mode-only and quoted files", ()
   assert.equal(unquote("\"tab\\there\""), "tab\there");
 });
 
+test("keeps a hunk whole when Git writes its blank context lines as empty ones", async (t) => {
+  // What diff.suppressBlankEmpty does; an empty line used to end the hunk and drop the rest.
+  const [file] = parseDiff([
+    "diff --git a/a.txt b/a.txt", "--- a/a.txt", "+++ b/a.txt", "@@ -1,4 +1,4 @@", " one", "", "-three", "+3", " four",
+    "diff --git a/b.txt b/b.txt", "--- a/b.txt", "+++ b/b.txt", "@@ -1 +1 @@", "-x", "+y", "",
+  ].join("\n"));
+  assert.deepEqual(file.hunks[0].lines.map((line) => [line.kind, line.text, line.old, line.new]), [
+    [" ", "one", 1, 1], [" ", "", 2, 2], ["-", "three", 3, undefined], ["+", "3", undefined, 3], [" ", "four", 4, 4],
+  ]);
+  assert.deepEqual([file.added, file.removed], [1, 1]);
+
+  // And from Git itself, with the setting on.
+  const root = await mkdtemp(join(tmpdir(), "diff-blank-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  git(root, "init", "-q", "-b", "main");
+  git(root, "config", "diff.suppressBlankEmpty", "true");
+  await writeFile(join(root, "a.txt"), "one\n\nthree\nfour\n");
+  git(root, "add", "-A");
+  git(root, "commit", "-qm", "init");
+  await writeFile(join(root, "a.txt"), "one\n\n3\nfour\n");
+  const collected = (await collect(root, "uncommitted")).files[0];
+  assert.deepEqual(collected.hunks[0].lines.map((line) => line.kind + line.text), [" one", " ", "-three", "+3", " four"]);
+});
+
 test("reports only hunks that are new since the previous snapshot", () => {
   const [before] = parseDiff(SAMPLE);
   const after = structuredClone(before);
