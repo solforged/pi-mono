@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { attach, candidates, isClipboardFile, limits, load, shortenClipboardPaths, sniff } from "../extensions/image-paste/paths.ts";
 import { longSide, thumbnail } from "../extensions/image-paste/thumbs.ts";
-import { temporary } from "./helpers.ts";
+import { imageNumbers } from "../extensions/image-paste/labels.ts";
+import { noModel, root, temporary } from "./helpers.ts";
 
 // A 2×1 PNG.
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAD0lEQVR4nGP4z8DAwPAfAAcAAf9+CLHQAAAAAElFTkSuQmCC", "base64");
@@ -85,4 +86,17 @@ test("thumbnail shrinks images and reports the original size", { skip: process.p
   const data = Buffer.from(thumb!.data, "base64");
   assert.deepEqual([data.readUInt32BE(16), data.readUInt32BE(20)], [96, 48]);
   assert.equal(await thumbnail(join(dir, "missing.png"), { widthPx: 96, heightPx: 96 }), undefined);
+});
+
+test("images are numbered by their first place in the text, as attach numbers them", () => {
+  assert.deepEqual([...imageNumbers("/T/pi-clipboard-b.png see /tmp/a.png and /T/pi-clipboard-b.png, not x/c.png")],
+    [["/T/pi-clipboard-b.png", 1], ["/tmp/a.png", 2]]);
+});
+
+test("Pi's editor shows a pasted image as one short label and submits its path", (t) => {
+  const check = spawnSync("pi", ["--offline", "--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-session",
+    "-e", join(root, "tests/fixtures/image-paste-smoke.ts"), ...noModel, "-p", "/image-paste-smoke"], { cwd: root, encoding: "utf8", timeout: 30_000 });
+  if (check.error && (check.error as any).code === "ENOENT") { t.skip("Pi is not installed"); return; }
+  assert.equal(check.status, 0, check.stderr || check.stdout);
+  assert.match(check.stdout, /image-paste: pasted image labels passed/, check.stderr || check.stdout);
 });

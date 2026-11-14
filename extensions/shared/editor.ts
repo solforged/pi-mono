@@ -8,10 +8,24 @@ export type EditorFeature = {
   topBorder?(line: string, width: number): string;
   /** Sees each key before the editor; calls `next` to pass it on. */
   input?(data: string, next: () => void): void;
+  /** Rewrites text Pi puts at the cursor, such as a pasted image's path; typing and terminal pastes do not come here. */
+  insert?(text: string): string;
+  /** Rewrites each rendered line, for display only. */
+  line?(line: string): string;
   dispose?(): void;
 };
 type Tui = { requestRender(): void };
-export type FeatureFactory = (editor: CustomEditor, tui: Tui) => EditorFeature;
+export type Editor = CustomEditor & {
+  /**
+   * Holds `content` behind a marker that the editor moves over, deletes and
+   * undoes as one character and expands on submit, as it does a long paste.
+   * Returns the marker, or `content` itself if Pi's editor no longer allows it.
+   */
+  atom(content: string): string;
+  /** What the marker `[paste #id]` stands for, if anything. */
+  atomContent(id: number): string | undefined;
+};
+export type FeatureFactory = (editor: Editor, tui: Tui) => EditorFeature;
 
 // Global, not module state: each extension loads its own copy of this file.
 const features: Map<string, FeatureFactory> = ((globalThis as any)[Symbol.for("pi-mono.editor.features")] ??= new Map());
@@ -33,9 +47,41 @@ class SharedEditor extends CustomEditor {
       if (features.get(key) !== entry.factory) { this.live.delete(key); entry.feature.dispose?.(); }
     }
     for (const [key, factory] of features) {
-      if (!this.live.has(key)) this.live.set(key, { factory, feature: factory(this, this.tui) });
+      if (!this.live.has(key)) this.live.set(key, { factory, feature: factory(this as Editor, this.tui) });
     }
     return [...this.live.values()].map((entry) => entry.feature);
+  }
+
+  // Pi's long-paste store, which its marker handling and submit read.
+  private get store(): { pastes: Map<number, string>; pasteCounter: number } | undefined {
+    const self = this as any;
+    return self.pastes instanceof Map && typeof self.pasteCounter === "number" ? self : undefined;
+  }
+
+  atom(content: string): string {
+    const store = this.store;
+    if (!store) return content;
+    const id = ++store.pasteCounter;
+    store.pastes.set(id, content);
+    return `[paste #${id}]`;
+  }
+
+  atomContent(id: number): string | undefined {
+    return this.store?.pastes.get(id);
+  }
+
+  insertTextAtCursor(text: string) {
+    for (const feature of this.sync()) {
+      try { if (feature.insert) text = feature.insert(text); } catch {}
+    }
+    super.insertTextAtCursor(text);
+  }
+
+  render(width: number): string[] {
+    const lines = super.render(width);
+    const rewrites = this.sync().filter((feature) => feature.line);
+    if (!rewrites.length) return lines;
+    return lines.map((line) => rewrites.reduce((text, feature) => { try { return feature.line!(text); } catch { return text; } }, line));
   }
 
   renderTopBorder(width: number, hidden: number): string {

@@ -1,7 +1,9 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, getCellDimensions, Image, truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import { basename } from "node:path";
-import { attach, candidates, imageIcon, isClipboardFile, shortenClipboardPaths } from "./paths.ts";
+import { useEditorFeature } from "../shared/editor.ts";
+import { imageNumbers, pastedImageLabels } from "./labels.ts";
+import { attach, imageIcon, isClipboardFile, shortenClipboardPaths } from "./paths.ts";
 import { thumbnail, type Box, type Thumbnail } from "./thumbs.ts";
 
 // One image gets the larger preview; several get the smaller one each.
@@ -21,7 +23,8 @@ class Previews implements Component {
 
   render(width: number): string[] {
     if (!getCapabilities().images || width < 8) return [];
-    const paths = [...new Set(candidates(this.text()).map((candidate) => candidate.path))];
+    const numbers = imageNumbers(this.text());
+    const paths = [...numbers.keys()];
     // Pi asks the terminal for its cell size after startup, and Rex answers
     // with placeholder cells until the pane is laid out: a thumbnail made for
     // other cells is made again, so it is neither blurred nor oversized.
@@ -41,9 +44,10 @@ class Previews implements Component {
     const lines: string[] = [];
     for (const [path, entry] of ready.slice(0, preview.shown)) {
       const { thumb } = entry;
+      // Numbered as the editor labels pasted images and as the prompt will attach them.
       const name = isClipboardFile(path) ? "pasted image" : basename(path);
-      const pixels = thumb.width && thumb.height ? ` · ${thumb.width}×${thumb.height}` : "";
-      lines.push(truncateToWidth(` ${this.theme.fg("accent", imageIcon)} ${this.theme.fg("muted", name + pixels)}`, width));
+      const caption = [`image #${numbers.get(path)}`, ...isClipboardFile(path) ? [] : [name], ...thumb.width && thumb.height ? [`${thumb.width}×${thumb.height}`] : []];
+      lines.push(truncateToWidth(` ${this.theme.fg("accent", imageIcon)} ${this.theme.fg("muted", caption.join(" · "))}`, width));
       let image = entry.images.get(size.rows);
       if (!image) {
         image = new Image(thumb.data, thumb.mimeType, { fallbackColor: (text) => this.theme.fg("dim", text) },
@@ -108,6 +112,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
+    useEditorFeature(ctx, "image-paste", pastedImageLabels);
     const settings = pi.getSettings() as { terminal?: { showImages?: boolean } };
     if (settings.terminal?.showImages === false) return;
     ctx.ui.setWidget("image-paste", (tui, theme) => new Previews(tui, theme, () => ctx.ui.getEditorText()));

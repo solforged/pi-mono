@@ -27,15 +27,25 @@ prompt. Pi then resizes them like other prompt images and notes their original
 size. Nothing is attached when the current model does not accept images, for
 `!` shell commands, or for messages sent by other extensions.
 
+## Editor label
+
+A pasted image shows in the editor as `[image #1]` rather than its temporary
+path, numbered as it will be attached. The path sits behind one of Pi's
+long-paste markers, so the cursor moves over the label and backspace deletes
+it as one character, undo restores it, and submitting sends the path. A path
+pasted flush against a word is spaced off, so it still counts as a path. The
+label needs the shared prompt editor; when another extension has replaced
+the editor, the path shows as before.
+
 ## Previews
 
 While the editor holds image paths, thumbnails of up to three of them appear
-above it, each with its name and pixel size: up to 48×8 cells for one image,
-32×5 each for several. They need the interactive
-terminal UI, a terminal that shows images (Rex, Ghostty, kitty, WezTerm or
-iTerm2), and `terminal.showImages` left on. On macOS the built-in `sips`
-shrinks each image to just the pixels those cells show, and again when the
-terminal reports a new cell size; elsewhere only files up to 1 MB are
+above it, each with its number, its name unless it was pasted, and its pixel
+size: up to 48×8 cells for one image, 32×5 each for several. They need the
+interactive terminal UI, a terminal that shows images (Rex, Ghostty, kitty,
+WezTerm or iTerm2), and `terminal.showImages` left on. On macOS the built-in
+`sips` shrinks each image to just the pixels those cells show, and again when
+the terminal reports a new cell size; elsewhere only files up to 1 MB are
 previewed. The thumbnail's line is sent to the terminal again whenever the
 lines above the editor move, which is why it stays small.
 

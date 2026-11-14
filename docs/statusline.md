@@ -68,7 +68,8 @@ extension has replaced the editor.
 
 Pi takes one editor, so extensions that need it share one from
 `extensions/shared/editor.ts`: each calls `useEditorFeature(ctx, key, factory)`
-to rewrite the top border or see keys first. The [Rex](rex.md) `←` key is the
-other feature.
+to rewrite the top border or rendered lines, see keys first, or rewrite text
+Pi inserts at the cursor. The [Rex](rex.md) `←` key and
+[pasted image](image-paste.md) labels are the other features.
 
 Per-direction token totals are left out; `/session` still reports them.
