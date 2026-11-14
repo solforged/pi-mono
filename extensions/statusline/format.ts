@@ -10,8 +10,6 @@ export const icons = {
   noBilling: "\u{F067A}", // crossed-out dollar
 };
 
-const thinkingLabels: Record<string, string> = { minimal: "min", medium: "med" };
-export const thinkingLabel = (level: string) => thinkingLabels[level] ?? level;
 // The circle fills with the level (Material Design circle slices); max is a flame.
 const thinkingIcons: Record<string, string> = {
   off: "\u{F0766}", minimal: "\u{F0A9E}", low: "\u{F0A9F}", medium: "\u{F0AA1}",
@@ -21,6 +19,10 @@ export const thinkingIcon = (level: string) => thinkingIcons[level] ?? thinkingI
 // Vendor prefixes repeat what the model family already says.
 export const modelLabel = (name: string) => name.replace(/^Claude\s+/i, "");
 export const thinkingColor = (level: string) => `thinking${level[0].toUpperCase()}${level.slice(1)}`;
+// Pi's own worktrees are on pi/<task> branches; the (wt) mark already says where the branch came from.
+export const branchLabel = (branch: string, worktree: boolean) => worktree ? branch.replace(/^pi\//, "") : branch;
+// A healthy cache rate is noise; the segment shows only below this.
+export const CACHE_SHOWN_BELOW = 80;
 
 export function formatTokens(n: number): string {
   if (n >= 1e6) return `${+(n / 1e6).toFixed(1)}M`;
@@ -139,13 +141,14 @@ export function sessionStats(entries: readonly any[]): Stats {
   return { cost, cacheHit };
 }
 
-export type Segment = { text: string; priority: number; compact?: string };
+// Left segments say where the session works; right ones what it runs and spends.
+export type Segment = { text: string; priority: number; compact?: string; side?: "left" | "right" };
 
 // Another extension's segment, from
 //   pi.events.emit("statusline:segment", { key, text, color?, priority?, position? })
 // color names a theme color (default "muted"); priority ranks it with the
 // built-in segments (default 1, the cost's); position "start" puts it before
-// the model instead of after the cost. An empty text removes the key.
+// the path, on the left, instead of after the cost, on the right. An empty text removes the key.
 // A segment replaces the extension status with the same key, so an extension
 // can publish both and Pi's built-in footer still shows the status.
 export const SEGMENT_EVENT = "statusline:segment";
@@ -177,31 +180,60 @@ export function readContribution(data: unknown): { key: string; contribution?: C
   };
 }
 export type Measure = { width: (text: string) => number; truncate: (text: string, width: number) => string };
+export type Sides = { left: string; right: string };
+const GAP = 2; // Least space between the sides.
 
-// Fits segments into one line: compacts, then drops, the lowest-priority segments first.
-export function fitSegments(segments: Segment[], separator: string, width: number, measure: Measure): string {
+// Fits segments into one line, left ones from the start and right ones against the end:
+// compacts, then drops, the lowest-priority segments first, then truncates the left side.
+export function fitSegments(segments: Segment[], separator: string, width: number, measure: Measure): Sides {
   const parts = segments.map((segment) => ({ ...segment }));
-  const join = () => parts.map((part) => part.text).join(separator);
+  const side = (name: "left" | "right") => parts.filter((part) => (part.side ?? "left") === name).map((part) => part.text).join(separator);
+  const span = () => joined(side("left"), side("right"), measure);
   const order = [...parts].sort((a, b) => a.priority - b.priority);
   for (const part of order) {
-    if (measure.width(join()) <= width) break;
+    if (span() <= width) break;
     if (part.compact !== undefined) part.text = part.compact;
   }
   for (const part of order) {
-    if (parts.length <= 1 || measure.width(join()) <= width) break;
+    if (parts.length <= 1 || span() <= width) break;
     parts.splice(parts.indexOf(part), 1);
   }
-  return measure.truncate(join(), width);
+  const right = measure.truncate(side("right"), width);
+  const room = width - measure.width(right) - (right ? GAP : 0);
+  return { left: room > 0 ? measure.truncate(side("left"), room) : "", right };
 }
 
-// Right-aligns extension statuses and the session name when they fit beside the segments.
-// Whatever does not fit moves, untruncated where possible, to a second line; the name moves first.
-export function layout(left: string, statuses: string[], name: string | undefined, width: number, measure: Measure): string[] {
-  const room = width - measure.width(left) - 2;
-  const beside = (right: string) => left + " ".repeat(width - measure.width(left) - measure.width(right)) + right;
-  const all = [...statuses, ...(name ? [name] : [])];
-  if (!all.length) return [left];
-  if (measure.width(all.join("  ")) <= room) return [beside(all.join("  "))];
-  if (statuses.length && name && measure.width(statuses.join("  ")) <= room) return [beside(statuses.join("  ")), measure.truncate(name, width)];
-  return [left, measure.truncate(all.join("  "), width)];
+const joined = (left: string, right: string, measure: Measure) =>
+  measure.width(left) + measure.width(right) + (left && right ? GAP : 0);
+
+// Puts extension statuses, and the session name when the editor border cannot show it,
+// right-aligned before the right side when they fit. Whatever does not fit moves,
+// untruncated where possible, to a second line; the name moves first.
+export function layout({ left, right }: Sides, statuses: string[], name: string | undefined, width: number, measure: Measure): string[] {
+  const line = (middle: string) => {
+    const end = [middle, right].filter(Boolean).join("  ");
+    return end ? left + " ".repeat(Math.max(0, width - measure.width(left) - measure.width(end))) + end : left;
+  };
+  const fits = (middle: string) => joined(left, [middle, right].filter(Boolean).join("  "), measure) <= width;
+  const all = [...statuses, ...(name ? [name] : [])].join("  ");
+  if (!all) return [line("")];
+  if (fits(all)) return [line(all)];
+  if (statuses.length && name && fits(statuses.join("  "))) return [line(statuses.join("  ")), measure.truncate(name, width)];
+  return [line(""), measure.truncate(all, width)];
+}
+
+const ANSI = /\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+export const plainText = (text: string) => text.replace(ANSI, "");
+
+export type BorderMeasure = Measure & { plain: (text: string) => string; cut: (text: string, width: number) => string };
+
+// Writes a label over the run of plain border that ends an editor border line, so it
+// stays clear of the working status and scroll marker before it: "── ⠋ Working ──── label ─".
+// The label is shortened to fit, and left out when fewer than `least` columns are free.
+export function borderLabel(line: string, label: string, border: (text: string) => string, measure: BorderMeasure, least = 12): string {
+  const room = (/─*$/.exec(measure.plain(line))?.[0].length ?? 0) - 4; // "─ " before, " ─" after.
+  const full = measure.width(label);
+  if (!full || room < Math.min(least, full)) return line;
+  const text = full <= room ? label : measure.truncate(label, room);
+  return measure.cut(line, measure.width(line) - measure.width(text) - 3) + " " + text + " " + border("─");
 }

@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { backoff, displayPath, fitSegments, formatCost, formatTokens, layout, parseGitStatus, readContribution, rightStatuses, sessionStats, modelLabel, thinkingColor, thinkingIcon, thinkingLabel, worktreeHome } from "../extensions/statusline/format.ts";
+import { backoff, borderLabel, branchLabel, displayPath, fitSegments, formatCost, formatTokens, layout, parseGitStatus, readContribution, rightStatuses, sessionStats, modelLabel, plainText, thinkingColor, thinkingIcon, worktreeHome } from "../extensions/statusline/format.ts";
 
 const measure = { width: (text: string) => [...text].length, truncate: (text: string, width: number) => [...text].slice(0, width).join("") };
 const usage = (input: number, cacheRead: number, cacheWrite: number, total: number) => ({ input, output: 10, cacheRead, cacheWrite, cost: { total } });
 const assistant = (u: ReturnType<typeof usage>) => ({ type: "message", message: { role: "assistant", usage: u } });
 
 test("labels thinking levels, token counts, and costs compactly", () => {
-  assert.deepEqual(["minimal", "medium", "xhigh", "off"].map(thinkingLabel), ["min", "med", "xhigh", "off"]);
   assert.equal(thinkingColor("xhigh"), "thinkingXhigh");
   const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map(thinkingIcon);
   assert.equal(new Set(levels).size, levels.length);
   assert.deepEqual(["Claude Opus 5.5", "GPT-6.1 Sol", "claude-x"].map(modelLabel), ["Opus 5.5", "GPT-6.1 Sol", "claude-x"]);
+  assert.deepEqual([branchLabel("pi/task", true), branchLabel("pi/task", false), branchLabel("feat/pi/x", true)], ["task", "pi/task", "feat/pi/x"]);
   assert.deepEqual([999, 1500, 272_000, 1_000_000, 1_048_576].map(formatTokens), ["999", "2k", "272k", "1M", "1M"]);
   assert.deepEqual([0.0421, 12.345].map((cost) => formatCost(cost)), ["$0.042", "$12.35"]);
   assert.deepEqual([formatCost(2.744, true), formatCost(0, true)], ["\u{F067A} 2.74", "\u{F067A}"]);
@@ -97,20 +97,58 @@ test("fits segments by compacting, then dropping, lowest priorities first", () =
     { text: "~/src/project", compact: "project", priority: 1 },
     { text: "$0.10", priority: 0 },
   ];
-  assert.equal(fitSegments(segments, " | ", 80, measure), "model | ~/src/project | $0.10");
-  assert.equal(fitSegments(segments, " | ", 25, measure), "model | project | $0.10");
-  assert.equal(fitSegments(segments, " | ", 16, measure), "model | project");
-  assert.equal(fitSegments(segments, " | ", 4, measure), "mode");
+  assert.deepEqual(fitSegments(segments, " | ", 80, measure), { left: "model | ~/src/project | $0.10", right: "" });
+  assert.deepEqual(fitSegments(segments, " | ", 25, measure), { left: "model | project | $0.10", right: "" });
+  assert.deepEqual(fitSegments(segments, " | ", 16, measure), { left: "model | project", right: "" });
+  assert.deepEqual(fitSegments(segments, " | ", 4, measure), { left: "mode", right: "" });
   assert.equal(segments[1].text, "~/src/project");
 });
 
-test("right-aligns statuses and names, moving the name and then statuses below", () => {
-  assert.deepEqual(layout("left", [], undefined, 20, measure), ["left"]);
-  assert.deepEqual(layout("left", ["s1"], "name", 20, measure), ["left        s1  name"]);
-  assert.deepEqual(layout("left", [], "a-long-session-name", 20, measure), ["left", "a-long-session-name"]);
-  assert.deepEqual(layout("left", [], "a-long-session-name-that-overflows", 20, measure), ["left", "a-long-session-name-"]);
-  assert.deepEqual(layout("left", ["status"], "a-long-session-name", 20, measure), ["left          status", "a-long-session-name"]);
-  assert.deepEqual(layout("left", ["a-long-status-text"], "name", 20, measure), ["left", "a-long-status-text  "]);
+test("splits segments into sides that share the drops and keep a gap", () => {
+  const segments = [
+    { text: "~/src/project", compact: "project", priority: 3 },
+    { text: "main", priority: 4 },
+    { text: "Opus", priority: 7, side: "right" as const },
+    { text: "28%/1M", compact: "28%", priority: 5, side: "right" as const },
+    { text: "$1", priority: 1, side: "right" as const },
+  ];
+  assert.deepEqual(fitSegments(segments, " ", 40, measure), { left: "~/src/project main", right: "Opus 28%/1M $1" });
+  // 18 + 2 + 14 = 34. Everything compacts, path first, before anything is dropped.
+  assert.deepEqual(fitSegments(segments, " ", 30, measure), { left: "project main", right: "Opus 28%/1M $1" });
+  assert.deepEqual(fitSegments(segments, " ", 25, measure), { left: "project main", right: "Opus 28% $1" });
+  assert.deepEqual(fitSegments(segments, " ", 21, measure), { left: "main", right: "Opus 28%" });
+  // Ties drop in order, and the one segment left is truncated.
+  assert.deepEqual(fitSegments([{ text: "a-long-left", priority: 9 }, { text: "right", priority: 9, side: "right" }], " ", 12, measure), { left: "", right: "right" });
+  assert.deepEqual(fitSegments([{ text: "a-very-long-right", priority: 9, side: "right" }], " ", 8, measure), { left: "", right: "a-very-l" });
+});
+
+test("puts statuses and a name before the right side, moving the name and then statuses below", () => {
+  const left = (text: string) => ({ left: text, right: "" });
+  assert.deepEqual(layout(left("left"), [], undefined, 20, measure), ["left"]);
+  assert.deepEqual(layout(left("left"), ["s1"], "name", 20, measure), ["left        s1  name"]);
+  assert.deepEqual(layout(left("left"), [], "a-long-session-name", 20, measure), ["left", "a-long-session-name"]);
+  assert.deepEqual(layout(left("left"), [], "a-long-session-name-that-overflows", 20, measure), ["left", "a-long-session-name-"]);
+  assert.deepEqual(layout(left("left"), ["status"], "a-long-session-name", 20, measure), ["left          status", "a-long-session-name"]);
+  assert.deepEqual(layout(left("left"), ["a-long-status-text"], "name", 20, measure), ["left", "a-long-status-text  "]);
+  assert.deepEqual(layout({ left: "L", right: "R" }, [], undefined, 10, measure), ["L        R"]);
+  assert.deepEqual(layout({ left: "L", right: "R" }, ["s"], undefined, 10, measure), ["L     s  R"]);
+  assert.deepEqual(layout({ left: "left", right: "right" }, ["s"], undefined, 12, measure), ["left   right", "s"]);
+  assert.deepEqual(layout({ left: "", right: "R" }, [], undefined, 4, measure), ["   R"]);
+});
+
+test("labels the end of an editor border without covering what is drawn before it", () => {
+  const m = { ...measure, plain: plainText, cut: measure.truncate };
+  const border = (text: string) => `<${text}>`;
+  assert.equal(borderLabel("─".repeat(20), "title", border, m), "─".repeat(12) + " title <─>");
+  // The working status and its colors stay; the label takes the plain run after them.
+  const working = "── \x1b[33m⠋ Working\x1b[0m " + "─".repeat(16);
+  assert.equal(plainText(borderLabel(working, "title", border, m)), "── ⠋ Working " + "─".repeat(8) + " title <─>");
+  assert.equal(borderLabel("─".repeat(20), "a-much-longer-title", border, m), "─ a-much-longer-ti <─>");
+  // Short labels show whole or not at all; long ones need `least` columns.
+  assert.equal(borderLabel("─".repeat(8), "title", border, m), "─".repeat(8));
+  assert.equal(borderLabel("─".repeat(9), "title", border, m), "─ title <─>");
+  assert.equal(borderLabel("─".repeat(15), "a-much-longer-title", border, m), "─".repeat(15));
+  assert.equal(borderLabel("─".repeat(20), "", border, m), "─".repeat(20));
 });
 
 test("reads segments other extensions contribute, and removals", () => {

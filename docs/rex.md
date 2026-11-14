@@ -228,9 +228,10 @@ the editor cursor and bottom controls stay visible. Less-used keys move to
 
 `←` on a prompt you just emptied (by deleting text or leaving history) needs a
 second press, so a held backspace cannot jump away. Its hint appears briefly
-in the editor border, not in the transcript. The hub replaces Pi's
-editor with a subclass that adds only this key; if another extension has
-replaced the editor, `←` is left alone and `ctrl+shift+a` still works.
+in the editor border, not in the transcript. The key is a feature of the
+[shared editor](statusline.md#editor-border), which adds nothing else to Pi's;
+if another extension has replaced the editor, `←` is left alone and
+`ctrl+shift+a` still works.
 
 ## Controls and human takeover
 

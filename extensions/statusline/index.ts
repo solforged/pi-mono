@@ -2,15 +2,18 @@ import { execFile } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
-  backoff, displayPath, fitSegments, formatCost, formatTokens, icons, layout, parseGitStatus, readContribution, rightStatuses, sessionStats,
-  modelLabel, thinkingColor, thinkingIcon, thinkingLabel, worktreeHome, SEGMENT_EVENT, type Contribution, type Git, type Segment, type Stats,
+  backoff, borderLabel, branchLabel, displayPath, fitSegments, formatCost, formatTokens, icons, layout, parseGitStatus, readContribution, rightStatuses, sessionStats,
+  modelLabel, plainText, thinkingColor, thinkingIcon, worktreeHome, CACHE_SHOWN_BELOW, SEGMENT_EVENT, type Contribution, type Git, type Segment, type Stats,
 } from "./format.ts";
 import { hostGit, trustedLayout } from "../sandbox/hostgit.ts";
+import { dropEditorFeature, useEditorFeature, type FeatureFactory } from "../shared/editor.ts";
 
 const POLL_MS = 10_000; // Catches changes made outside Pi.
 const IDLE_POLL_MS = 60_000; // The poll slows to this while it finds nothing new.
 const DEBOUNCE_MS = 300;
 const measure = { width: visibleWidth, truncate: (text: string, width: number) => truncateToWidth(text, width, "…") };
+const borderMeasure = { ...measure, plain: plainText, cut: (text: string, width: number) => truncateToWidth(text, width, "") };
+const TITLE_FEATURE = "statusline-title";
 
 type Footer = { refreshGit: () => void; render: () => void; close: () => void };
 
@@ -99,6 +102,19 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
     return cached;
   };
 
+  // The session name goes at the right end of the editor's top border; the footer shows it
+  // only when the border did not, with another extension's editor or no room.
+  let titled = false;
+  const title: FeatureFactory = (editor) => ({
+    topBorder(line) {
+      const name = ctx.sessionManager.getSessionName();
+      const drawn = name ? borderLabel(line, ctx.ui.theme.fg("dim", name), (text) => editor.borderColor(text), borderMeasure) : line;
+      titled = drawn !== line;
+      return drawn;
+    },
+  });
+  useEditorFeature(ctx, TITLE_FEATURE, title);
+
   ctx.ui.setFooter((tui, theme, footerData) => {
     render = () => tui.requestRender();
     const offBranch = footerData.onBranchChange(() => { scheduleGit(); render(); });
@@ -118,13 +134,6 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
         });
         for (const { position, segment } of extra) if (position === "start") segments.push(segment);
 
-        segments.push({ priority: 7, text: theme.fg("text", `${icons.model} ${modelLabel(model?.name ?? model?.id ?? "no model")}`) });
-
-        if (model?.reasoning) {
-          const level = pi.getThinkingLevel();
-          segments.push({ priority: 6, text: theme.fg(thinkingColor(level) as any, `${thinkingIcon(level)} ${thinkingLabel(level)}`) });
-        }
-
         const path = displayPath(home ?? cwd, process.env.HOME);
         const base = path.split("/").pop() || path;
         const mark = home ? theme.fg("dim", " (wt)") : "";
@@ -140,30 +149,38 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
           if (git?.ahead) marks.push(theme.fg("accent", `⇡${git.ahead}`));
           if (git?.behind) marks.push(theme.fg("accent", `⇣${git.behind}`));
           const dirty = Boolean(git && (git.conflicts || git.staged || git.unstaged || git.untracked));
-          const head = theme.fg(dirty ? "warning" : "success", `${icons.branch} ${branch}`);
+          const head = theme.fg(dirty ? "warning" : "success", `${icons.branch} ${branchLabel(branch, Boolean(home))}`);
           segments.push({ priority: 4, text: [head, ...marks].join(" "), compact: head });
         }
+
+        // A reasoning model's icon is its thinking level, in that level's color.
+        const thinking = model?.reasoning ? pi.getThinkingLevel() : undefined;
+        const modelIcon = thinking ? theme.fg(thinkingColor(thinking) as any, thinkingIcon(thinking)) : theme.fg("text", icons.model);
+        const modelText = `${modelIcon} ${theme.fg("text", modelLabel(model?.name ?? model?.id ?? "no model"))}`;
+        segments.push({ priority: 7, side: "right", text: modelText });
 
         const { stats: { cost, cacheHit }, auto, usage } = stats();
         const window = usage?.contextWindow ?? model?.contextWindow ?? 0;
         const percent = usage?.percent;
         const level = (percent ?? 0) > 90 ? "error" : (percent ?? 0) > 70 ? "warning" : "muted";
-        const contextText = `${percent == null ? "?" : `${percent.toFixed(1)}%`}/${formatTokens(window)}`;
-        segments.push({ priority: 5, text: theme.fg(level, `${icons.context} ${contextText}${auto ? ` ${icons.auto}` : ""}`) });
+        const used = `${icons.context} ${percent == null ? "?" : `${Math.round(percent)}%`}`, autoMark = auto ? ` ${icons.auto}` : "";
+        segments.push({ priority: 5, side: "right", text: theme.fg(level, `${used}/${formatTokens(window)}${autoMark}`), compact: theme.fg(level, `${used}${autoMark}`) });
 
-        if (cacheHit !== undefined) {
-          segments.push({ priority: 2, text: theme.fg(cacheHit < 50 ? "warning" : "muted", `${icons.cache} ${Math.round(cacheHit)}%`) });
+        if (cacheHit !== undefined && cacheHit < CACHE_SHOWN_BELOW) {
+          segments.push({ priority: 2, side: "right", text: theme.fg(cacheHit < 50 ? "warning" : "muted", `${icons.cache} ${Math.round(cacheHit)}%`) });
         }
 
         const subscription = model ? usingSubscription(ctx, model) : false;
-        if (cost > 0 || subscription) segments.push({ priority: 1, text: theme.fg("muted", formatCost(cost, subscription)) });
+        if (cost > 0 || subscription) segments.push({ priority: 1, side: "right", text: theme.fg("muted", formatCost(cost, subscription)) });
 
-        for (const { position, segment } of extra) if (position === "end") segments.push(segment);
+        for (const { position, segment } of extra) if (position === "end") segments.push({ ...segment, side: "right" });
 
-        const left = fitSegments(segments, dim(" · "), width, measure);
+        const sides = fitSegments(segments, dim(" · "), width, measure);
         const statuses = rightStatuses(footerData.getExtensionStatuses(), contributed);
-        const name = ctx.sessionManager.getSessionName();
-        return layout(left, statuses, name ? dim(name) : undefined, width, measure);
+        // The editor drew this frame's border, with the name when it fit, before the footer.
+        const name = titled ? undefined : ctx.sessionManager.getSessionName();
+        titled = false;
+        return layout(sides, statuses, name ? dim(name) : undefined, width, measure);
       },
     };
   });
@@ -175,6 +192,7 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
       closed = true;
       clearTimeout(timer);
       poll.stop();
+      dropEditorFeature(TITLE_FEATURE, title);
     },
   };
 }
