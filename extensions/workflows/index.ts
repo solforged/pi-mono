@@ -18,7 +18,7 @@ import { describeLineup, registerPresets } from "./presets.ts";
 import { createRunner, type Task, type ChildResult } from "./subagents.ts";
 import { cancellable } from "./ui.ts";
 import { scopeRoot } from "./state.ts";
-import { recordUsage, showAuxiliaryUsage } from "./usage.ts";
+import { recordUsage } from "./usage.ts";
 
 export default async function (pi: ExtensionAPI) {
   const root = resolve(dirname(await realpath(fileURLToPath(import.meta.url))), "../..");
@@ -32,7 +32,6 @@ export default async function (pi: ExtensionAPI) {
     // Pi may exit as soon as the handlers return, before a child that ignores SIGTERM is killed.
     await stopped();
   });
-  pi.on("session_start", (_event, ctx) => { showAuxiliaryUsage(ctx); });
   let approvedInstructions = "";
   pi.on("before_agent_start", (event) => { approvedInstructions = instructionsText(event.systemPromptOptions.contextFiles); });
 
@@ -114,7 +113,7 @@ export default async function (pi: ExtensionAPI) {
         const results = await cancellable(ctx, `Running ${task.agent}`, lifetime.signal, (signal) => run([task], ctx, instructions, signal));
         if (!results || lifetime.signal.aborted) return;
         const usage = results.reduce((sum, result) => addUsage(sum, result.usage), emptyUsage());
-        recordUsage(pi, ctx, { role: task.agent, usage });
+        recordUsage(pi, { role: task.agent, usage });
         pi.sendMessage({ customType: "workflow-subagent", content: summarize(results), display: true }, { triggerTurn: false });
         if (!ctx.hasUI) print(ctx, summarize(results));
       },

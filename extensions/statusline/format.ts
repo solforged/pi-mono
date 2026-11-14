@@ -117,7 +117,8 @@ export function backoff(check: () => Promise<boolean>, first: number, max: numbe
 type Usage = { input: number; output: number; cacheRead: number; cacheWrite: number; cost: { total: number } };
 export type Stats = { cost: number; cacheHit?: number };
 
-// Cost covers every entry Pi bills, including abandoned branches, like the built-in footer.
+// Cost covers every entry Pi bills, including abandoned branches, like the built-in footer,
+// plus the workflows extension's model calls outside tool results (titles, commits, learning).
 // The cache hit rate is from the latest request that sent a prompt; failed requests keep the previous rate.
 export function sessionStats(entries: readonly any[]): Stats {
   let cost = 0;
@@ -125,6 +126,7 @@ export function sessionStats(entries: readonly any[]): Stats {
   const add = (usage: Usage | undefined) => { cost += usage?.cost?.total ?? 0; };
   for (const entry of entries) {
     if (entry.type === "usage") add(entry.usage);
+    else if (entry.type === "custom" && entry.customType === "workflow-usage") add(entry.data?.usage);
     else if ((entry.type === "branch_summary" || entry.type === "compaction")) add(entry.usage);
     else if (entry.type === "message" && entry.message.role === "toolResult") add(entry.message.usage);
     else if (entry.type === "message" && entry.message.role === "assistant") {

@@ -8,7 +8,7 @@ import { atomicWrite } from "../extensions/shared/system.ts";
 import { hash, readSkill, withLock } from "../extensions/workflows/state.ts";
 import { agents, childArgs, childExtensions, childOutcome, createWorktree } from "../extensions/workflows/subagents.ts";
 import { runProcess } from "../extensions/workflows/process.ts";
-import { auxiliaryUsage, formatAuxiliary, recordUsage, showAuxiliaryUsage } from "../extensions/workflows/usage.ts";
+import { recordUsage } from "../extensions/workflows/usage.ts";
 import { config, registry, root, skill, temporary } from "./helpers.ts";
 
 test("title prompts prefer the agent directory and fall back only when absent", async (t) => {
@@ -309,21 +309,9 @@ test("only one of several contenders takes over a dead holder's lock", async (t)
   assert.equal(await withLock(dir, "crashed", async () => "taken", () => false), "taken");
 });
 
-test("auxiliary usage shows in the footer and ignores other entries", () => {
-  const entries: any[] = [{ type: "custom", customType: "workflow-title", data: { usage: { totalTokens: 999 } } }];
-  const status: Record<string, string | undefined> = {};
+test("auxiliary usage is recorded as a session entry", () => {
+  const entries: any[] = [];
   const pi = { appendEntry: (customType: string, data: unknown) => { entries.push({ type: "custom", customType, data }); } } as any;
-  const ctx = { hasUI: true, ui: { setStatus: (key: string, text?: string) => { status[key] = text; } }, sessionManager: { getEntries: () => entries } } as any;
-  showAuxiliaryUsage(ctx);
-  assert.equal(status.workflows, undefined);
-  recordUsage(pi, ctx, { role: "tiny", usage: { totalTokens: 800, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } as any });
-  assert.equal(status.workflows, "aux 800");
-  recordUsage(pi, ctx, { role: "commit", usage: { totalTokens: 11_700, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.0421 } } as any });
-  assert.equal(status.workflows, "aux 12.5k · $0.042");
-  assert.equal(auxiliaryUsage(entries).totalTokens, 12_500);
-  assert.equal(formatAuxiliary(auxiliaryUsage([{ type: "custom", customType: "workflow-usage", data: { usage: { totalTokens: 2_000_000, cost: { total: 3.456 } } } }])), "aux 2.0M · $3.46");
-  // A context from a replaced session throws; recording must still persist the entry.
-  const stale = { hasUI: true, get ui(): any { throw new Error("stale"); }, sessionManager: { getEntries: () => entries } } as any;
-  recordUsage(pi, stale, { role: "eval" });
-  assert.equal(entries.at(-1).data.role, "eval");
+  recordUsage(pi, { role: "commit", usage: { totalTokens: 800 } });
+  assert.deepEqual(entries, [{ type: "custom", customType: "workflow-usage", data: { role: "commit", usage: { totalTokens: 800 } } }]);
 });

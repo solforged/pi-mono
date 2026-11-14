@@ -178,7 +178,7 @@ export default async function (pi: ExtensionAPI) {
     kernel?.dispose();
     toolServer?.close(); toolServer = undefined;
     const usage = (jobs ?? retired)?.takeUsage();
-    if (usage) recordUsage(pi, undefined, { role: "eval", usage });
+    if (usage) recordUsage(pi, { role: "eval", usage });
     if (ctxNow?.mode === "tui") ctxNow.ui.setWidget("workflowz", undefined);
     // Pi may exit as soon as the handlers return, before a child that ignores SIGTERM is killed.
     await stopped();

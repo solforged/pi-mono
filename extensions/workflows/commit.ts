@@ -562,7 +562,7 @@ export function registerCommit(pi: ExtensionAPI, source: ConfigSource, agentDir:
             const built = await cancellable(ctx, "Planning commits", lifetime, (signal) => createPlan({ repo, signal }, current, style, async (system, prompt) => {
               const result = await completeRole(ctx, config, "commit", system, prompt, signal);
               signal.throwIfAborted();
-              recordUsage(pi, ctx, { role: "commit", ...result, text: undefined });
+              recordUsage(pi, { role: "commit", ...result, text: undefined });
               return result.text;
             }));
             if (!built) return;

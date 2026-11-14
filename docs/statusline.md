@@ -25,7 +25,8 @@ From left to right:
   It turns yellow past 70% and red past 90%.
 - Cache hit rate of the latest request: cache reads over all prompt tokens.
   Failed requests keep the previous rate; below 50% is yellow.
-- Session cost from every billed entry, as in Pi's footer. On a subscription,
+- Session cost from every billed entry, as in Pi's footer, plus the
+  [workflows](workflows.md) model calls Pi does not bill. On a subscription,
   a crossed-out dollar replaces `$`: the amount is what API billing would have
   charged.
 - Segments other extensions contribute, ordered by key, such as the

@@ -236,7 +236,7 @@ export function registerAutolearn(pi: ExtensionAPI, source: ConfigSource, agentD
       `Candidate limit: 1\nRecurring steps (in ${found.sessions} sessions): ${found.core.join(" | ")}\nFocus: ${focus}\n${INVENTORY_LABEL}:\n${inventoryText}\nEvidence, one run per session:\n${parts.map((part) => part.text).join("\n")}`, signal)
       .catch((error) => { throw isTransientError(error) ? new Outage(error instanceof Error ? error.message : String(error), { cause: error }) : error; });
     signal.throwIfAborted();
-    recordUsage(pi, ctx, { role: "learn", ...result, text: undefined });
+    recordUsage(pi, { role: "learn", ...result, text: undefined });
     const candidate = parseCandidates(result.text, new Set([...parts.flatMap((part) => part.refs), ...inventory.map(skillRef)]), 1)[0];
     if (!candidate || candidate.action === "note" || (atLimit && candidate.action === "create")) return undefined;
     return await stageCandidate(root, candidate, inventory, "autolearn");

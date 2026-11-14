@@ -97,6 +97,7 @@ or automatically pruned. A crashed review, publisher, or commit can leave a
 use the [worktree review procedure](subagents.md#worker-worktrees).
 
 Subagent tool usage is reported in Pi's normal totals. Titles, commits,
-learning calls, command-invoked subagents and workflowz evals are not, so the
-footer shows their running total as `aux <tokens> · $<cost>`. Costs use
-provider catalog prices; the dollar amount is left out when none are available.
+learning calls, command-invoked subagents and workflowz evals are not; they are
+recorded as `workflow-usage` session entries, which the
+[statusline](statusline.md) adds to its session cost. Costs use provider
+catalog prices and are zero when none are available.

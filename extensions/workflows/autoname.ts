@@ -79,7 +79,7 @@ export function registerAutoname(pi: ExtensionAPI, source: ConfigSource, prompt:
       markAttempted();
       const title = parseTitle(result.text);
       if (nameRevision !== revision || pi.getSessionName() !== previous) return;
-      recordUsage(pi, ctx, { role: "tiny", ...result, text: undefined });
+      recordUsage(pi, { role: "tiny", ...result, text: undefined });
       if (title) pi.setSessionName(title);
       else if (force && ctx.hasUI) ctx.ui.notify("No valid task title generated", "info");
     } catch (error) {

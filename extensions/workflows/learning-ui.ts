@@ -38,7 +38,7 @@ export function registerLearning(pi: ExtensionAPI, source: ConfigSource, agentDi
           const result = await completeRole(ctx, config, "learn", LEARNING_SYSTEM,
             `Candidate limit: ${config.learning.maxCandidates}\nFocus: ${focus}\n${INVENTORY_LABEL}:\n${inventoryText}\nEvidence:\n${evidence}`, signal);
           signal.throwIfAborted();
-          recordUsage(pi, ctx, { role: "learn", ...result, text: undefined });
+          recordUsage(pi, { role: "learn", ...result, text: undefined });
           const candidates = parseCandidates(result.text, new Set([...refs, ...skillRefs]), config.learning.maxCandidates);
           if (new Set(candidates.map((c) => c.name)).size !== candidates.length) throw new Error("Multiple changes proposed for the same skill; retry the review");
           for (const candidate of candidates) {

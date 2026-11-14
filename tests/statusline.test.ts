@@ -83,8 +83,11 @@ test("totals billed usage and keeps the latest real cache hit rate", () => {
     { type: "compaction", usage: usage(0, 0, 0, 0.05) },
     { type: "branch_summary" },
     { type: "usage", usage: usage(0, 0, 0, 0.1) },
+    { type: "custom", customType: "workflow-usage", data: { role: "tiny", usage: usage(0, 0, 0, 0.2) } },
+    { type: "custom", customType: "workflow-usage", data: { role: "eval" } },
+    { type: "custom", customType: "workflow-title", data: { usage: usage(0, 0, 0, 9) } },
   ]);
-  assert.equal(stats.cost.toFixed(2), "1.00");
+  assert.equal(stats.cost.toFixed(2), "1.20");
   assert.equal(stats.cacheHit, 90);
 });
 
