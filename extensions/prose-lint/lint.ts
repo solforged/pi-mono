@@ -7,8 +7,8 @@ import { dirname } from "node:path";
 
 export type Alert = { Check: string; Message: string; Match: string; Line: number; Severity: string };
 
-/** Markdown files, the only kind the house style's Vale config lints. */
-export const isProse = (path: string) => /\.(?:md|mdx|markdown)$/i.test(path);
+/** Markdown, and React components, whose interface text the house style reads through its UiCopy view. */
+export const isProse = (path: string) => /\.(?:md|mdx|markdown|tsx|jsx)$/i.test(path);
 
 /**
  * Spelling rules report every project name and identifier in a repository

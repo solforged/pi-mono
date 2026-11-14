@@ -26,8 +26,8 @@ test("note lists alerts by line and caps the list", () => {
   assert.equal(lines.at(-1), "- and 3 more");
 });
 
-test("isProse matches Markdown paths only", () => {
-  assert.ok(isProse("docs/guide.md") && isProse("a.MDX") && isProse("notes.markdown"));
+test("isProse matches Markdown and React component paths", () => {
+  assert.ok(isProse("docs/guide.md") && isProse("a.MDX") && isProse("notes.markdown") && isProse("web/App.tsx") && isProse("b.jsx"));
   assert.ok(!isProse("index.ts") && !isProse("README") && !isProse("md"));
 });
 

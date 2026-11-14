@@ -1,4 +1,5 @@
-// Prose lint: after the agent writes or edits a Markdown file, Vale runs on the
+// Prose lint: after the agent writes or edits a Markdown file or a React
+// component (for its interface text), Vale runs on the
 // file before and after the change, and the alerts the change introduced are
 // appended to that tool result. Nothing else enters the context: no system
 // prompt text, no extra turns, and no note when the edit is clean, so the

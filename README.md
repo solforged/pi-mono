@@ -52,7 +52,7 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Herdr](docs/herdr.md): Desktop support and the separate TUI title bridge.
 - [Status line](docs/statusline.md): a one-line footer with Git, context, and cache use.
 - [Tool frames](docs/tool-frames.md): built-in tool rows drawn by what they did, with lookups on one line and edits and commands in light frames.
-- [Prose lint](docs/prose-lint.md): Markdown the agent writes is checked with Vale, and the alerts an edit introduced are added to its tool result.
+- [Prose lint](docs/prose-lint.md): Markdown and interface text the agent writes are checked with Vale, and the alerts an edit introduced are added to its tool result.
 - [Diff pane](docs/diff.md): a live, highlighted Git diff beside Pi in Rex that opens once Pi edits, and Markdown files, ⌘-clicked or opened with `/md`, in its place.
 - [Providers and search](docs/providers.md): Anthropic compatibility, the Nous Portal subscription and nested web search.
 - [Context management](docs/context.md): background compaction summaries, snapcompact, compaction ratios, output artifacts, and `/prompt-size`.

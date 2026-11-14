@@ -1,8 +1,10 @@
 # Prose lint
 
-When the agent writes or edits a Markdown file (`.md`, `.mdx`, `.markdown`),
-`extensions/prose-lint` runs [Vale](https://vale.sh) on the file as it was
-before the call and as it is after. If the change introduced alerts, a short
+When the agent writes or edits a Markdown file (`.md`, `.mdx`, `.markdown`)
+or a React component (`.tsx`, `.jsx`), `extensions/prose-lint` runs
+[Vale](https://vale.sh) on the file as it was before the call and as it is
+after. In components, the house style reads only the interface text, through
+its `UiCopy` view. If the change introduced alerts, a short
 note is added to the end of that tool's result:
 
 ```text
