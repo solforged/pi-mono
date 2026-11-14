@@ -102,7 +102,19 @@ function markup(text: string, change: (piece: string) => string): string {
   return out + text.slice(from);
 }
 
-export function prepare(source: string, palette: Palette): Prepared {
+/**
+ * Markup CoreSVG accepts but draws wrongly. These are refused when the agent
+ * draws a figure, so it can redraw it, but not when a figure from an earlier
+ * session is drawn again.
+ */
+function misdrawn(tags: string) {
+  // A <tspan> takes its <text>'s fill, weight and position whatever it says,
+  // so differently colored runs come out in one color, black when unset.
+  if (/<tspan\s+[^\s/>]/i.test(tags)) fail("CoreSVG ignores attributes on <tspan>: every run takes its <text>'s fill, weight and position. Give each differently styled run its own <text> with its own x; in a monospace font each character advances 0.6 × font-size.");
+  if (/<marker\b|\smarker(-start|-mid|-end)?\s*=|marker(-start|-mid|-end)?\s*:/i.test(tags)) fail("CoreSVG does not draw markers: draw arrowheads as a <path> or <polygon>.");
+}
+
+export function prepare(source: string, palette: Palette, options: { strict?: boolean } = {}): Prepared {
   const text = source.trim();
   if (text.length > limits.chars) fail(`The SVG is ${text.length} characters; the limit is ${limits.chars}.`);
   const root = /<svg\b[^>]*>/i.exec(text) ?? fail("Expected an <svg> element.");
@@ -121,6 +133,7 @@ export function prepare(source: string, palette: Palette): Prepared {
     if (!link.startsWith("#") && !/^data:image\//i.test(link)) fail(`Figures must be self-contained: remove the external link ${link.slice(0, 80)}.`);
   }
   if (/url\(\s*(?!["']?#)/i.test(tags)) fail("Figures must be self-contained: url() may only point at #ids.");
+  if (options.strict) misdrawn(tags);
 
   const attr = (name: string) => new RegExp(`\\s${name}\\s*=\\s*(["'])(.*?)\\1`, "i").exec(root[0])?.[2];
   const box = attr("viewBox")?.trim().split(/[\s,]+/).map(Number);
@@ -133,6 +146,10 @@ export function prepare(source: string, palette: Palette): Prepared {
   // The root's own size, color and namespace are ours to set.
   let head = root[0].replace(/\s(width|height|color|preserveAspectRatio)\s*=\s*(["']).*?\2/gi, "");
   if (!box || box.length !== 4) head = head.replace(/^<svg\b/i, `<svg viewBox="0 0 ${width} ${height}"`);
+  // Unstyled text and shapes follow the theme rather than black, which a dark
+  // theme hides, and text without a family is sans-serif rather than Times.
+  if (!/\sfill\s*=|[\s"';]fill\s*:/i.test(head)) head = head.replace(/^<svg\b/i, `<svg fill="${palette.fg}"`);
+  if (!/font-family/i.test(head)) head = head.replace(/^<svg\b/i, `<svg font-family="${generic["sans-serif"]}"`);
   if (!/\sxmlns\s*=/.test(head)) head = head.replace(/^<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
   head = head.replace(/^<svg\b/i, `<svg width="${width}" height="${height}" color="${palette.fg}" preserveAspectRatio="xMinYMin meet"`);
 

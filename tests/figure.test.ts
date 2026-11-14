@@ -9,11 +9,15 @@ const svg = (body: string, root = 'viewBox="0 0 640 360"') => `<svg xmlns="http:
 test("prepare themes colors and sizes the root from its viewBox", () => {
   const { svg: out, width, height } = prepare(svg('<rect fill="var(--accent)" stroke="var(--nope, #123456)" style="fill: var(--surface)"/>', 'viewBox="0 0 640.4 360" width="100%" color="red"'), palette);
   assert.deepEqual([width, height], [640, 360]);
-  assert.match(out, /^<svg width="640" height="360" color="#000000" preserveAspectRatio="xMinYMin meet" xmlns=/);
+  assert.match(out, /^<svg width="640" height="360" color="#000000" preserveAspectRatio="xMinYMin meet" font-family="Helvetica Neue" fill="#000000" xmlns=/);
   assert.doesNotMatch(out, /100%|color="red"/);
   assert.match(out, new RegExp(`fill="${palette.accent}" stroke="#123456" style="fill: ${palette.surface}"`));
   // Without a viewBox, width and height define one.
-  assert.match(prepare('<svg width="200" height="100"><g/></svg>', palette).svg, /^<svg width="200" height="100" color="#000000" preserveAspectRatio="xMinYMin meet" xmlns="[^"]+" viewBox="0 0 200 100"/);
+  assert.match(prepare('<svg width="200" height="100"><g/></svg>', palette).svg, /^<svg width="200" height="100" color="#000000" preserveAspectRatio="xMinYMin meet" xmlns="[^"]+" font-family="Helvetica Neue" fill="#000000" viewBox="0 0 200 100"/);
+  // A root fill or family of the figure's own is kept rather than defaulted.
+  const own = prepare(svg("<g/>", 'viewBox="0 0 10 10" fill="var(--muted)" style="font-family: monospace"'), palette).svg;
+  assert.match(own, new RegExp(`^<svg [^>]*fill="${palette.muted}" style="font-family: Menlo"`));
+  assert.doesNotMatch(own, /Helvetica|fill="#000000"/);
 });
 
 test("prepare rewrites font features CoreSVG ignores", () => {
@@ -38,6 +42,16 @@ test("prepare rejects figures CoreSVG cannot draw or that reach outside", () => 
   rejects(svg('<image href="file:///etc/passwd"/>'), /external link file:/);
   rejects(svg('<rect fill="url(http://x/y)"/>'), /url\(\) may only/);
   rejects(`<!DOCTYPE svg [<!ENTITY x SYSTEM "file:///etc/passwd">]>${svg("")}`, /DOCTYPE/);
+  // Markup CoreSVG draws wrongly is refused when the agent draws, and drawn as it comes from earlier sessions.
+  const strict = (source: string, pattern: RegExp) => {
+    assert.throws(() => prepare(source, palette, { strict: true }), pattern);
+    prepare(source, palette);
+  };
+  strict(svg('<text><tspan fill="var(--accent)">a</tspan> b</text>'), /ignores attributes on <tspan>.*own <text>/);
+  strict(svg('<text>a<tspan x="10" dy="1.2em">b</tspan></text>'), /ignores attributes on <tspan>/);
+  strict(svg('<defs><marker id="m"><path d="M0 0"/></marker></defs><line marker-end="url(#m)"/>'), /does not draw markers/);
+  strict(svg('<line style="marker-end: url(#m)"/>'), /does not draw markers/);
+  prepare(svg("<text>a <tspan>b</tspan><tspan/></text><text>see marker-end: here</text>"), palette, { strict: true });
   // Local references and embedded images are fine.
   prepare(svg(`<defs><linearGradient id="g"/></defs><rect fill="url('#g')"/><use href="#g"/><image href="data:image/png;base64,AA"/>`), palette);
 });
@@ -82,7 +96,7 @@ test("fit sizes figures in whole cells of the terminal's real shape", () => {
   assert.ok(huge.width <= 4096 && huge.height <= 4096);
   // The prepared SVG moves onto the canvas with its drawing fitted, not stretched.
   const prepared = prepare(svg("<g/>"), palette);
-  assert.match(onCanvas(prepared, 1120, 589), /^<svg width="1120" height="589" color="#000000" preserveAspectRatio="xMinYMin meet"/);
+  assert.match(onCanvas(prepared, 1120, 589), /^<svg width="1120" height="589" color="#000000" preserveAspectRatio="xMinYMin meet" font-family=/);
 });
 
 test("rasterize draws through sips, sized and cached, and reports parse errors", { skip: !supported }, async (t) => {

@@ -90,7 +90,7 @@ export default function (pi: ExtensionAPI) {
     name: "figure",
     label: "Figure",
     // Sent with every request: keep it short. Details are in docs/figure.md.
-    description: "Show the user an SVG inline: a UI mockup, layout, diagram or chart that says more than text. They see it; don't restate it. viewBox sets size (1 unit≈1px, font-size 14≈body text, ≤1000 wide). Colors only via var(--fg|muted|dim|border|surface|accent|success|warning|error|c1…c6), which follow their theme. No background, <style>, scripts or links.",
+    description: "Show the user an SVG inline: a UI mockup, diagram or chart that says more than text. They see it; don't restate it. viewBox sets size (1 unit≈1px, font-size 14≈body text, ≤1000 wide). Colors only via themed var(--fg|muted|dim|border|surface|accent|success|warning|error|c1…c6). No background, <style>, markers, scripts, links or styled <tspan>.",
     parameters: Type.Object({ svg: Type.String(), title: Type.Optional(Type.String()) }),
     renderShell: "self",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -98,7 +98,7 @@ export default function (pi: ExtensionAPI) {
         throw new Error("This terminal cannot show figures; describe it in text instead.");
       }
       // Draw once now so a broken SVG comes back to the model, not just to the screen.
-      const prepared = prepare(params.svg, palette(ctx.ui.theme));
+      const prepared = prepare(params.svg, palette(ctx.ui.theme), { strict: true });
       await rasterize(prepared.svg, signal);
       return {
         content: [{ type: "text", text: `Shown to the user as a ${prepared.width}×${prepared.height} figure.` }],
