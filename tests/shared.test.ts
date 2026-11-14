@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { print, report } from "../extensions/shared/context.ts";
+import { atomicWrite, atomicWriteSync } from "../extensions/shared/system.ts";
 import { noModel, root, temporary } from "./helpers.ts";
 
 /** Runs `fn` and returns what it wrote through console.log and console.error. */
@@ -27,6 +29,25 @@ test("a report is a notification where there is a UI and printed text otherwise"
   assert.deepEqual(captured(() => report({ hasUI: false, mode: "print", ui }, "saved", "error")), { out: ["saved"], err: [] });
   assert.deepEqual(captured(() => report({ hasUI: false, mode: "json", ui }, "saved")), { out: [], err: ["saved"] });
   assert.equal(notes.length, 2);
+});
+
+test("atomic writes replace a file privately and leave no temporary file, even when they fail", async (t) => {
+  const dir = await temporary(t), file = join(dir, "state.json");
+  writeFileSync(file, "old", { mode: 0o644 });
+  await atomicWrite(file, "first");
+  assert.deepEqual([readFileSync(file, "utf8"), statSync(file).mode & 0o777], ["first", 0o600]);
+  atomicWriteSync(file, "second");
+  assert.deepEqual([readFileSync(file, "utf8"), statSync(file).mode & 0o777], ["second", 0o600]);
+  // One process writing one file many times at once: a temporary file named by PID would be shared.
+  await Promise.all(Array.from({ length: 20 }, (_, i) => atomicWrite(file, `write ${i}`)));
+  assert.match(readFileSync(file, "utf8"), /^write \d+$/);
+  // A folder cannot be replaced by a file, and a missing folder is not made.
+  mkdirSync(join(dir, "taken", "inside"), { recursive: true });
+  await assert.rejects(atomicWrite(join(dir, "taken"), "text"));
+  assert.throws(() => atomicWriteSync(join(dir, "taken"), "text"));
+  await assert.rejects(atomicWrite(join(dir, "missing", "file"), "text"), { code: "ENOENT" });
+  assert.throws(() => atomicWriteSync(join(dir, "missing", "file"), "text"), { code: "ENOENT" });
+  assert.deepEqual(readdirSync(dir).sort(), ["state.json", "taken"]);
 });
 
 test("commands run by Pi in JSON mode leave standard output as JSON lines", async (t) => {

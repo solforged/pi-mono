@@ -4,9 +4,10 @@
 // through the handler app, which drops them into the IPC directory. No runtime
 // Pi imports, so tests can drive it with a fake API. See docs/diff.md.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { atomicWriteSync } from "../shared/system.ts";
 import { docUrl, isMarkdown, linkDocs, parseDocUrl, resolveTarget } from "./links.ts";
 import { agentDir, ipcDir, keepShare, RATIO, readSettings, rexCall, rexSetup, run as defaultRun, splitBeside, viewerPid, type DiffPane, type RexSetup, type Run, type Settings } from "./pane.ts";
 import type { Palette } from "./render.ts";
@@ -81,12 +82,7 @@ export function registerDocs(pi: ExtensionAPI, options: DocOptions): Docs {
   let requests: FSWatcher | undefined;
 
   function send(message: { event: string; path?: string; anchor?: string }) {
-    const target = join(dir, `${pid}.doc`);
-    const temporary = `${target}.${process.pid}.tmp`;
-    try {
-      writeFileSync(temporary, JSON.stringify({ ...message, at: Date.now() }), { mode: 0o600 });
-      renameSync(temporary, target);
-    } catch {}
+    try { atomicWriteSync(join(dir, `${pid}.doc`), JSON.stringify({ ...message, at: Date.now() })); } catch {}
   }
 
   async function show(context: ExtensionContext, path: string, anchor?: string) {

@@ -1,8 +1,9 @@
 // Remembers the last on/off toggle per project root, in the agent directory,
 // which the guest cannot see. An entry exists only while it differs from
 // settings, so settings take over again once you toggle back.
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { atomicWriteSync } from "../shared/system.ts";
 
 export const togglesFile = (agentDir: string) => join(agentDir, "sandbox-toggles.json");
 
@@ -23,7 +24,5 @@ export function saveToggle(file: string, root: string, enabled: boolean, setting
   if (enabled === settingsDefault) delete toggles[root];
   else toggles[root] = enabled;
   mkdirSync(dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(toggles, null, 2)}\n`, { mode: 0o600 });
-  renameSync(temporary, file);
+  atomicWriteSync(file, `${JSON.stringify(toggles, null, 2)}\n`);
 }

@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, realpath, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { atomicWrite as write } from "../shared/system.ts";
 
 export function hash(text: string): string { return createHash("sha256").update(text).digest("hex"); }
 export async function scopeRoot(agentDir: string, profile: string, cwd: string): Promise<string> {
@@ -11,13 +12,11 @@ export async function readJson<T>(file: string, fallback: T): Promise<T> {
   try { return JSON.parse(await readFile(file, "utf8")); }
   catch (error: any) { if (error.code === "ENOENT") return fallback; throw error; }
 }
+// Exported only for extensions/rex and its fixtures, which count on the folder
+// being made; new code imports atomicWrite from ../shared/system.ts.
 export async function atomicWrite(file: string, content: string): Promise<void> {
   await privateDir(dirname(file));
-  const temp = `${file}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temp, content, { mode: 0o600, flag: "wx" });
-    await rename(temp, file);
-  } finally { await rm(temp, { force: true }); }
+  await write(file, content);
 }
 export async function saveJson(file: string, value: unknown): Promise<void> {
   await atomicWrite(file, `${JSON.stringify(value, null, 2)}\n`);

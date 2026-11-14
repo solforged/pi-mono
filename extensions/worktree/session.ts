@@ -1,6 +1,7 @@
 // Session-file helpers for the worktree extension; see docs/worktree.md.
-import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { atomicWrite } from "../shared/system.ts";
 
 const exists = (path: string) => lstat(path).then(() => true, () => false);
 
@@ -50,9 +51,7 @@ export function sessionChoices(sessions: Listed[], now = Date.now()): { label: s
 
 async function put(file: string, text: string) {
   await mkdir(dirname(file), { recursive: true, mode: 0o700 });
-  const temporary = `${file}.${process.pid}.tmp`;
-  await writeFile(temporary, text, { mode: 0o600 });
-  await rename(temporary, file);
+  await atomicWrite(file, text);
 }
 
 /**

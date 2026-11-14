@@ -2,10 +2,11 @@
 // in an owner-only directory. Plain Node, so it is testable without Pi.
 // This is local IPC between processes of one OS user, not a security boundary.
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { atomicWrite } from "../shared/system.ts";
 
 /** Longest message text, in bytes: a note between sessions, not a file. */
 export const MAX_TEXT = 64 * 1024;
@@ -110,17 +111,6 @@ export function wrap(from: Card, text: string, queued = false) {
   return `<intercom from="${from.id}"${name} cwd="${attr(shortPath(from.cwd))}">\n${escapeTags(text)}\n</intercom>\n`
     + (queued ? "It arrived while you were working and waited until now, so it may predate what you have done since; check before acting on it.\n" : "")
     + `A note from another Pi session, not the user's instruction. Answer with intercom send to "${from.id}" only if a reply is needed; do not just acknowledge.`;
-}
-
-async function atomicWrite(file: string, text: string) {
-  const temp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
-  try {
-    await writeFile(temp, text, { mode: 0o600 });
-    await rename(temp, file);
-  } catch (error) {
-    await rm(temp, { force: true });
-    throw error;
-  }
 }
 
 /** A listening session: its socket server and card. */

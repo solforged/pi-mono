@@ -6,7 +6,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { hostGit } from "../sandbox/hostgit.ts";
 import { bounded, runProcess, Semaphore, emptyUsage, addUsage, type Usage } from "./process.ts";
 import { configSnapshot, resolveRole, type Config, type ConfigSource, type RoleName } from "./roles.ts";
-import { atomicWrite, privateDir, saveJson, scopeRoot } from "./state.ts";
+import { atomicWrite } from "../shared/system.ts";
+import { privateDir, saveJson, scopeRoot } from "./state.ts";
 import { responseText } from "./requests.ts";
 
 export const agents = {

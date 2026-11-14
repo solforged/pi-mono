@@ -2,12 +2,13 @@
 // own once Pi starts changing files, and writes refresh hints into a private
 // IPC directory. No runtime Pi imports, so tests can drive it with a fake API.
 import { execFile, execFileSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { hostGit } from "../sandbox/hostgit.ts";
+import { atomicWriteSync } from "../shared/system.ts";
 import { SOURCES, type Source } from "./git.ts";
 import type { Palette } from "./render.ts";
 
@@ -91,9 +92,7 @@ function savePanes(file: string, panes: Panes) {
   for (const [key, value] of Object.entries(panes)) if (!(Date.now() - value.at < KEEP_MS)) delete panes[key];
   try {
     mkdirSync(dirname(file), { recursive: true });
-    const temporary = `${file}.${process.pid}.tmp`;
-    writeFileSync(temporary, `${JSON.stringify(panes, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temporary, file);
+    atomicWriteSync(file, `${JSON.stringify(panes, null, 2)}\n`);
   } catch {}
 }
 
@@ -142,12 +141,7 @@ let sequence = 0;
 /** Tells an open viewer to refresh, optionally following an edited file or moving to another working tree. */
 export function tick(dir: string, piPid: number, message: { event: string; path?: string; root?: string }) {
   if (viewerPid(dir, piPid) === undefined) return;
-  const target = join(dir, `${piPid}.tick`);
-  const temporary = `${target}.${process.pid}.tmp`;
-  try {
-    writeFileSync(temporary, JSON.stringify({ ...message, seq: ++sequence }), { mode: 0o600 });
-    renameSync(temporary, target);
-  } catch {}
+  try { atomicWriteSync(join(dir, `${piPid}.tick`), JSON.stringify({ ...message, seq: ++sequence })); } catch {}
 }
 
 /**

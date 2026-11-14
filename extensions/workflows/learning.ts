@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readFile, readdir, realpath, unlink } from "node:fs/promises";
-import { join } from "node:path";
-import { atomicWrite, hash, readSkill, rejectSymlinks, saveJson, skillName, skillPath, withLock } from "./state.ts";
+import { dirname, join } from "node:path";
+import { atomicWrite } from "../shared/system.ts";
+import { hash, privateDir, readSkill, rejectSymlinks, saveJson, skillName, skillPath, withLock } from "./state.ts";
 
 export interface Evidence { ref: string; entryId: string; text: string }
 export interface SkillSnapshot { name: string; path: string; content: string; managed: boolean }
@@ -181,7 +182,7 @@ export async function applyDraft(root: string, draft: Draft, approvedHash: strin
     if (draft.action === "create" && current !== null) throw new Error("Skill already exists");
     if (draft.action !== "create" && current === null) throw new Error("Skill no longer exists");
     if (draft.action === "delete") await unlink(file);
-    else await atomicWrite(file, draft.content);
+    else { await privateDir(dirname(file)); await atomicWrite(file, draft.content); }
     draft.status = "applied";
     await saveJson(join(root, "drafts", `${draft.id}.json`), draft);
   }));
