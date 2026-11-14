@@ -12,7 +12,8 @@ import { fileURLToPath } from "node:url";
 import { RexClient } from "../../extensions/rex/client.ts";
 import { childCommand, validateReady } from "../../extensions/rex/runner.ts";
 import { Frames, record, send, VERSION, type Manifest } from "../../extensions/rex/protocol.ts";
-import { atomicWrite, privateDir, saveJson } from "../../extensions/workflows/state.ts";
+import { atomicWrite } from "../../extensions/shared/system.ts";
+import { privateDir, saveJson } from "../../extensions/workflows/state.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url)), ask = process.argv.includes("--ask"), dispatch = ask || process.argv.includes("--dispatch");
 const role = { provider: "rex-smoke", model: "fixture", thinking: "off" as const, maxTokens: 512, timeoutMs: 45_000 };

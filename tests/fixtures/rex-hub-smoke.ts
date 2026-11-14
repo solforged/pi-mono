@@ -11,7 +11,8 @@ import { mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RexClient } from "../../extensions/rex/client.ts";
-import { atomicWrite, privateDir, scopeRoot } from "../../extensions/workflows/state.ts";
+import { atomicWrite } from "../../extensions/shared/system.ts";
+import { privateDir, scopeRoot } from "../../extensions/workflows/state.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const session = process.env.REX_SESSION, me = process.env.REX_BLOCK;

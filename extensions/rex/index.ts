@@ -11,7 +11,9 @@ import { registerChildUi } from "./child-ui.ts";
 import { RexRunner, yieldingWait, type Run, type TaskRun } from "./runner.ts";
 import { RexClient } from "./client.ts";
 import { DeckManager, type LayoutState } from "./layout.ts";
-import { atomicWrite, scopeRoot } from "../workflows/state.ts";
+import { privateDir, scopeRoot } from "../workflows/state.ts";
+import { instructionsText, print } from "../shared/context.ts";
+import { atomicWrite } from "../shared/system.ts";
 import { OPENED } from "./protocol.ts";
 import { cards } from "../intercom/station.ts";
 import { entries as hubEntries, short, type Entry, type HubAction, type Peer } from "./hub-model.ts";
@@ -127,7 +129,7 @@ export default async function (pi: ExtensionAPI) {
     flushTimer ??= setTimeout(() => { void flush().catch(error => { if (!lifetime.signal.aborted) currentCtx?.ui.notify(String(error), "error"); }); }, 1500);
   };
   pi.on("before_agent_start", event => {
-    instructions = (event.systemPromptOptions.contextFiles ?? []).map(f => `Instructions from ${f.path}:\n${f.content}`).join("\n\n");
+    instructions = instructionsText(event.systemPromptOptions.contextFiles);
   });
   pi.on("session_shutdown", async (event) => {
     lifetime.abort(new Error("Parent session closed or reloaded"));
@@ -195,6 +197,7 @@ export default async function (pi: ExtensionAPI) {
       installLeftArrow(ctx, () => void hub(currentCtx ?? ctx).catch(error => currentCtx?.ui.notify(String(error), "error")),
         "Press ← again for agents");
       const dir = join(await scopeRoot(runner.agentDir, config.profile, ctx.cwd), "rex"), sid = ctx.sessionManager.getSessionId();
+      await privateDir(dir); // The deck writes its roster and strip text here.
       // A fork copies the branch, layout entry included, but the panes are the first session's.
       const last = (ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "rex-layout").at(-1) as any)?.data;
       const saved = last && (last.session ?? sid) === sid ? last : undefined;
@@ -351,7 +354,7 @@ export default async function (pi: ExtensionAPI) {
   function report(ctx: ExtensionContext, message: string) {
     if (ctx.mode === "tui") pi.appendEntry("rex-report", { text: message });
     else if (ctx.hasUI) ctx.ui.notify(message, "info");
-    else console.log(message);
+    else print(ctx, message);
   }
   /** Shared by the hub and the /agents subcommands. `confirmed`: the hub already asked. */
   async function control(ctx: ExtensionContext, run: Run, action: PickAction, message?: string, confirmed = false) {

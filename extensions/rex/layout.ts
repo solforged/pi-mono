@@ -1,5 +1,5 @@
 import { rm } from "node:fs/promises";
-import { atomicWrite } from "../workflows/state.ts";
+import { atomicWrite } from "../shared/system.ts";
 import type { RexClient } from "./client.ts";
 import { classify, PARENT_SHARE, plan, rosterCommand, rosterText, stripText, type DeckChild, type Op } from "./deck.ts";
 import { tabPlan, windowOrder, type TabOp, type TabState } from "./tabs.ts";
