@@ -4,11 +4,16 @@
 // repository of its own nearer the working directory, or a submodule with its
 // own config would all have the next host Git call run guest code. Calls
 // prepared here name the repository themselves and stay out of submodules.
+// Host jj in a colocated jj workspace is checked here too; see `jjRefusal`.
 // No Pi imports: the diff viewer and the tests load it directly.
-import { lstatSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
-export interface Layout { workTree: string; gitDir: string; commonDir: string }
+export interface Layout {
+  workTree: string; gitDir: string; commonDir: string;
+  /** The jj repository folder when the work tree is also a jj workspace (colocated). */
+  jj?: string;
+}
 
 const kind = (path: string) => {
   try { const s = statSync(path); return s.isDirectory() ? "dir" : s.isFile() ? "file" : undefined; } catch { return undefined; }
@@ -27,16 +32,54 @@ export function findLayout(cwd: string): Layout | undefined {
     const dotGit = join(dir, ".git");
     const found = kind(dotGit);
     // Like Git, pass over a `.git` directory that holds no repository.
-    if (found === "dir" && present(join(dotGit, "HEAD"))) return { workTree: dir, gitDir: dotGit, commonDir: dotGit };
+    if (found === "dir" && present(join(dotGit, "HEAD"))) return withJj({ workTree: dir, gitDir: dotGit, commonDir: dotGit });
     if (found === "file") {
       const target = /^gitdir: (.+)$/m.exec(read(dotGit))?.[1]?.trim();
       const gitDir = target ? resolve(dir, target) : undefined;
       if (!gitDir || !present(join(gitDir, "HEAD"))) return undefined;
       const linked = basename(dirname(gitDir)) === "worktrees" && present(join(gitDir, "commondir"));
-      return { workTree: dir, gitDir, commonDir: linked ? dirname(dirname(gitDir)) : gitDir };
+      return withJj({ workTree: dir, gitDir, commonDir: linked ? dirname(dirname(gitDir)) : gitDir });
     }
     if (dir === dirname(dir)) return undefined;
   }
+}
+
+/**
+ * The jj repository folder of the workspace at `workTree`: its `.jj/repo`
+ * folder, or the one a secondary workspace's `.jj/repo` file names.
+ */
+export function jjRepository(workTree: string): string | undefined {
+  const pointer = join(workTree, ".jj", "repo");
+  const found = kind(pointer);
+  const repo = found === "dir" ? pointer : found === "file" && read(pointer).trim() ? resolve(dirname(pointer), read(pointer).trim()) : undefined;
+  return repo && kind(repo) === "dir" ? repo : undefined;
+}
+const withJj = (layout: Layout): Layout => {
+  const jj = jjRepository(layout.workTree);
+  return jj ? { ...layout, jj } : layout;
+};
+
+const canonical = (path: string) => { try { return realpathSync(path); } catch { return resolve(path); } };
+
+/**
+ * Why host jj must not run in `layout`'s workspace, if it must not. jj keeps
+ * a repository's config in the user's config folder, under the ID in the
+ * repository's `config-id`, but where that file is missing it adopts the
+ * repository's own `config.toml`, programs and all, the next time it runs:
+ * a sandbox guest could write one. And jj follows `store/git_target` to the
+ * Git repository it reads and writes, which must be this checkout's.
+ */
+export function jjRefusal(layout: Layout): string | undefined {
+  const repo = layout.jj;
+  if (!repo) return `${layout.workTree} is not a jj workspace`;
+  if (present(join(repo, "config.toml")) && !present(join(repo, "config-id"))) {
+    return `jj would adopt ${join(repo, "config.toml")} as this repository's config. Check it, then run jj there yourself`;
+  }
+  const target = read(join(repo, "store", "git_target")).trim();
+  if (!target || canonical(resolve(repo, "store", target)) !== canonical(layout.commonDir)) {
+    return `The jj repository ${repo} is not backed by this checkout's Git repository ${layout.commonDir}`;
+  }
+  return undefined;
 }
 
 // One per process, shared by every extension instance and kept across session switches.

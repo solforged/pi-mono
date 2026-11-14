@@ -118,6 +118,6 @@ conflict there, it stays and the report says how to move it.
 `remove` removes a workspace whose `@` is empty with `jj workspace remove`,
 which also removes its Git worktree and folder. Its commits stay in the
 repository, visible in `jj log`, and the report counts those the main
-workspace lacks. jj runs on the host with `-R` naming the workspace; it reads
-repository and workspace config from your config folder, not the working
-tree.
+workspace lacks. jj runs on the host with `-R` naming the workspace, and not
+where a sandbox guest could have handed it config or another Git repository;
+see [Git on the host](sandbox.md#git-on-the-host).

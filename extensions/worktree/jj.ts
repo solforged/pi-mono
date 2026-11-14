@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { realpathSync, statSync } from "node:fs";
 import { mkdir, realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { trustedLayout } from "../sandbox/hostgit.ts";
+import { jjRefusal, trustedLayout } from "../sandbox/hostgit.ts";
 import { exists, git, slugify, trustMise, worktreeRoot, type Checkout, type Created, type Landed, type Run, type Worktree } from "./git.ts";
 
 const isDir = (path: string) => { try { return statSync(path).isDirectory(); } catch { return false; } };
@@ -20,15 +20,17 @@ export function jjRoot(cwd: string): string | undefined {
 }
 
 /**
- * Runs jj in the workspace that holds `cwd`, named with -R so jj does not
- * search: the one Git's pinned layout points at while the sandbox is on.
- * jj keeps repository and workspace config in the user's config folder, so
- * nothing in the working tree names a program for it to run.
+ * Runs jj in the colocated workspace that holds `cwd`, named with -R so jj
+ * does not search: the one Git's pinned layout points at while the sandbox
+ * is on. It refuses where jj would take config from the working tree or act
+ * on another Git repository (see `jjRefusal`).
  */
 export const jj: Run = (args, cwd) => new Promise((done, fail) => {
-  const top = trustedLayout(cwd)?.workTree;
-  const repo = top && isDir(join(top, ".jj")) ? ["-R", top] : [];
-  execFile("jj", ["--no-pager", "--color=never", ...repo, ...args], { cwd, encoding: "utf8", timeout: 60_000, maxBuffer: 16 * 1024 * 1024 },
+  const layout = trustedLayout(cwd);
+  if (!layout?.jj) return fail(new Error(`${cwd} is not in a colocated jj workspace`));
+  const refusal = jjRefusal(layout);
+  if (refusal) return fail(new Error(refusal));
+  execFile("jj", ["--no-pager", "--color=never", "-R", layout.workTree, ...args], { cwd, encoding: "utf8", timeout: 60_000, maxBuffer: 16 * 1024 * 1024 },
     (error, stdout, stderr) => error ? fail(new Error((stderr || error.message).trim())) : done(stdout.replace(/\n+$/, "")));
 });
 

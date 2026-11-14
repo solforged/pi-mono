@@ -1,13 +1,11 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   backoff, borderLabel, branchLabel, displayPath, fitSegments, formatCost, formatTokens, icons, jjLabel, layout, parseGitStatus, parseJj, readContribution, rightStatuses, sessionStats,
   modelLabel, plainText, thinkingColor, thinkingIcon, worktreeHome, CACHE_SHOWN_BELOW, JJ_TEMPLATE, SEGMENT_EVENT, type Contribution, type Git, type Jj, type Segment, type Stats,
 } from "./format.ts";
-import { hostGit, trustedLayout } from "../sandbox/hostgit.ts";
+import { hostGit, jjRefusal, trustedLayout } from "../sandbox/hostgit.ts";
 import { dropEditorFeature, useEditorFeature, type FeatureFactory } from "../shared/editor.ts";
 
 const POLL_MS = 10_000; // Catches changes made outside Pi.
@@ -60,11 +58,11 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
   // A colocated jj workspace: jj names the work, Git still counts the changed files.
   // --ignore-working-copy keeps the poll from snapshotting, which would record an
   // operation every time; jj commands the agent runs snapshot anyway.
-  const jjTop = repo && existsSync(join(repo.workTree, ".jj")) ? repo.workTree : undefined;
+  // It runs only where /wt's jj would (see jjRefusal), checked before each call.
   let jj: Jj | undefined;
   const describe = () => new Promise<string | undefined>((resolve) => {
-    if (!jjTop) return resolve(undefined);
-    execFile("jj", ["--no-pager", "--color=never", "--ignore-working-copy", "-R", jjTop, "log", "--no-graph", "-r", "@", "-T", JJ_TEMPLATE],
+    if (!repo?.jj || jjRefusal(repo)) return resolve(undefined);
+    execFile("jj", ["--no-pager", "--color=never", "--ignore-working-copy", "-R", repo.workTree, "log", "--no-graph", "-r", "@", "-T", JJ_TEMPLATE],
       { cwd, timeout: 5000, encoding: "utf8" }, (error, stdout) => resolve(error ? undefined : stdout));
   });
   let running = false, again = false, closed = false;

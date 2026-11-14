@@ -2,6 +2,7 @@
 // jj workspaces in a colocated jj repository. See docs/worktree.md.
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { jjRefusal, trustedLayout } from "../sandbox/hostgit.ts";
 import * as G from "./git.ts";
 import * as J from "./jj.ts";
 import type { Checkout, Run } from "./git.ts";
@@ -12,25 +13,31 @@ const canonical = (path: string) => { try { return realpathSync(path); } catch {
 
 /**
  * The checkout containing `cwd`. A jj workspace counts only where it is also
- * the Git checkout's root, that is, colocated; elsewhere, see `uncolocated`.
+ * the Git checkout's root, that is, colocated, and was there when the sandbox
+ * started, if it is on; one that jj must not run in counts as none. See
+ * `unsupported` for why.
  */
 export async function inspect(cwd: string, run = G.git, vcs = J.jj): Promise<Checkout | undefined> {
-  const root = J.jjRoot(cwd);
   const checkout = await G.inspect(cwd, run);
-  if (!root) return checkout;
   if (!checkout) return undefined;
   const top = canonical(checkout.top);
-  // A Git repository inside a jj workspace is just Git; a jj workspace inside a Git repository is not colocated.
-  if (root !== top) return G.inside(root, top) ? checkout : undefined;
-  return J.inspectJj(checkout, vcs).catch(() => checkout);
+  const layout = trustedLayout(cwd);
+  if (layout?.jj && canonical(layout.workTree) === top) return jjRefusal(layout) ? undefined : J.inspectJj(checkout, vcs).catch(() => checkout);
+  // A jj workspace inside a Git checkout is not colocated.
+  const root = J.jjRoot(cwd);
+  if (root && root !== top && G.inside(top, root)) return undefined;
+  return checkout;
 }
 
-/** Why /wt does not work at `cwd` when it is in a jj workspace without its own Git checkout. */
-export async function uncolocated(cwd: string, run = G.git): Promise<string | undefined> {
+/** Why /wt does not work at `cwd`, when that is about jj: a workspace without its own Git checkout, or one jj must not run in. */
+export async function unsupported(cwd: string, run = G.git): Promise<string | undefined> {
   const root = J.jjRoot(cwd);
   if (!root) return undefined;
   const top = await run(["rev-parse", "--path-format=absolute", "--show-toplevel"], cwd).catch(() => "");
-  if (top && canonical(top) === root) return undefined;
+  if (top && canonical(top) === root) {
+    const layout = trustedLayout(cwd);
+    return layout?.jj ? jjRefusal(layout) : undefined;
+  }
   if (top && G.inside(root, canonical(top))) return undefined;
   return `${root} is a jj workspace without its own Git checkout. /wt needs a colocated repository: run jj git colocation enable in the main workspace, and add workspaces with --colocate.`;
 }

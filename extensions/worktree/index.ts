@@ -8,7 +8,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { report as say } from "../shared/context.ts";
-import { create, dirty, editsMainCheckout, followTitle, git as run, inside, inspect, land, owner, remove, slugify, uncolocated, unit, worktreeRoot, worktrees, type Checkout, type Created } from "./vcs.ts";
+import { create, dirty, editsMainCheckout, followTitle, git as run, inside, inspect, land, owner, remove, slugify, unsupported, unit, worktreeRoot, worktrees, type Checkout, type Created } from "./vcs.ts";
 import { copyIncluded, INCLUDE_FILE } from "./include.ts";
 import { relocate, repositorySessionDirs, sessionChoices, type Listed } from "./session.ts";
 
@@ -24,7 +24,7 @@ export default function (pi: ExtensionAPI) {
   // Rex and workflow children already run in worker worktrees chosen by their parent.
   if (process.env.PI_REX_CHILD || process.env.PI_WORKFLOW_CHILD_CONFIG) return;
   let checkout: Checkout | undefined;
-  let unsupported: string | undefined; // Why a jj workspace here gets no worktrees.
+  let blocked: string | undefined; // Why a jj workspace here gets no worktrees.
   let pending: Prepared | undefined;
   let warned: string | undefined; // The assistant message whose edits were turned back.
 
@@ -46,7 +46,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     pending = undefined; warned = undefined;
     checkout = await inspect(ctx.cwd, run);
-    unsupported = checkout ? undefined : await uncolocated(ctx.cwd, run);
+    blocked = checkout ? undefined : await unsupported(ctx.cwd, run);
     offer(!!checkout && !checkout.linked && !!ctx.sessionManager.getSessionFile());
     await follow(ctx);
     await stray(ctx);
@@ -65,7 +65,7 @@ export default function (pi: ExtensionAPI) {
 
   async function prepare(ctx: ExtensionContext, name?: string): Promise<Prepared> {
     if (pending) return pending;
-    if (!checkout) throw new Error(unsupported ?? "Not in a Git repository with a working tree");
+    if (!checkout) throw new Error(blocked ?? "Not in a Git repository with a working tree");
     if (checkout.linked) throw new Error(`Already in the linked worktree ${checkout.top}`);
     if (!ctx.sessionManager.getSessionFile()) throw new Error("This session has no file (--no-session), so it cannot move");
     const id = ctx.sessionManager.getSessionId();
@@ -186,7 +186,7 @@ export default function (pi: ExtensionAPI) {
 
   /** Sessions working in the repository's other checkouts, by the cwd in their headers. */
   async function resume(ctx: ExtensionCommandContext) {
-    if (!checkout) throw new Error(unsupported ?? "Not in a Git repository with a working tree");
+    if (!checkout) throw new Error(blocked ?? "Not in a Git repository with a working tree");
     const all = (await worktrees(checkout, run)).filter((tree) => !tree.bare);
     const here = resolve(checkout.top);
     const found: Listed[] = [];
@@ -270,7 +270,7 @@ export default function (pi: ExtensionAPI) {
         if (action === "land") return await landHere(ctx, rest[0]);
         if (action === "resume") return await resume(ctx);
         if (action !== "status") return say(ctx, USAGE, "warning");
-        if (!checkout) return say(ctx, unsupported ?? "Not in a Git repository with a working tree.");
+        if (!checkout) return say(ctx, blocked ?? "Not in a Git repository with a working tree.");
         if (checkout.vcs === "jj") return say(ctx, checkout.linked
           ? `jj workspace ${checkout.branch ?? "(unnamed)"} at ${checkout.top}; main workspace ${checkout.main}.`
           : `Main jj workspace ${checkout.top}. New workspaces go in ${worktreeRoot()}.`);

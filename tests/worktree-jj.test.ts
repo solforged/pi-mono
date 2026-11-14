@@ -5,7 +5,7 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
-import { create, dirty, followTitle, inspect, land, remove, uncolocated, worktrees } from "../extensions/worktree/vcs.ts";
+import { create, dirty, followTitle, inspect, land, remove, unsupported, worktrees } from "../extensions/worktree/vcs.ts";
 import { sessionBucket } from "../extensions/worktree/session.ts";
 import { root, temporary } from "./helpers.ts";
 
@@ -65,8 +65,8 @@ test("a colocated jj repository gets workspaces named pi/<slug> beside the main 
   const plain = join(dir, "plain");
   jj(dir, "git", "init", "--no-colocate", plain);
   assert.equal(await inspect(plain), undefined);
-  assert.match((await uncolocated(plain))!, /without its own Git checkout.*jj git colocation enable/);
-  assert.equal(await uncolocated(main), undefined);
+  assert.match((await unsupported(plain))!, /without its own Git checkout.*jj git colocation enable/);
+  assert.equal(await unsupported(main), undefined);
 });
 
 test("landing moves the main workspace's bookmark, rebasing when it moved on and undoing conflicts", { skip: missing && "jj is not installed" }, async (t) => {
@@ -169,4 +169,24 @@ test("Pi moves a session into a jj workspace and lands it", { skip: (missing && 
   assert.deepEqual(log(main, "::main ~ root()").split("\n"), ["feat: made", "feat: b.txt", "chore: init"]);
   assert.ok(!existsSync(path));
   assert.ok(existsSync(join(main, "made.txt")));
+});
+
+test("host jj refuses a repository that would hand it a planted config or another Git repository", { skip: missing && "jj is not installed" }, async (t) => {
+  const { dir, main, wt } = await repo(t);
+  const made = await create((await inspect(main))!, "trap", "s1", { root: wt, trust: noTrust });
+  const marker = join(dir, "ran"), trap = join(dir, "trap.sh");
+  writeFileSync(trap, `#!/bin/sh\necho ran >> ${marker}\nexit 1\n`, { mode: 0o755 });
+  const repoDir = join(main, ".jj", "repo");
+  // A guest drops the config ID and plants config that would run its program on the next commit.
+  rmSync(join(repoDir, "config-id"), { force: true });
+  rmSync(join(repoDir, "config.toml"), { force: true });
+  writeFileSync(join(repoDir, "config.toml"), `[signing]\nbehavior = "force"\nbackend = "gpg"\n[signing.backends.gpg]\nprogram = "${trap}"\n`);
+  for (const cwd of [main, made.path]) {
+    assert.equal(await inspect(cwd), undefined);
+    assert.match((await unsupported(cwd))!, /would adopt .*config\.toml/);
+  }
+  await writeFile(join(made.path, "x.txt"), "x\n");
+  await assert.rejects(dirty({ vcs: "jj", top: made.path, main, repo: "proj", linked: true, branch: made.branch }), /would adopt/);
+  assert.ok(!existsSync(marker), "the planted program never ran");
+  assert.ok(!existsSync(join(repoDir, "config-id")), "jj was never asked to adopt it");
 });

@@ -94,6 +94,19 @@ test("a worktree mounts its Git metadata and guards config, hooks, and its .git 
   assert.equal(plan.env.LLM_WIKI_DIR, undefined);
 });
 
+test("jj workspaces get their repository pointer, config ID, and Git target guarded", () => {
+  const worktree = "/Users/me/.pi/wt/app--task", main = "/Users/me/src/app";
+  const linked = buildPlan(probe({ [`${worktree}/.git`]: "file", [`${worktree}/.jj`]: "dir", [`${worktree}/.jj/repo`]: "file" }, { root: worktree, wikiDir: undefined }), DEFAULTS, "img");
+  assert(linked.readOnlyPaths.includes(`${worktree}/.jj/repo`));
+  const plan = buildPlan(probe({
+    [`${main}/.git`]: "dir", [`${main}/.jj`]: "dir", [`${main}/.jj/repo`]: "dir", [`${main}/.jj/repo/config-id`]: "file", [`${main}/.jj/repo/store/git_target`]: "file",
+  }, { wikiDir: undefined }), DEFAULTS, "img");
+  for (const path of ["config-id", "store/git_target"]) assert(plan.readOnlyPaths.includes(`${main}/.jj/repo/${path}`), path);
+  // Missing files cannot be read-only; host jj refuses a config.toml without a config-id instead.
+  const fresh = buildPlan(probe({ [`${main}/.git`]: "dir", [`${main}/.jj/repo`]: "dir" }, { wikiDir: undefined }), DEFAULTS, "img");
+  assert(!fresh.readOnlyPaths.some((path) => path.includes(".jj")));
+});
+
 test("a Git directory with guarded files is a mount of its own, so the guest cannot rename it away", () => {
   // A read-only path protects only itself: `mv .git old && mkdir .git` would leave the guards behind.
   const git = "/Users/me/src/app/.git", wiki = "/Users/me/.local/share/wiki";

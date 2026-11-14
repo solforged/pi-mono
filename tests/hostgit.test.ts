@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { findLayout, hostGit, NO_REPOSITORY, pinLayout, submoduleNames, trustedLayout } from "../extensions/sandbox/hostgit.ts";
+import { findLayout, hostGit, jjRefusal, NO_REPOSITORY, pinLayout, submoduleNames, trustedLayout } from "../extensions/sandbox/hostgit.ts";
 import { temporary } from "./helpers.ts";
 
 const base = {
@@ -157,4 +157,25 @@ test("while the sandbox is on, host Git keeps to the repository found first", as
   assert.equal(hostGit(empty, ["status"], on).env.GIT_DIR, NO_REPOSITORY);
   assert.throws(() => safe(empty, ["status"], on), /not a git repository/);
   assert.equal(safe(empty, ["rev-parse", "--is-inside-work-tree"]).trim(), "true");
+});
+
+test("a colocated jj workspace is part of the layout, pinned like the rest", async (t) => {
+  const { repo } = await fixture(t);
+  const on = { ...base, PI_SANDBOX: "on" };
+  assert.equal(pinLayout(repo)?.jj, undefined);
+  // The guest makes a jj repository after the sandbox started.
+  mkdirSync(join(repo, ".jj", "repo", "store"), { recursive: true });
+  writeFileSync(join(repo, ".jj", "repo", "store", "git_target"), "../../../.git");
+  assert.equal(trustedLayout(repo, on)?.jj, undefined);
+  const layout = findLayout(repo)!;
+  assert.equal(layout.jj, join(repo, ".jj", "repo"));
+  assert.equal(jjRefusal(layout), undefined);
+  // jj would adopt a config.toml as the repository's config where there is no config-id.
+  writeFileSync(join(repo, ".jj", "repo", "config.toml"), "[ui]\npager = \"/tmp/x\"\n");
+  assert.match(jjRefusal(layout)!, /would adopt .*config\.toml/);
+  writeFileSync(join(repo, ".jj", "repo", "config-id"), "0123456789abcdef0123");
+  assert.equal(jjRefusal(layout), undefined);
+  // Its Git target must be this checkout's repository.
+  writeFileSync(join(repo, ".jj", "repo", "store", "git_target"), "/elsewhere/.git");
+  assert.match(jjRefusal(layout)!, /not backed by this checkout's Git repository/);
 });

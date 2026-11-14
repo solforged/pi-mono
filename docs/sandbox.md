@@ -72,6 +72,8 @@ files, which point Git at another config, are read-only too, and a repository
 that reads `config.worktree` gets an empty one where it has none. A read-only
 path protects only itself, so each Git directory with guarded files is a mount
 of its own: the guest cannot rename `.git` away and put another in its place.
+In a colocated jj workspace, a secondary workspace's `.jj/repo` file and the
+repository's `config-id` and `store/git_target` are read-only as well.
 `node_modules`, `target`, and `.venv` are replaced by
 Linux-only directories per worktree when `package.json`, `Cargo.toml`, or
 `pyproject.toml` exists, so host and guest builds never mix. The wiki's `bin/`
@@ -108,6 +110,16 @@ workers' worktrees and `git_commit`) do not ask the repository:
 
 The first and last hold with the sandbox off too, so what a guest left behind
 does not run once you switch.
+
+In a colocated jj repository, `/wt` and the status line run jj on the host the
+same way: named with `-R`, only in a jj repository that was there when the
+session started if the sandbox is on, and not at all where jj would act on
+what the guest left. jj keeps a repository's config in your config folder,
+under the ID in its `config-id`, but where that file is missing it adopts the
+repository's own `config.toml`, programs and all, the next time it runs; and
+`store/git_target` names the Git repository it reads and writes. So host jj
+refuses a `config.toml` without a `config-id`, and a Git target other than the
+checkout's own repository. Like the rest, this holds with the sandbox off.
 
 With the sandbox off, host bash in a linked Git worktree whose root has a
 `Cargo.toml` sets `CARGO_TARGET_DIR` to the main checkout's `target/`, so
@@ -215,11 +227,9 @@ repository the guest created is trusted from the next Pi start, and in a
 linked worktree of a repository that reads `config.worktree`, the guest can
 replace that file.
 
-In a colocated jj repository, `/wt` and the status line also run jj on the
-host. jj reads repository and workspace config from your config folder, so
-the working tree names no program for it, but the `.jj` folder is not
-guarded: a guest can rewrite a workspace's `.jj/repo` file, which says where
-its repository is.
+The jj checks cover these extensions' calls too. jj you run yourself in a
+repository where the guest removed `config-id` and left a `config.toml` adopts
+that config, so look in `.jj/repo` before running jj where a guest worked.
 
 The browser is Chromium on the host, rendering pages the guest serves. It is
 as exposed to them as to any website, with its own profile.

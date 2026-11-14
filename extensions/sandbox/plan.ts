@@ -136,10 +136,11 @@ export function buildPlan(probe: Probe, settings: Settings, image: string): Plan
     mounts.push({ source, target: join(wiki, "bin"), readonly: false, label: "Linux wiki binary" });
   }
 
-  // Host Git and Pi act on these without the user running anything, so the
+  // Host Git, jj and Pi act on these without the user running anything, so the
   // guest must not be able to change them: repository config and hooks, the
   // files that point Git at another config (`commondir`, `config.worktree`),
-  // a linked worktree's .git pointer, and project Pi resources.
+  // a linked worktree's .git pointer, a jj workspace's pointers, and project
+  // Pi resources.
   const readOnlyPaths: string[] = [];
   const hostFiles: string[] = [];
   const writable = (path: string) => mounts.some((m) => !m.readonly && m.target === m.source && isInside(m.target, path))
@@ -171,6 +172,15 @@ export function buildPlan(probe: Probe, settings: Settings, image: string): Plan
     const kind = probe.kind(dotGit);
     if (kind === "file") guard(dotGit);
     else if (kind === "dir" && dotGit !== probe.commonDir) guardGitDir(dotGit);
+    // A secondary jj workspace's `.jj/repo` file names its repository; a
+    // repository's `config-id` names its config in the user's config folder,
+    // and `store/git_target` its Git repository. Host jj also refuses when
+    // these are off (jjRefusal in hostgit.ts), which covers a guest that
+    // renames the folders above them.
+    const jjRepo = join(mount.source, ".jj", "repo");
+    const jjKind = probe.kind(jjRepo);
+    if (jjKind === "file") guard(jjRepo);
+    else if (jjKind === "dir") for (const name of ["config-id", "store/git_target"]) if (probe.kind(join(jjRepo, name)) === "file") guard(join(jjRepo, name));
     // The project's .pi/ is created when missing, like hooks: Pi trusts by
     // folder, so a guest that could add one would run code in the next host Pi.
     const dotPi = join(mount.source, ".pi");
