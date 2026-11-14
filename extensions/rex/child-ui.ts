@@ -6,12 +6,16 @@ import { registerChild } from "./child.ts";
 import { RexClient } from "./client.ts";
 import { installLeftArrow } from "./left-editor.ts";
 import { displayTaskPrompt, OPENED, validateManifest, type Manifest } from "./protocol.ts";
+import { percent } from "../shared/status.ts";
+import { registerProgressStatus } from "./status.ts";
 import { setTitlePrefix } from "./title.ts";
 import { childFooter } from "./ui.ts";
 
 /** Child presentation only. Policy stays in child.ts and is unaffected by display. */
 export function registerChildUi(pi: ExtensionAPI, manifestPath: string) {
   let agent = "child", label = "child";
+  // Rex shows the pane's progress on its tab and in Activity; Pi's own reports carry it.
+  const setProgress = registerProgressStatus();
   registerChild(pi, manifestPath, (ctx: ExtensionContext, m: Manifest) => {
     agent = m.agent ?? agent; label = m.name ?? agent;
     if (ctx.mode !== "tui") return;
@@ -22,12 +26,12 @@ export function registerChildUi(pi: ExtensionAPI, manifestPath: string) {
     ctx.ui.setHeader((_tui, theme) => ({
       render: (width: number) => [
         truncateToWidth(`${m.mark ? `${m.mark} ` : ""}${theme.fg("accent", theme.bold(`${m.name ?? "Rex"} · ${agent}`))} ${theme.fg("dim", `· ${m.role.provider}/${m.role.model} · ${cwd}`)}`, width),
-        truncateToWidth(theme.fg("dim", `Managed by the parent agent · ← on an empty prompt returns to it · approvals answer here · /take when idle · tools: ${m.tools.join(", ")}`), width),
+        truncateToWidth(theme.fg("dim", `Working for the parent · type here to steer it or start a follow-up · ← on an empty prompt returns to the parent · tools: ${m.tools.join(", ")}`), width),
       ],
       invalidate() {},
     }));
     // One line instead of Pi's three: the pane label already names the child,
-    // task, cwd and branch, and a deck slot is only ~20 rows tall.
+    // task, cwd and branch, and a cell in a full Agents tab is only ~20 rows tall.
     ctx.ui.setFooter((tui, theme, footerData) => {
       const off = footerData.onBranchChange(() => tui.requestRender());
       let totals: { key: string; input: number; output: number; cost: number } | undefined;
@@ -54,16 +58,16 @@ export function registerChildUi(pi: ExtensionAPI, manifestPath: string) {
         },
       };
     });
-  });
+  }, progress => setProgress(percent(progress)));
   // ← on an empty prompt goes back to the parent pane, whoever owns the child now:
-  // the round trip for the parent hub's "open". Display only; no protocol message.
+  // the round trip for the parent's ←. Display only; no protocol message.
   pi.on("session_start", async (_event, ctx) => {
     if (ctx.mode !== "tui" || !process.env.REX_BLOCK) return;
     let m: Manifest;
     try { m = validateManifest(JSON.parse(await readFile(manifestPath, "utf8")), true); } catch { return; }
     const self = process.env.REX_BLOCK, rex = new RexClient(), marker = join(m.dir, OPENED);
     const back = async () => {
-      // Only a float the parent's hub recorded is undone; the marker is consumed either way.
+      // Only a float the parent recorded is undone; the marker is consumed either way.
       let layer: string | undefined;
       try { const opened = JSON.parse(await readFile(marker, "utf8")); if (opened.block === self && typeof opened.layer === "string") layer = opened.layer; } catch {}
       await rex.returnTo(m.rexSession, self, m.parentBlock, layer, AbortSignal.timeout(10_000));

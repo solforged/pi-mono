@@ -1,30 +1,26 @@
 // Pure presentation helpers: no Pi imports, so the regression suite can load them.
 import { headingRule, type Measure } from "../shared/rule.ts";
 import type { Run, TaskRun } from "./runner.ts";
+import { duration, fraction, glyph, money, oneLine, STATES, type State, type Theme, type Tone } from "../shared/status.ts";
+export { duration, money, oneLine } from "../shared/status.ts";
 
-export type PickAction = "open" | "spotlight" | "zoom" | "focus" | "grid" | "park" | "auto" | "message" | "result" | "take" | "cancel" | "close";
-type Tone = "accent" | "success" | "error" | "warning" | "muted" | "dim" | "borderMuted";
-type Theme = { fg(tone: Tone, text: string): string; bold?(text: string): string };
+export type PickAction = "open" | "message" | "result" | "take" | "cancel" | "close";
 export type Group = "attention" | "running" | "done" | "failed" | "idle" | "yours";
 export interface Row {
-  id: string; name: string; pinned: boolean; group: Group; glyph: string; tone: Tone; agent: string; title: string; state: string;
+  id: string; name: string; group: Group; glyph: string; tone: Tone; agent: string; title: string; state: string;
   /** Settled usage plus the running task's live cost, in dollars. */
   cost: number;
   /** Elapsed time of the running task. */
   elapsedMs?: number;
+  /** How far along the running task is, from the child's todo list. */
+  progress?: { done: number; total: number };
 }
 
-/** Opens the agent hub from anywhere; ← on an empty prompt does too. */
+/** Jumps to the child that most needs a look, from anywhere; ← on an empty prompt does too. */
 export const SHORTCUT = "ctrl+shift+a";
 const ORDER: Group[] = ["attention", "running", "failed", "done", "idle", "yours"];
-const STYLE: Record<Group, [string, Tone]> = {
-  attention: ["!", "warning"], running: ["●", "accent"], failed: ["✗", "error"], done: ["✓", "success"], idle: ["○", "muted"], yours: ["◆", "muted"],
-};
-
-export const oneLine = (text: string, max: number) => {
-  const line = text.replace(/\s+/g, " ").trim();
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
-};
+/** Groups in the shared status vocabulary. */
+const STATE: Record<Group, State> = { attention: "attention", running: "working", failed: "failed", done: "done", idle: "idle", yours: "yours" };
 
 /** Children needing the user first, then active work, then finished. Closed children are hidden. */
 export const taskCost = (task: TaskRun) => task.usageKnown ? task.usage.cost.total : task.liveCost ?? 0;
@@ -39,62 +35,54 @@ export function rows(runs: Iterable<Run>, tasks: Map<string, TaskRun>, now = Dat
     else if (last?.status === "succeeded") { group = "done"; state = "done"; }
     else if (last?.status === "failed" || last?.status === "cancelled") { group = "failed"; state = last.status; }
     if (run.owner === "retired" && group !== "attention") state += ", retired";
-    const [glyph, tone] = STYLE[group];
+    const [mark, tone] = STATES[STATE[group]];
     const active = run.activeTask ? tasks.get(run.activeTask) : undefined;
     const cost = run.taskIds.reduce((sum, id) => { const t = tasks.get(id); return sum + (t ? taskCost(t) : 0); }, 0);
-    return { id: run.id, name: run.name, pinned: !!run.pinned, group, glyph, tone, agent: run.agent, title: oneLine(last?.title ?? last?.task ?? "starting", 48), state,
-      cost, ...(active ? { elapsedMs: Math.max(0, now - active.started) } : {}) };
+    return { id: run.id, name: run.name, group, glyph: mark, tone, agent: run.agent, title: oneLine(last?.title ?? last?.task ?? "starting", 48), state,
+      cost, ...(active ? { elapsedMs: Math.max(0, now - active.started) } : {}), ...(active?.progress ? { progress: active.progress } : {}) };
   }).sort((a, b) => ORDER.indexOf(a.group) - ORDER.indexOf(b.group));
 }
 
 /**
  * One heading rule at any scale, in the editor's style: names grouped by state
- * on the left, cost and the hub key on the right, e.g.
- * `─ Agents  ! oak needs you  ● birch cedar  ✓ fern ──── $0.42 · ← open ─`.
+ * with progress on the left, cost and the ← key on the right, e.g.
+ * `─ Agents  ! oak needs you  ● birch 3/5 cedar  ✓ fern ──── $0.42 · ← open ─`.
  */
 export function widgetLine(items: Row[], theme: Theme, m: Measure, width: number) {
   const groups = ORDER.map(group => {
-    const names = items.filter(r => r.group === group).map(r => r.name);
+    const names = items.filter(r => r.group === group).map(r => r.progress ? `${r.name} ${theme.fg("dim", fraction(r.progress))}` : r.name);
     if (!names.length) return "";
-    const [glyph, tone] = STYLE[group];
-    return `${theme.fg(tone, glyph)} ${names.join(" ")}${group === "attention" ? theme.fg("warning", " needs you") : ""}`;
+    return `${glyph(STATE[group], theme)} ${names.join(" ")}${group === "attention" ? theme.fg("warning", " needs you") : ""}`;
   }).filter(Boolean);
   const total = items.reduce((sum, r) => sum + r.cost, 0);
   const title = theme.fg("accent", theme.bold ? theme.bold("Agents") : "Agents");
   const facts = `${total ? `${theme.fg("muted", money(total))}${theme.fg("dim", " · ")}` : ""}${theme.fg("muted", "←")} ${theme.fg("dim", "open")}`;
   return headingRule(m, width, [title, ...groups].join("  "), facts, s => theme.fg("borderMuted", s));
 }
-export const money = (dollars: number) => `$${dollars < 10 ? dollars.toFixed(2) : dollars.toFixed(1)}`;
-/** Plain-text roster/strip line: `● alpha   scout  read docs/x.md   2m10s  $0.18  Find auth entry points`. */
-export function activityLine(r: Row) {
-  const time = r.elapsedMs !== undefined ? duration(r.elapsedMs) : "";
-  return `${r.glyph}${r.pinned ? "▪" : " "}${r.name.padEnd(13)}${r.agent.padEnd(8)}${oneLine(r.state, 34).padEnd(36)}${time.padStart(6)}  ${(r.cost ? money(r.cost) : "").padStart(6)}  ${r.title}`;
+/** Model-facing listing line: `birch · scout · read docs/x.md · 3/5 · managed`. */
+export function listLine(r: Row, owner: string) {
+  return [r.name, r.agent, r.state, fraction(r.progress), owner].filter(Boolean).join(" · ");
 }
 
 /** A JSON-safe snapshot for tool details; never a live TaskRun reference. */
 export interface TaskMeta {
   name: string; agent: string; childId: string; taskId: string; title: string; status: TaskRun["status"];
   elapsedMs: number; tokens?: number; background: boolean;
+  /** The user typed the task into the child's pane. */
+  fromUser?: boolean;
 }
 export function taskMeta(run: Run, task: TaskRun): TaskMeta {
   return { name: run.name, agent: run.agent, childId: run.id, taskId: task.id, title: oneLine(task.title ?? task.task, 72), status: task.status,
-    elapsedMs: task.elapsedMs, tokens: task.usageKnown ? task.usage.totalTokens : undefined, background: task.background };
+    elapsedMs: task.elapsedMs, tokens: task.usageKnown ? task.usage.totalTokens : undefined, background: task.background, ...(task.from === "user" ? { fromUser: true } : {}) };
 }
-const GLYPHS: Record<string, [string, Tone]> = {
-  starting: ["◌", "dim"], running: ["●", "accent"], succeeded: ["✓", "success"], failed: ["✗", "error"], cancelled: ["–", "warning"],
-};
+const TASK_STATES: Record<TaskRun["status"], State> = { starting: "starting", running: "working", succeeded: "done", failed: "failed", cancelled: "cancelled" };
 const compact = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
-export function duration(ms: number) {
-  const s = Math.round(ms / 1000);
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
-}
 /** One-line task status: `✓ birch scout · succeeded · 18s · 2.5k tok`. */
 export function taskLine(meta: TaskMeta, theme: Theme) {
-  const [glyph, tone] = GLYPHS[meta.status] ?? ["?", "muted"];
   const running = meta.status === "starting" || meta.status === "running";
   const state = running ? (meta.background ? "running in background" : "running") : meta.status;
-  const facts = [state, ...(running ? [] : [duration(meta.elapsedMs)]), ...(meta.tokens !== undefined ? [`${compact(meta.tokens)} tok`] : [])];
-  return `${theme.fg(tone, glyph)} ${meta.name} ${theme.fg("muted", `${meta.agent} · ${facts.join(" · ")}`)}`;
+  const facts = [state, ...(running ? [] : [duration(meta.elapsedMs)]), ...(meta.tokens !== undefined ? [`${compact(meta.tokens)} tok`] : []), ...(meta.fromUser ? ["typed by the user"] : [])];
+  return `${glyph(TASK_STATES[meta.status] ?? "idle", theme)} ${meta.name} ${theme.fg("muted", `${meta.agent} · ${facts.join(" · ")}`)}`;
 }
 /** Enough of a task ID to name it: rex_result and rex_send resolve a prefix. */
 export const shortId = (id: string) => id.slice(0, 8);
@@ -135,18 +123,22 @@ export function fitResults(sizes: number[], budget: number) {
   for (const size of sizes) { if (count && used + size > budget) break; used += size; count++; }
   return count;
 }
-/** Live status while rex_result waits: `waiting on 3 · alpha 2m10s · bravo 45s · charlie 3s`. */
-export function waitingLine(items: Array<{ name: string; elapsedMs: number }>) {
-  return `waiting on ${items.length}${items.map(i => ` · ${i.name} ${duration(i.elapsedMs)}`).join("")}`;
+/** Live status while rex_result waits: `waiting on 3 · alpha 3/5 2m10s · bravo 45s · charlie 3s`. */
+export function waitingLine(items: Array<{ name: string; elapsedMs: number; progress?: { done: number; total: number } }>) {
+  return `waiting on ${items.length}${items.map(i => ` · ${i.name} ${i.progress ? `${fraction(i.progress)} ` : ""}${duration(i.elapsedMs)}`).join("")}`;
 }
 /** Batched completion receipts: one line per finished task. */
 export function completionLines(items: TaskMeta[], theme: Theme) {
   return items.map(m => `${taskLine(m, theme)} ${theme.fg("dim", m.title)}`);
 }
 
-/** Deck priority: needs you > running > unread result > idle > human-owned. */
+/** Who gets a cell in a full Agents tab: needs you > working > unread result > idle > human-owned. */
 export function priority(row: Row, unread: boolean) {
   return row.group === "attention" ? 4 : row.group === "running" ? 3 : (row.group === "done" || row.group === "failed") && unread ? 2 : row.group === "yours" ? 0 : 1;
+}
+/** Where ← goes: needs you > a result to read > working > the rest. */
+export function urgency(row: Row, unread: boolean) {
+  return row.group === "attention" ? 4 : (row.group === "done" || row.group === "failed") && unread ? 3 : row.group === "running" ? 2 : row.group === "yours" ? 0 : 1;
 }
 
 /**
@@ -163,4 +155,24 @@ export function coalesce(fn: () => void, ms: number) {
     timer.unref?.();
   };
   return { call, stop() { stopped = true; clearTimeout(timer); } };
+}
+
+/**
+ * ← on an empty prompt jumps (to a child, or back to the parent). Right after
+ * the prompt was emptied (deleting text, leaving history) a first press only
+ * arms it, so a held backspace or ← cannot jump away by accident.
+ */
+export class LeftGate {
+  private editedAt = -Infinity;
+  private armedAt = -Infinity;
+  private readonly settleMs: number;
+  private readonly armMs: number;
+  constructor(settleMs = 1000, armMs = 2000) { this.settleMs = settleMs; this.armMs = armMs; }
+  /** After any other key the editor handled: did the prompt hold text before or after it? */
+  edited(hadText: boolean, now: number) { if (hadText) this.editedAt = now; this.armedAt = -Infinity; }
+  left(empty: boolean, now: number): "pass" | "arm" | "open" {
+    if (!empty) return "pass";
+    if (now - this.armedAt < this.armMs || now - this.editedAt >= this.settleMs) { this.armedAt = -Infinity; return "open"; }
+    this.armedAt = now; return "arm";
+  }
 }

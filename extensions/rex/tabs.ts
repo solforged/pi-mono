@@ -1,6 +1,6 @@
 // Ties the Agents tab to its parent's tab in Rex's tab bar. Rex has no tab
 // groups, so the link is order (the Agents tab sits right after the parent's)
-// and a compact child count. Like the deck, this never overrides the user:
+// and a compact child count. Like the grid, this never overrides the user:
 // once they move or rename the Agents tab, that aspect is left alone.
 
 type Obj = Record<string, any>;

@@ -1,6 +1,14 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { callLine, completionLines, splitResult, taskLine, type TaskMeta } from "./ui.ts";
+import { Container, Markdown, Spacer, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { callLine, completionLines, splitResult, taskLine, widgetLine, type Row, type TaskMeta } from "./ui.ts";
+
+/** The parent's one-line summary above the editor. */
+export function widget(items: Row[]) {
+  return (_tui: unknown, theme: any) => ({
+    render: (width: number) => [truncateToWidth(widgetLine(items, theme, { width: visibleWidth, truncate: truncateToWidth }, width), width)],
+    invalidate() {},
+  });
+}
 
 type Tool = "rex_agent" | "rex_send" | "rex_result";
 const textOf = (result: any) => (result?.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");

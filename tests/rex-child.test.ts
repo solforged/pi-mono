@@ -4,7 +4,8 @@ import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
-import { activity, registerChild } from "../extensions/rex/child.ts";
+import { activity, registerChild, todoProgress } from "../extensions/rex/child.ts";
+import { registerProgressStatus, withProgress } from "../extensions/rex/status.ts";
 import { claimOwner, readOwner, Frames, LEASE_MS, record, send, VERSION, type Manifest } from "../extensions/rex/protocol.ts";
 import { saveJson } from "../extensions/workflows/state.ts";
 import { config, root } from "./helpers.ts";
@@ -46,7 +47,8 @@ async function harness(t: any) {
     socket.on("data", chunk => frames.push(chunk, v => events.push(record(v))));
   });
   await new Promise<void>(resolve => server.listen(m.socket, resolve));
-  registerChild(pi, join(dir, "child.json"));
+  const progressed: unknown[] = [];
+  registerChild(pi, join(dir, "child.json"), () => {}, progress => progressed.push(progress));
   const until = async (predicate: () => unknown) => {
     const limit = performance.now() + 3000;
     while (!predicate()) { if (performance.now() > limit) throw new Error(`Timed out; events ${JSON.stringify(events)}; notices ${notices}`); await new Promise(resolve => setTimeout(resolve, 5)); }
@@ -70,7 +72,7 @@ async function harness(t: any) {
       stopReason: "stop", content: [{ type: "text", text: value }], usage: { input: 10, output: 20 } } });
   };
   const settle = async (taskId: string, aborted = false) => { await emit("agent_settled", { aborted }); await until(() => events.some(v => v.type === "result" && v.taskId === taskId)); };
-  return { m, ctx, pi, commands, events, prompts, messages, notices, emit, until, request, dispatch, answer, settle,
+  return { m, ctx, pi, commands, events, prompts, messages, notices, progressed, emit, until, request, dispatch, answer, settle,
     get peer() { return peer!; }, get aborts() { return aborts; }, get shutdowns() { return shutdowns; } };
 }
 
@@ -88,7 +90,6 @@ test("persistent child settles each task independently and retains full immutabl
   const second = await h.dispatch(); await h.answer("Second answer"); await h.settle(second);
   assert.equal(await readFile(file, "utf8"), original);
   assert.equal(h.events.find(v => v.type === "result" && v.taskId === second).usage.input, 10);
-  assert.deepEqual(await h.emit("input", { source: "interactive", text: "Another task" }), { action: "handled" });
   assert.deepEqual(await h.emit("cache_warming_decision"), { action: "stop" });
   assert.deepEqual(await h.emit("session_before_compact", { reason: "manual" }), { cancel: true });
 });
@@ -222,4 +223,69 @@ test("activity names the tool and its main argument on one bounded line", () => 
   assert.equal(activity("find", { path: "/repo" }, "/repo"), "find .");
   assert.equal(activity("read", { path: `${process.env.HOME}/notes.md` }, "/repo"), "read ~/notes.md");
   assert.equal(activity("bash", { command: "x".repeat(200) }).length, 80);
+});
+
+test("typing into a managed child steers its running task, or asks the parent to start a follow-up when idle", async t => {
+  const h = await harness(t), first = await h.dispatch();
+  // Running: Pi queues the text into the agent, inside the task the parent awaits.
+  assert.deepEqual(await h.emit("input", { source: "interactive", text: "Look at the tests too", streamingBehavior: "steer" }), { action: "continue" });
+  await h.answer(); await h.settle(first);
+  // Idle: the parent is asked to start it, once.
+  assert.deepEqual(await h.emit("input", { source: "interactive", text: "Now fix them" }), { action: "handled" });
+  await h.until(() => h.events.some(v => v.type === "request"));
+  const asked = h.events.find(v => v.type === "request");
+  assert.equal(asked.text, "Now fix them");
+  assert.deepEqual(await h.emit("input", { source: "interactive", text: "Again" }), { action: "handled" });
+  assert.equal(h.events.filter(v => v.type === "request").length, 1); assert.match(h.notices.at(-1)!, /already on its way/);
+  // The parent declines (say it just dispatched its own task): the user can type again.
+  send(h.peer, { id: h.m.id, type: "declined", requestId: asked.requestId, text: "Child is busy" });
+  await h.until(() => h.notices.some(v => /could not start your follow-up: Child is busy/.test(v)));
+  assert.deepEqual(await h.emit("input", { source: "interactive", text: "Now fix them" }), { action: "handled" });
+  await h.until(() => h.events.filter(v => v.type === "request").length === 2);
+  // The parent starts it: framed as the user's task.
+  const taskId = randomUUID(), requestId = h.request({ type: "dispatch", taskId, task: "Now fix them", context: "", from: "user", deadline: Date.now() + h.m.role.timeoutMs });
+  await h.until(() => h.prompts.some(v => v.includes(taskId)));
+  assert(h.events.some(v => v.requestId === requestId && v.type === "accepted"));
+  assert.equal(h.prompts.at(-1), `Task ${taskId} from the user, typed in this pane:\nNow fix them`);
+  // Images cannot travel through the parent; nothing typed while retired starts work.
+  await h.answer(); await h.settle(taskId);
+  assert.deepEqual(await h.emit("input", { source: "interactive", text: "See this", images: [{}] }), { action: "handled" });
+  assert.equal(h.events.filter(v => v.type === "request").length, 2);
+});
+
+test("progress counts the task's todo items, for the parent and for the terminal", async t => {
+  const h = await harness(t);
+  const list = (items: Array<[number, string]>) => ({ toolName: "todo", isError: false, result: { details: { nextId: Math.max(0, ...items.map(i => i[0])) + 1, items: items.map(([id, status]) => ({ id, status, text: `#${id}` })) } } });
+  const cleared: unknown[] = []; h.pi.events = { emit: (name: string) => cleared.push(name) };
+  await h.emit("tool_execution_end", list([[1, "done"], [2, "pending"]])); // Left from an earlier task.
+  const task = await h.dispatch();
+  assert.deepEqual(cleared, ["todo:clear"], "each task starts with an empty list");
+  assert.deepEqual(h.progressed.at(-1), undefined);
+  await h.emit("tool_execution_end", list([[1, "done"], [2, "in_progress"], [3, "pending"]]));
+  await h.until(() => h.events.some(v => v.type === "progress" && v.total === 3));
+  assert.equal(h.events.findLast(v => v.type === "progress").done, 1);
+  assert.deepEqual(h.progressed.at(-1), { done: 1, total: 3 });
+  await h.answer(); await h.settle(task);
+  assert.equal(h.progressed.at(-1), undefined, "a settled task has no progress to show");
+  assert.deepEqual(todoProgress([]), undefined);
+  assert.deepEqual(todoProgress([{ status: "done" }, { status: "blocked" }]), { done: 1, total: 2 });
+});
+
+test("Pi's program status reports carry the progress while working, and are rewritten when it changes", () => {
+  const working = "\x1b]7501;state=working:app=pi:msg=YQ==\x1b\\", done = "\x1b]7501;state=done:app=pi\x1b\\";
+  assert.equal(withProgress(working, 42.4), "\x1b]7501;state=working:app=pi:msg=YQ==:progress=42\x1b\\");
+  assert.equal(withProgress(withProgress(working, 10), 60), "\x1b]7501;state=working:app=pi:msg=YQ==:progress=60\x1b\\");
+  assert.equal(withProgress(working), working); assert.equal(withProgress(done, 50), done);
+  assert.equal(withProgress("\x1b]7501;?\x1b\\", 50), "\x1b]7501;?\x1b\\", "the support query passes untouched");
+  const written: string[] = [], out = { write: (chunk: string) => { written.push(chunk); return true; } } as any;
+  const set = registerProgressStatus(out);
+  set(25); assert.deepEqual(written, [], "nothing to rewrite before Pi has reported");
+  out.write(working); out.write("text");
+  assert.deepEqual(written, ["\x1b]7501;state=working:app=pi:msg=YQ==:progress=25\x1b\\", "text"]);
+  set(50); assert.equal(written.at(-1), "\x1b]7501;state=working:app=pi:msg=YQ==:progress=50\x1b\\");
+  set(50); assert.equal(written.length, 3, "an unchanged value writes nothing");
+  // A /reload registers again on the same stream: it is not wrapped twice.
+  const again = registerProgressStatus(out);
+  out.write(working); assert.equal(written.length, 4); assert.equal(written.at(-1), "\x1b]7501;state=working:app=pi:msg=YQ==:progress=50\x1b\\");
+  again(undefined); assert.equal(written.at(-1), working);
 });

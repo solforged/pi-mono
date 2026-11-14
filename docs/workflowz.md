@@ -55,7 +55,7 @@ At most `subagents.evalConcurrency` (default 6) run at once across the kernel;
   items in turn, each continuing its own saved conversation (and, for
   `worker`, one worktree). Agents always keep theirs, so `send()` can follow up.
 - **Watched pools.** `watch: true` runs the workers as Rex children in the
-  deck, where you can watch, peek or take one over. It needs interactive Pi in
+  Agents tab, where you can watch, steer or take one over. It needs interactive Pi in
   Rex, defaults to 3 workers, counts against `subagents.rexConcurrency`, and
   closes the children when the pool settles. A worker whose pane you take over
   or close gets a new child for its next item.

@@ -103,28 +103,19 @@ test("native peek places once, floats the actual child, and restores without foc
   assert.deepEqual(h.nativeMutations().map(c => c.method), ["session.move_block", "session.float_block"]);
   assert.deepEqual(h.nativeMutations()[1].payload.bounds, PEEK_BOUNDS);
   assert(PEEK_BOUNDS[0] + PEEK_BOUNDS[2] <= 1 && PEEK_BOUNDS[1] + PEEK_BOUNDS[3] <= 1 && PEEK_BOUNDS[2] < 0.6);
-  await h.client.minimize(SESSION, BLOCK); assert.equal(h.floating.state, "minimized");
+  h.floating.state = "minimized"; // The user minimized the float.
   await h.client.peek(SESSION, BLOCK, PARENT); assert.equal(h.floating.state, "normal");
   assert.deepEqual(h.nativeMutations().slice(-2).map(c => c.method), ["session.set_layer_state", "session.raise_layer"]);
   assert(h.nativeMutations().filter(c => c.method === "session.set_layer_state").every(c => c.payload.focus === false));
 });
-test("native keep promotes a floating child; peek and keep respect an existing tiled pane", async () => {
-  const h = nativeHarness(); h.float();
-  await h.client.keep(SESSION, BLOCK, PARENT);
-  assert.deepEqual(h.nativeMutations().map(c => c.method), ["session.move_block"]);
-  await h.client.keep(SESSION, BLOCK, PARENT); await h.client.peek(SESSION, BLOCK, PARENT);
-  assert.equal(h.nativeMutations().length, 1);
-  await assert.rejects(h.client.minimize(SESSION, BLOCK), /only this child/);
-});
-test("native operations refuse shared layers and respect user window placement", async () => {
-  const h = nativeHarness(); h.float(); h.floating.blocks.push({ block_id: CREATED });
-  await assert.rejects(h.client.peek(SESSION, BLOCK, PARENT), /shared/);
-  await assert.rejects(h.client.minimize(SESSION, BLOCK), /only this child/);
-  assert.equal(h.nativeMutations().length, 0);
-  h.window.layers = [h.tiled];
-  h.view.windows.push({ window_id: "window:other", focused_block_id: BLOCK, layers: [h.floating] });
-  await assert.rejects(h.client.keep(SESSION, BLOCK, PARENT), /another window/);
-  assert.equal(h.nativeMutations().length, 0);
+test("peek respects a tiled pane and refuses a shared floating layer", async () => {
+  const h = nativeHarness();
+  h.blocks[1].placement = "placed"; h.tiled.blocks.push({ block_id: BLOCK });
+  await h.client.peek(SESSION, BLOCK, PARENT);
+  assert.equal(h.nativeMutations().length, 0, "a pane in a grid or beside the parent stays where it is");
+  const shared = nativeHarness(); shared.float(); shared.floating.blocks.push({ block_id: CREATED });
+  await assert.rejects(shared.client.peek(SESSION, BLOCK, PARENT), /shared/);
+  assert.equal(shared.nativeMutations().length, 0);
 });
 test("native peek checks optional capabilities before mutation and refuses layout races", async () => {
   const h = nativeHarness(); delete h.descriptions["session.float_block"].input_schema.properties.bounds;
@@ -202,10 +193,10 @@ test("keep_open is sent only when the terminal explicitly advertises boolean sup
   }
 });
 
-test("place, hide, and close use explicit session/block IDs and never focus or select a window", async () => {
+test("place, detach, and close use explicit session/block IDs and never focus or select a window", async () => {
   const h = harness();
   await h.client.place(SESSION, BLOCK, PARENT, "horizontal", 0.5);
-  await h.client.hide(SESSION, BLOCK);
+  await h.client.detach(SESSION, BLOCK);
   await h.client.close(SESSION, BLOCK);
   assert.deepEqual(h.mutations().map(({ method, payload }) => ({ method, payload })), [
     { method: "session.move_block", payload: { session_id: SESSION, block_id: BLOCK, anchor_block_id: PARENT, direction: "horizontal", side: "after", ratio: 0.5 } },
@@ -350,7 +341,7 @@ test("every mutation fails once without retrying when Rex reports an error", asy
     h.intercept = (call) => call.method === method ? { stdout: "", stderr: "request timed out", code: 1 } : undefined;
     const operation = method === "session.new_block" ? h.client.create(SESSION, "test", ["echo"], process.cwd())
       : method === "session.move_block" ? h.client.place(SESSION, BLOCK, PARENT, "horizontal", 0.5)
-      : method === "session.detach_block" ? h.client.hide(SESSION, BLOCK) : h.client.close(SESSION, BLOCK);
+      : method === "session.detach_block" ? h.client.detach(SESSION, BLOCK) : h.client.close(SESSION, BLOCK);
     await assert.rejects(operation, /outcome may be unknown.*request timed out/);
     assert.equal(h.mutations().length, 1);
   }
@@ -405,24 +396,7 @@ test("method schemas are described once per client; identity and placement are r
   assert.equal(bad.calls.filter((call) => call.words[1] === "describe").length, count + 7);
 });
 
-test("tail reads only the end of a long terminal, dropping the partial first line", async () => {
-  const h = harness();
-  h.intercept = call => {
-    if (call.method !== "block.method") return undefined;
-    if (call.payload.method === "format") return result({ content: "start", id: 7, total: 20_000, eof: false });
-    assert.deepEqual(call.payload.args, { id: 7, offset: 14_000, max_bytes: 24_000 });
-    return result({ id: 7, data: "artial line\nlast screen\nprompt", total: 20_000, eof: true });
-  };
-  const client = new RexClient(async (_command, args) => {
-    assert.equal(args[7], "block.method");
-    return h.intercept!({ method: "block.method", payload: JSON.parse(args[8]) } as any, undefined) as RexExecutionResult;
-  });
-  assert.equal(await client.tail(SESSION, BLOCK), "last screen\nprompt");
-  h.intercept = call => call.method === "block.method" ? result({ content: "short\n" }) : undefined;
-  assert.equal(await client.tail(SESSION, BLOCK), "short\n");
-});
-
-test("returnTo focuses the parent, and detaches the child only from the float the hub recorded", async () => {
+test("returnTo focuses the parent, and detaches the child only from the float the parent recorded", async () => {
   const h = nativeHarness();
   const methods: string[] = [];
   const client = new RexClient(async (command, args, options) => {
@@ -433,12 +407,12 @@ test("returnTo focuses the parent, and detaches the child only from the float th
   assert.deepEqual(methods, [`session.focus_block ${PARENT}`], "a tiled child stays put");
   methods.length = 0; h.float();
   assert.equal(await client.returnTo(SESSION, BLOCK, PARENT), false);
-  assert.deepEqual(methods, [`session.focus_block ${PARENT}`], "a float without the hub's record is the user's");
+  assert.deepEqual(methods, [`session.focus_block ${PARENT}`], "a float without the parent's record is the user's");
   methods.length = 0;
   assert.equal(await client.returnTo(SESSION, BLOCK, PARENT, "layer:99999999-9999-4999-8999-999999999999"), false, "a different layer is not ours");
   methods.length = 0;
   assert.equal(await client.returnTo(SESSION, BLOCK, PARENT, h.floating.layer_id), true);
-  assert.deepEqual(methods, [`session.focus_block ${PARENT}`, `session.detach_block ${BLOCK}`], "focus first, then the hub's float goes back to the deck");
+  assert.deepEqual(methods, [`session.focus_block ${PARENT}`, `session.detach_block ${BLOCK}`], "focus first, then the parent's float is detached again");
   h.who.endpoint = "tcp://remote:1";
   await assert.rejects(client.returnTo(SESSION, BLOCK, PARENT), /local unix/);
 });

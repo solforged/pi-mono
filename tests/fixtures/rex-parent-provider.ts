@@ -1,4 +1,4 @@
-// Loaded explicitly by rex-hub-smoke.ts, in its parent and (via childExtensions) its
+// Loaded explicitly by rex-parent-smoke.ts, in its parent and (via childExtensions) its
 // children. Fixed responses only; never deploy this fixture as an extension.
 import { createAssistantMessageEventStream, getCurrentTools, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -9,11 +9,11 @@ let declaredFirst: string | undefined;
 
 export default function (pi: ExtensionAPI) {
   // Rex starts terminals with its server's environment; the agent directory is passed explicitly.
-  if (!process.env.PI_CODING_AGENT_DIR?.includes("/pi-rex-hub-smoke-")) throw new Error("Rex hub provider requires the hub smoke test's isolated agent directory");
-  globalThis.fetch = async () => { throw new Error("Network access forbidden in Rex hub fixture"); };
+  if (!process.env.PI_CODING_AGENT_DIR?.includes("/pi-rex-parent-smoke-")) throw new Error("Rex parent provider requires the parent smoke test's isolated agent directory");
+  globalThis.fetch = async () => { throw new Error("Network access forbidden in Rex parent fixture"); };
   pi.registerProvider("rex-smoke", {
     baseUrl: "https://invalid.example", apiKey: "test-only-not-a-credential", api: "rex-smoke",
-    models: [{ id: "fixture", name: "Rex hub fixture", reasoning: false, input: ["text"],
+    models: [{ id: "fixture", name: "Rex parent fixture", reasoning: false, input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 1024 }],
     streamSimple(model, context, options) {
       const stream = createAssistantMessageEventStream(), last: any = context.messages.at(-1), seen = JSON.stringify(last);
@@ -35,10 +35,10 @@ export default function (pi: ExtensionAPI) {
         if (options?.signal?.aborted) { output.stopReason = "aborted"; output.errorMessage = "Cancelled"; stream.push({ type: "error", reason: "aborted", error: output }); stream.end(); return; }
         stream.push({ type: "start", partial: output });
         // Parent: one prompt starts two children, a long one and a quick one.
-        if (!process.env.PI_REX_CHILD && last?.role === "user" && seen.includes("Spawn hub fixture")) {
+        if (!process.env.PI_REX_CHILD && last?.role === "user" && seen.includes("Spawn parent fixture")) {
           const calls = [
-            { type: "toolCall" as const, id: "hub-1", name: "rex_agent", arguments: { agent: "scout", name: "birch", title: "Hold fixture", task: "Hold fixture: wait until cancelled" } },
-            { type: "toolCall" as const, id: "hub-2", name: "rex_agent", arguments: { agent: "scout", name: "cedar", title: "Quick fixture", task: "Answer at once" } },
+            { type: "toolCall" as const, id: "spawn-1", name: "rex_agent", arguments: { agent: "scout", name: "birch", title: "Hold fixture", task: "Hold fixture: wait until cancelled" } },
+            { type: "toolCall" as const, id: "spawn-2", name: "rex_agent", arguments: { agent: "scout", name: "cedar", title: "Quick fixture", task: "Answer at once" } },
           ];
           output.content.push(...calls); output.stopReason = "toolUse";
           calls.forEach((call, i) => { stream.push({ type: "toolcall_start", contentIndex: i, partial: output }); stream.push({ type: "toolcall_end", contentIndex: i, toolCall: call, partial: output }); });

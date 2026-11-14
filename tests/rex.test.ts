@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { ChildState } from "../extensions/rex/child.ts";
 import { BlockGone } from "../extensions/rex/client.ts";
-import { childCommand, inheritedAsk, RexRunner, yieldingWait, validateReady, waitFor, type RexBackend, type Run } from "../extensions/rex/runner.ts";
+import { childCommand, inheritedTool, RexRunner, yieldingWait, validateReady, waitFor, type RexBackend, type Run } from "../extensions/rex/runner.ts";
 import { rows } from "../extensions/rex/ui.ts";
 import { claimOwner, FRAME_BYTES, Frames, record, send, validateManifest, VERSION, type Manifest } from "../extensions/rex/protocol.ts";
 import { agents } from "../extensions/workflows/subagents.ts";
@@ -56,6 +56,7 @@ function backend(behavior: "success" | "disconnect" | "wait" | "no-hello" | "los
           if (!["wait", "late-cancel", "refused-cancel"].includes(behavior)) emit({ type: "result", taskId: event.taskId, status: "succeeded", text: event.task, usage: { ...emptyUsage(), input: 3, totalTokens: 3 } });
         }
         if (event.type === "steer") emit({ type: "ack", requestId: event.requestId, taskId: event.taskId });
+        if (event.type === "declined") calls.push("declined");
         if (event.type === "cancel") {
           if (behavior === "late-cancel") {
             emit({ type: "result", taskId: event.taskId, status: "succeeded", text: "Finished first", usage: emptyUsage() });
@@ -83,8 +84,7 @@ function backend(behavior: "success" | "disconnect" | "wait" | "no-hello" | "los
       calls.push("close"); [...children.values()].find(c => c.block === block)?.socket.destroy();
       if (gone.has(block)) throw new BlockGone(block);
     },
-    async hide() { calls.push("park"); }, async keep() { calls.push("keep"); },
-    async peek() { calls.push("peek"); }, async minimize() { calls.push("minimize"); },
+    async peek() { calls.push("peek"); },
   };
   return { rex, calls, labels, messages, children, gone };
 }
@@ -148,8 +148,8 @@ test("persistent child handles distinct follow-ups and immutable, once-accounted
   const usage = await Promise.all([h.runner.collect(one.id), h.runner.collect(one.id)]);
   assert.equal(usage.filter(Boolean).length, 1); assert.equal(usage.find(Boolean)!.input, 3);
   assert.equal((await h.runner.collect(two.id))!.input, 3);
-  await h.runner.action(run, "peek"); await h.runner.action(run, "hide"); await h.runner.action(run, "keep"); await h.runner.action(run, "park");
-  assert.deepEqual(h.fake.calls.slice(-4), ["peek", "minimize", "keep", "park"]);
+  await h.runner.action(run, "peek");
+  assert.deepEqual(h.fake.calls.slice(-1), ["peek"]);
   const m = h.fake.children.get(run.id)!.manifest;
   await h.runner.shutdown();
   assert(!h.fake.calls.includes("close")); assert.equal(run.owner, "retired");
@@ -397,18 +397,20 @@ test("the parent cannot close a child the user has taken over", async t => {
   await assert.rejects(h.runner.closeIdle(run.id), /not available for parent-directed work/);
   assert(!h.fake.calls.includes("close"));
 });
-test("children inherit the parent's active ask tool without counting it as routing", async t => {
+test("children inherit the parent's active ask and todo tools without counting them as routing", async t => {
   const path = join(root, "extensions/ask/index.ts"), tool = { name: "ask_user_question", sourceInfo: { source: "local", path } };
-  assert.equal(inheritedAsk({ getAllTools: () => [tool] } as any), undefined);
-  assert.equal(inheritedAsk({ getAllTools: () => [tool], getActiveTools: () => [] } as any), undefined);
-  const parent = { getAllTools: () => [tool], getActiveTools: () => ["ask_user_question"] } as any;
-  assert.equal(inheritedAsk(parent), path);
+  const todoPath = join(root, "extensions/todo/index.ts"), todo = { name: "todo", sourceInfo: { source: "local", path: todoPath } };
+  assert.equal(inheritedTool({ getAllTools: () => [tool] } as any, "ask_user_question"), undefined);
+  assert.equal(inheritedTool({ getAllTools: () => [tool], getActiveTools: () => [] } as any, "ask_user_question"), undefined);
+  const parent = { getAllTools: () => [tool, todo], getActiveTools: () => ["ask_user_question", "todo"] } as any;
+  assert.equal(inheritedTool(parent, "ask_user_question"), path); assert.equal(inheritedTool(parent, "todo"), todoPath);
   environment(t); const dir = await temporary(t), fake = backend(), runner = new RexRunner(parent, root, dir, fake.rex);
   t.after(() => runner.shutdown());
   const strict = { ...config, subagents: { ...config.subagents, sandbox: "required" as const } };
   await assert.rejects(runner.open("scout", strict, context(), "", signal()), /unsandboxed/);
   const run = await runner.open("scout", config, context(), "", signal());
-  assert.deepEqual(fake.children.get(run.id)!.manifest.tools, ["read", "grep", "find", "ls", "ask_user_question"]);
+  assert.deepEqual(fake.children.get(run.id)!.manifest.tools, ["read", "grep", "find", "ls", "ask_user_question", "todo"]);
+  assert.match(await readFile(join(run.dir, "instructions.md"), "utf8"), /todo tool .* progress/);
 });
 test("time spent waiting for the user does not count against the task deadline", async t => {
   const h = await harness(t, "wait"), c = { ...config, roles: { ...config.roles, task: { ...config.roles.task!, timeoutMs: 150 } } };
@@ -423,4 +425,21 @@ test("time spent waiting for the user does not count against the task deadline",
   await until(() => h.fake.calls.includes("cancel"));
   await h.runner.wait(task.id, signal());
   assert.equal(task.status, "cancelled");
+});
+
+test("a follow-up the user types into an idle child runs as a parent task; a busy child declines it", async t => {
+  const h = await harness(t, "wait"), run = await h.open(), child = h.fake.children.get(run.id)!;
+  child.emit({ type: "request", requestId: randomUUID(), text: "Also check the tests" });
+  await until(() => run.activeTask);
+  const task = h.runner.tasks.get(run.activeTask!)!;
+  assert.equal(task.from, "user"); assert.equal(task.background, true); assert.equal(task.task, "Also check the tests");
+  assert.equal(h.fake.messages.find(v => v.type === "dispatch").from, "user");
+  // Progress from the child's todo list is kept on the task.
+  child.emit({ type: "progress", taskId: task.id, text: "read x", done: 1, total: 4 });
+  await until(() => task.progress);
+  assert.deepEqual(task.progress, { done: 1, total: 4 });
+  assert.deepEqual(rows(h.runner.runs.values(), h.runner.tasks)[0].progress, { done: 1, total: 4 });
+  child.emit({ type: "request", requestId: randomUUID(), text: "Another one" });
+  await until(() => h.fake.calls.includes("declined"));
+  assert.equal(h.runner.tasks.size, 1); assert.equal(run.owner, "managed", "a declined request leaves the child as it was");
 });

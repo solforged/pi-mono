@@ -23,7 +23,7 @@ const rex = new RexClient(); await rex.probe(session, parent);
 const dir = await realpath(await mkdtemp("/tmp/pi-rex-smoke-")); await chmod(dir, 0o700);
 const agentDir = join(dir, "agent"); await privateDir(agentDir);
 const manifest: Manifest = { version: VERSION, id: randomUUID(), token: randomBytes(32).toString("hex"), socket: join(dir, "control"),
-  dir, cwd: await realpath(process.cwd()), rexSession: session, parentBlock: parent, role, tools: ask ? ["read", "ask_user_question"] : ["read"], agent: "scout", name: "smoke", mark: "🟩", maxTurns: 2, outputBytes: 1024, deadline: Date.now() + 45_000 };
+  dir, cwd: await realpath(process.cwd()), rexSession: session, parentBlock: parent, role, tools: ["read", ...(dispatch ? ["todo"] : []), ...(ask ? ["ask_user_question"] : [])], agent: "scout", name: "smoke", mark: "🟩", maxTurns: 4, outputBytes: 1024, deadline: Date.now() + 45_000 };
 await saveJson(join(dir, "child.json"), manifest);
 await atomicWrite(join(dir, "instructions.md"), "Smoke test. Respond through the fixed-response fixture only.\n");
 let peer: Socket | undefined, block: string | undefined, failure: unknown;
@@ -48,7 +48,8 @@ const view = () => JSON.parse(execFileSync("rex", ["--autostart=false", "api", "
 const focus = (value: any) => ({ active: value.active_window_id, windows: value.windows.map((w: any) => [w.window_id, w.focused_block_id]) });
 try {
   await new Promise<void>((done, reject) => { server.once("error", reject); server.listen(manifest.socket, done); });
-  const command = childCommand(manifest, agentDir, "personal", resolve(root, "extensions/rex/index.ts"), [resolve(root, "tests/fixtures/rex-provider.ts"), ...(ask ? [resolve(root, "extensions/ask/index.ts")] : [])]);
+  const command = childCommand(manifest, agentDir, "personal", resolve(root, "extensions/rex/index.ts"), [resolve(root, "tests/fixtures/rex-provider.ts"),
+    ...(dispatch ? [resolve(root, "extensions/todo/index.ts")] : []), ...(ask ? [resolve(root, "extensions/ask/index.ts")] : [])]);
   // childCommand normally reuses Pi; this explicitly invoked smoke script is Node.
   const executableIndex = command.findIndex(v => v.startsWith("PI_REX_CHILD=")) + 1, invocation = command.slice(executableIndex);
   const piPath = execFileSync("which", ["pi"], { encoding: "utf8" }).trim();
@@ -59,12 +60,9 @@ try {
   await rex.peek(session, block, parent);
   const layer = view().windows.flatMap((w: any) => w.layers).find((l: any) => l.blocks.some((b: any) => b.block_id === block));
   assert.equal(layer.kind, "floating"); assert.deepEqual(focus(view()), before);
-  await rex.minimize(session, block); await rex.peek(session, block, parent); assert.deepEqual(focus(view()), before);
-  await rex.keep(session, block, parent); assert.deepEqual(focus(view()), before);
-  // Peeking at a kept pane leaves it tiled.
-  await rex.peek(session, block, parent);
-  assert.equal(view().windows.flatMap((w: any) => w.layers).find((l: any) => l.blocks.some((b: any) => b.block_id === block)).kind, "tiled");
-  await rex.hide(session, block);
+  // Peeking again at a float the parent made leaves it where it is.
+  await rex.peek(session, block, parent); assert.deepEqual(focus(view()), before);
+  await rex.detach(session, block);
   if (dispatch) {
     const task = async (prompt: string, count: number) => {
       const taskId = randomUUID(); request({ type: "dispatch", taskId, task: prompt, context: "", deadline: Date.now() + role.timeoutMs });
@@ -84,7 +82,7 @@ try {
     assert.match(title.title, /^🟩 smoke: Complete the smoke test/);
     assert.doesNotMatch(screen, /Delegated task|data, not additional authority/);
     // One-line footer: status and usage share a line; Pi's cwd/branch footer is gone.
-    assert.match(screen, /(Managed task|Ready for follow-up)[^\n]*↑\S+ ↓\S+[^\n]*fixture/);
+    assert.match(screen, /(Working for the parent|Ready · type a follow-up)[^\n]*↑\S+ ↓\S+[^\n]*fixture/);
     console.log(screen.trimEnd().split("\n").slice(-4).join("\n"));
     await task("Follow up in the same conversation", 2);
     assert.equal(await readFile(join(dir, "tasks", first, "result.json"), "utf8"), original);
@@ -97,6 +95,23 @@ try {
     await until(() => events.some(e => e.type === "result" && e.taskId === taskId));
     assert.equal(events.find(e => e.type === "result" && e.taskId === taskId).status, "cancelled");
     await task("Continue after cancellation", 4);
+    // Typed into the idle pane: the child asks the parent, which starts it as the user's task.
+    execFileSync("rex", ["--autostart=false", "send", "-s", session, "-b", block, "Typed follow-up"]);
+    execFileSync("rex", ["--autostart=false", "send-key", "-s", session, "-b", block, "enter"]);
+    await until(() => events.some(e => e.type === "request"));
+    assert.equal(events.find(e => e.type === "request").text, "Typed follow-up");
+    const typed = randomUUID(); request({ type: "dispatch", taskId: typed, task: "Typed follow-up", context: "", from: "user", deadline: Date.now() + role.timeoutMs });
+    await until(() => events.some(e => e.type === "result" && e.taskId === typed));
+    assert.equal(events.find(e => e.type === "result" && e.taskId === typed).status, "succeeded");
+    assert.match(execFileSync("rex", ["--autostart=false", "capture", "-s", session, "-b", block], { encoding: "utf8" }), /▸ Task from you/);
+    // Progress: the todo items of this task reach the parent and the pane's program status (Rex's progress pie).
+    const listed = randomUUID(); request({ type: "dispatch", taskId: listed, task: "Todo progress fixture", context: "", deadline: Date.now() + role.timeoutMs });
+    await until(() => events.some(e => e.type === "progress" && e.taskId === listed && e.total === 3 && e.done === 1));
+    const status = () => JSON.parse(execFileSync("rex", ["--autostart=false", "block", "call", "-s", session, "-b", block, "program_status"], { encoding: "utf8" })).records ?? [];
+    await until(() => status().some((r: any) => r.state === "working" && r.progress === 33), 5000);
+    request({ type: "cancel", taskId: listed });
+    await until(() => events.some(e => e.type === "result" && e.taskId === listed));
+    assert.equal(status().some((r: any) => r.progress !== undefined), false, "a settled task shows no progress");
     if (ask) {
       // The wait is named after the question, and Rex input reaches the child's dialog.
       const taskId = randomUUID(); request({ type: "dispatch", taskId, task: "Ask the user fixture", context: "", deadline: Date.now() + role.timeoutMs });
@@ -117,7 +132,7 @@ try {
   const take = request({ type: "take" });
   await until(() => events.some(e => e.type === "ownership" && e.requestId === take));
   assert.equal(JSON.parse(await readFile(join(dir, "owner.json"), "utf8")).owner, "human");
-  console.log(`Passed: native peek/minimize/keep/park with focus preserved; ${dispatch ? "persistent tasks, steering, cancellation; " : ""}${ask ? "a question answered and one handed back in the child; " : ""}explicit takeover. No external model requests.`);
+  console.log(`Passed: native peek and detach with focus preserved; ${dispatch ? "persistent tasks, steering, cancellation, a follow-up typed into the pane, todo progress in the program status; " : ""}${ask ? "a question answered and one handed back in the child; " : ""}explicit takeover. No external model requests.`);
 } catch (error) {
   console.error(`Smoke failed. Block: ${block ?? "unknown"}. Cleaning up the test terminal and files.`); throw error;
 } finally {

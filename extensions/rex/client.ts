@@ -34,15 +34,12 @@ const METHODS: Record<string, string[]> = {
 const LAYOUT_METHODS: Record<string, string[]> = {
   "session.move_block": ["session_id", "block_id", "anchor_block_id", "direction", "side", "ratio"],
   "session.resize_pane": ["session_id", "before_block_id", "after_block_id", "direction", "ratio"],
-  "session.swap_blocks": ["session_id", "block_id", "other_block_id"],
   "session.detach_block": ["session_id", "block_id"],
   "session.new_window": ["session_id", "layout", "focus", "window_label"],
   "session.move_window": ["session_id", "window_id", "before_window_id"],
   "session.set_window_label": ["session_id", "window_id", "label"],
   "session.focus_block": ["session_id", "block_id"],
   "session.focus_window": ["session_id", "window_id"],
-  "session.zoom_block": ["session_id", "block_id", "zoom"],
-  "block.method": ["session_id", "block_id", "method", "args"],
 };
 
 function object(value: unknown, name: string): ObjectValue {
@@ -263,13 +260,6 @@ export class RexClient {
     return result.block_id;
   }
 
-  async hide(sessionId: string, blockId: string, signal?: AbortSignal): Promise<void> {
-    id(blockId, "block");
-    const state = await this.preflight(sessionId, signal);
-    this.target(state, blockId);
-    await this.mutate(sessionId, "session.detach_block", { block_id: blockId }, signal);
-  }
-
   private placement(view: ObjectValue, blockId: string) {
     if (!Array.isArray(view.windows)) throw new Error("Rex window layout is unavailable");
     const matches = view.windows.flatMap((window: any) => (window.layers ?? [])
@@ -315,34 +305,6 @@ export class RexClient {
     await this.mutate(sessionId, "session.raise_layer", { layer_id: layer.layer_id }, signal);
   }
 
-  async minimize(sessionId: string, blockId: string, signal?: AbortSignal): Promise<void> {
-    id(blockId, "block");
-    const state = await this.preflight(sessionId, signal);
-    this.target(state, blockId, true);
-    const { layer } = this.placement(state.view, blockId);
-    if (layer.kind !== "floating" || layer.blocks.length !== 1) throw new Error("Minimize requires a floating layer containing only this child; use park to detach a pane");
-    await this.capability("session.set_layer_state", ["session_id", "layer_id", "state", "focus"], signal);
-    await this.mutate(sessionId, "session.set_layer_state", { layer_id: layer.layer_id, state: "minimized", focus: false }, signal);
-  }
-
-  async keep(sessionId: string, blockId: string, anchorBlock: string, signal?: AbortSignal): Promise<void> {
-    id(blockId, "block"); id(anchorBlock, "block");
-    if (blockId === anchorBlock) throw new Error("Rex keep requires a distinct anchor");
-    const state = await this.preflight(sessionId, signal);
-    this.target(state, blockId);
-    if (state.blocks.find(b => b.block_id === blockId)?.placement === "placed" && this.placement(state.view, blockId).layer.kind === "tiled") return;
-    this.target(state, anchorBlock, true);
-    const anchor = this.placement(state.view, anchorBlock);
-    if (anchor.layer.kind !== "tiled") throw new Error("Keep needs a tiled parent anchor");
-    if (state.blocks.find(b => b.block_id === blockId)?.placement === "placed") {
-      const source = this.placement(state.view, blockId);
-      if (source.window.window_id !== anchor.window.window_id) throw new Error("Child was moved to another window; keep it there using Rex");
-      if (source.window.focused_block_id === blockId && state.view.active_window_id !== source.window.window_id) throw new Error("Keeping this child would activate an inactive window; use Rex to move it");
-    }
-    // Move only the requested block, never the whole floating layer.
-    await this.mutate(sessionId, "session.move_block", { block_id: blockId, anchor_block_id: anchorBlock }, signal);
-  }
-
   async close(sessionId: string, blockId: string, signal?: AbortSignal): Promise<void> {
     id(blockId, "block");
     const state = await this.preflight(sessionId, signal);
@@ -351,7 +313,7 @@ export class RexClient {
     if (result.block_id !== blockId) throw new Error("Rex block.close returned a different block ID; inspect state before retrying");
   }
 
-  // ---- Layout primitives for the deck/grid manager. Capabilities are checked
+  // ---- Layout primitives for the Agents tab manager. Capabilities are checked
   // once per client; identity is rechecked on every snapshot. No retries.
   private layoutChecked = false;
   private async layoutCapabilities(signal?: AbortSignal) {
@@ -382,19 +344,15 @@ export class RexClient {
     if (!(ratio > 0 && ratio < 1)) throw new Error("Invalid split ratio");
     await this.mutate(sessionId, "session.resize_pane", { before_block_id: before, after_block_id: after, direction, ratio }, signal);
   }
-  async swap(sessionId: string, a: string, b: string, signal?: AbortSignal) {
-    id(a, "block"); id(b, "block");
-    await this.mutate(sessionId, "session.swap_blocks", { block_id: a, other_block_id: b }, signal);
-  }
   async detach(sessionId: string, blockId: string, signal?: AbortSignal) {
     id(blockId, "block");
     await this.mutate(sessionId, "session.detach_block", { block_id: blockId }, signal);
   }
-  /** A background window whose first block is a small roster terminal (argv, no shell). */
-  async newWindow(sessionId: string, label: string, rosterLabel: string, command: string[], cwd: string, signal?: AbortSignal): Promise<{ windowId: string; blockId: string }> {
-    if (!command.length || command.some(arg => typeof arg !== "string" || arg.includes("\0")) || !isAbsolute(cwd)) throw new Error("Invalid roster command");
+  /** A background window whose first block runs `command` (argv, no shell): the Agents tab's placeholder. */
+  async newWindow(sessionId: string, label: string, blockLabel: string, command: string[], cwd: string, signal?: AbortSignal): Promise<{ windowId: string; blockId: string }> {
+    if (!command.length || command.some(arg => typeof arg !== "string" || arg.includes("\0")) || !isAbsolute(cwd)) throw new Error("Invalid window command");
     const result = await this.mutate(sessionId, "session.new_window", { focus: false, window_label: label.slice(0, 120),
-      layout: { block: { flavor: FLAVOR, label: rosterLabel.slice(0, 120), options: { shell: "none", command, cwd } } } }, signal);
+      layout: { block: { flavor: FLAVOR, label: blockLabel.slice(0, 120), options: { shell: "none", command, cwd } } } }, signal);
     const blockId = Array.isArray(result.block_ids) ? result.block_ids[0] : undefined;
     if (typeof result.window_id !== "string" || !result.window_id.startsWith("window:")) throw new Error("Rex session.new_window returned no window; outcome may be unknown");
     id(blockId, "block");
@@ -416,33 +374,16 @@ export class RexClient {
     if (!label || [...label].length > 128 || label.includes("\0")) throw new Error("Rex label must contain 1–128 characters without NUL");
     await this.mutate(sessionId, "session.set_window_label", { window_id: windowId, label }, signal);
   }
-  /** Fills the block's window with it (focusing it and activating its window) until focus moves. */
-  async zoom(sessionId: string, blockId: string, signal?: AbortSignal) {
-    id(blockId, "block");
-    await this.mutate(sessionId, "session.zoom_block", { block_id: blockId, zoom: true }, signal);
-  }
   async focus(sessionId: string, target: { block?: string; window?: string }, signal?: AbortSignal) {
     if (target.block) { id(target.block, "block"); await this.mutate(sessionId, "session.focus_block", { block_id: target.block }, signal); }
     else if (target.window?.startsWith("window:")) await this.mutate(sessionId, "session.focus_window", { window_id: target.window }, signal);
     else throw new Error("Nothing to focus");
   }
-  /** The last `bytes` of a terminal's text (screen plus scrollback), without reading the whole scrollback. */
-  async tail(sessionId: string, blockId: string, bytes = 6000, signal?: AbortSignal): Promise<string> {
-    id(sessionId, "session"); id(blockId, "block");
-    const first = await this.call(sessionId, "block.method", { block_id: blockId, method: "format", args: { trim: true, max_bytes: bytes } }, signal);
-    if (typeof first.content !== "string") throw new Error("Rex terminal text unavailable");
-    if (first.id === undefined || typeof first.total !== "number" || first.total <= bytes) return first.content;
-    // max_bytes counts JSON-escaped bytes, so read from the offset with room to spare.
-    const rest = await this.call(sessionId, "block.method", { block_id: blockId, method: "blob_read",
-      args: { id: first.id, offset: first.total - bytes, max_bytes: bytes * 4 } }, signal);
-    if (typeof rest.data !== "string") throw new Error("Rex terminal text unavailable");
-    return rest.data.slice(rest.data.indexOf("\n") + 1); // Drop the partial first line.
-  }
   /**
-   * A child's way back: focus the parent pane (which ends a zoom). `openedLayer`
-   * is the floating layer the parent's hub put the child in to open it; if the
-   * child is still alone there, it is detached again so the deck can place it.
-   * Any other placement, including a float the user made, is left alone.
+   * A child's way back: focus the parent pane. `openedLayer` is the floating
+   * layer the parent put a detached child in to open it; if the child is still
+   * alone there, it is detached again. Any other placement, including a float
+   * the user made, is left alone.
    */
   async returnTo(sessionId: string, self: string, parent: string, openedLayer?: string, signal?: AbortSignal): Promise<boolean> {
     id(sessionId, "session"); id(self, "block"); id(parent, "block");
@@ -465,11 +406,5 @@ export class RexClient {
     for (const window of view.windows ?? []) for (const layer of window.layers ?? [])
       if ((layer.blocks ?? []).some((b: any) => b.block_id === blockId)) return { kind: layer.kind === "floating" ? "floating" : "tiled", layer: layer.layer_id, window: window.window_id };
     return { kind: "missing" };
-  }
-  async rows(sessionId: string, blockId: string, signal?: AbortSignal): Promise<{ columns: number; rows: number }> {
-    id(blockId, "block");
-    const size = await this.call(sessionId, "block.method", { block_id: blockId, method: "size" }, signal);
-    if (!Number.isInteger(size.columns) || !Number.isInteger(size.rows)) throw new Error("Rex terminal size unavailable");
-    return { columns: size.columns, rows: size.rows };
   }
 }

@@ -36,7 +36,7 @@ does not provision or start a guest; see its [setup and safety notes](computer/R
 - [Workflowz and orchestrate](docs/workflowz.md): omp's magic keywords; `workflowz` runs subagent pools, judges and web research from a persistent JavaScript kernel.
 - [Worktree sessions](docs/worktree.md): non-trivial work moves the session to its own worktree and branch; `/wt` lands, returns and resumes.
 - [Ask](docs/ask.md): multiple-choice questions for the user, kept through compaction.
-- [Rex prototype](docs/rex.md): named asynchronous children in a live deck and Agents window.
+- [Rex prototype](docs/rex.md): named asynchronous children in an Agents tab, with progress in Rex and typing into their panes.
 - [Learning](docs/learning.md): session mining, skill drafts, and approval.
 - [Session search](docs/sessions.md): local historical search and original-entry retrieval.
 - [Memory](docs/memory.md): the memory wiki's current context in the system prompt, glossary definitions when a prompt uses a term, and a `memory` tool whose writes the user confirms.

@@ -10,7 +10,7 @@ import { atomicWrite } from "../shared/system.ts";
 import { privateDir, readJson, saveJson, scopeRoot } from "../workflows/state.ts";
 import { BlockGone, RexClient } from "./client.ts";
 import { Channel } from "./channel.ts";
-import { claimOwner, readOwner, isId, MAX_TASKS, VERSION, waitFor, text, validUsage, type ChildMessage, type Manifest, type Outcome, type Result } from "./protocol.ts";
+import { claimOwner, readOwner, isId, MAX_TASKS, VERSION, waitFor, text, validUsage, type ChildMessage, type From, type Manifest, type Outcome, type Result } from "./protocol.ts";
 export { validateReady, waitFor } from "./protocol.ts";
 
 /** Thrown into a wait when the user queues a message; the child's work continues. */
@@ -38,19 +38,23 @@ export interface Run {
   cwd: string; worktree?: string; provider: string; model: string; rexSession: string; parentBlock: string;
   hostId: string; instanceId: string; block?: string; childSession?: string; sessionFile: string;
   taskIds: string[]; activeTask?: string;
-  /** Layout intent: auto places in the deck/grid; background stays detached. */
-  view?: "auto" | "background"; pinned?: number;
+  /** Layout intent: auto places in the Agents tab; background stays detached. */
+  view?: "auto" | "background";
 }
 export interface TaskRun {
   id: string; childId: string; requestId: string; task: string; title?: string;
   /** Running cost reported by the child; the settled usage replaces it. */
   liveCost?: number; status: "starting" | "running" | Outcome;
+  /** How far along, from the items the child put on its todo list for this task. */
+  progress?: { done: number; total: number };
+  /** The user typed this task into the child's idle pane. */
+  from?: "user";
   text: string; usage: Usage; usageKnown: boolean; started: number; elapsedMs: number; resultFile: string;
   collected: boolean; notified: boolean; background: boolean;
   /** Run for another extension (a workflowz pool), which reads the result itself: never offered to the model. */
   programmatic?: boolean;
 }
-export type RexBackend = Pick<RexClient, "probe" | "create" | "hide" | "close" | "peek" | "minimize" | "keep">;
+export type RexBackend = Pick<RexClient, "probe" | "create" | "close" | "peek">;
 interface Live {
   run: Run; manifest: Manifest; channel: Channel; controlDir: string;
   ready: boolean; transferring: boolean; closing?: Promise<void>; launchError?: Error;
@@ -61,14 +65,19 @@ interface Live {
 export const NAMES = ["birch", "cedar", "fern", "oak", "ash", "elm", "pine", "moss", "reed", "sage", "ivy", "hazel", "rowan", "alder",
   "aspen", "larch", "maple", "willow", "juniper", "laurel", "myrtle", "poplar", "spruce", "yew"];
 export const NAME = /^[a-z][a-z0-9-]{1,15}$/;
-/** Short, single-line pane/roster titles; control characters never reach Rex labels. */
+/** Short, single-line pane titles; control characters never reach Rex labels. */
 export const cleanTitle = (title: string) => title.replace(/[\u0000-\u001f\u007f-\u009f\s]+/g, " ").trim().slice(0, 60);
-/** Children may ask the user when the parent can: the parent's active ask tool loads beside their role tools. */
-export function inheritedAsk(pi: Pick<ExtensionAPI, "getAllTools"> & Partial<Pick<ExtensionAPI, "getActiveTools">>) {
-  if (!pi.getActiveTools?.().includes(ASK)) return;
-  const path = pi.getAllTools().find(tool => tool.name === ASK)?.sourceInfo?.path;
+/**
+ * A tool children share with the parent when the parent has it active: the ask
+ * tool, so they can ask the user, and the todo tool, whose list measures their
+ * progress. Its extension loads beside their role tools; neither is tool routing.
+ */
+export function inheritedTool(pi: Pick<ExtensionAPI, "getAllTools"> & Partial<Pick<ExtensionAPI, "getActiveTools">>, name: string) {
+  if (!pi.getActiveTools?.().includes(name)) return;
+  const path = pi.getAllTools().find(tool => tool.name === name)?.sourceInfo?.path;
   return path?.startsWith("/") ? path : undefined;
 }
+export const TODO = "todo";
 /** Time spent waiting for the user does not count against a task deadline. */
 export const WAITING = /^Waiting for user/;
 export function childCommand(manifest: Manifest, agentDir: string, profile: string, extension: string, extensions: string[]): string[] {
@@ -206,14 +215,20 @@ export class RexRunner {
         rexSession: session, parentBlock, hostId: identity.hostId, instanceId: identity.instanceId, sessionFile: join(dir, "session.jsonl"), taskIds: [] };
       this.runs.set(id, run); await this.save(run); this.onChange();
       const extensions = await childExtensions(this.pi as ExtensionAPI, config, agents[agent].tools, join(this.root, "extensions/workflows/index.ts"));
-      // Not tool routing: it neither satisfies nor weakens subagents.sandbox.
-      const ask = inheritedAsk(this.pi), tools = ask ? [...agents[agent].tools, ASK] : agents[agent].tools;
-      if (ask) { const file = await realpath(ask); if (!extensions.includes(file)) extensions.push(file); }
+      // Not tool routing: they neither satisfy nor weaken subagents.sandbox.
+      const tools = [...agents[agent].tools];
+      for (const name of [ASK, TODO]) {
+        const path = inheritedTool(this.pi, name);
+        if (!path) continue;
+        tools.push(name);
+        const file = await realpath(path); if (!extensions.includes(file)) extensions.push(file);
+      }
       const extension = await realpath(join(this.root, "extensions/rex/index.ts"));
       if (extensions.includes(extension)) throw new Error("Do not configure the Rex coordinator as a child routing extension");
       if (agent === "worker") { run.worktree = await createWorktree(ctx.cwd, join(scope, "worktrees", id), launchSignal); run.cwd = await realpath(run.worktree); }
       const definition = await readFile(join(this.root, "agent-definitions", `${agent}.md`), "utf8");
-      await atomicWrite(join(dir, "instructions.md"), `${instructions}\n\n${definition}\n\nYou are a persistent child of a parent agent. Each assignment has its own task ID and a ${config.subagents.maxTurns}-turn limit. Parent messages are delegated instructions, not new instructions from the human. Do not delegate. Return a final answer for each task.\n`);
+      const todo = tools.includes(TODO) ? " For a task with several steps, first list them with the todo tool and mark each done as you finish it: the user watches your progress through that list. Skip it for a one-step task." : "";
+      await atomicWrite(join(dir, "instructions.md"), `${instructions}\n\n${definition}\n\nYou are a persistent child of a parent agent, running in a terminal pane the user can watch. Each assignment has its own task ID and a ${config.subagents.maxTurns}-turn limit. Parent messages are delegated instructions, not new instructions from the human. The user may also type into your pane: a message during a task is theirs and steers it, and a task "from the user" is theirs to answer. Every result also goes to the parent. Do not delegate. Return a final answer for each task.${todo}\n`);
       controlDir = await mkdtemp("/tmp/pi-rex-"); await chmod(controlDir, 0o700);
       // Cosmetic: a colour that cannot be picked never blocks a launch.
       const mark = await this.markFor?.(session, launchSignal).catch(() => undefined);
@@ -254,14 +269,15 @@ export class RexRunner {
       throw error;
     } finally { this.starting.delete(controller); this.naming.delete(name); launchDone.resolve(); }
   }
-  async submit(id: string, task: string, context = "", signal: AbortSignal, background = true, title?: string, programmatic = false): Promise<TaskRun> {
+  async submit(id: string, task: string, context = "", signal: AbortSignal, background = true, title?: string, programmatic = false, from: From = "parent"): Promise<TaskRun> {
     const live = this.managed(id), run = live.run;
     if (run.activeTask || run.taskIds.length >= MAX_TASKS) throw new Error("Child is busy or its task limit was reached");
     this.checkTask(task, context);
     signal.throwIfAborted();
     const taskId = randomUUID(), requestId = randomUUID(), started = Date.now();
     const item: TaskRun = { id: taskId, childId: id, requestId, task, ...(title ? { title: cleanTitle(title) } : {}), status: "starting", text: "", usage: emptyUsage(), usageKnown: false, started,
-      elapsedMs: 0, resultFile: join(run.dir, "tasks", taskId, "result.json"), collected: false, notified: false, background, ...(programmatic ? { programmatic } : {}) };
+      elapsedMs: 0, resultFile: join(run.dir, "tasks", taskId, "result.json"), collected: false, notified: false, background,
+      ...(programmatic ? { programmatic } : {}), ...(from === "user" ? { from } : {}) };
     run.activeTask = taskId; run.taskIds.push(taskId); run.status = "running";
     this.tasks.set(taskId, item);
     live.pending = Promise.withResolvers<TaskRun>(); live.tasks.set(taskId, live.pending.promise);
@@ -270,7 +286,7 @@ export class RexRunner {
       await this.saveTask(item); await this.save(run);
       this.managed(id); signal.throwIfAborted();
       live.due = started + live.manifest.role.timeoutMs; live.paused = undefined; this.arm(id, live);
-      await live.channel.request({ type: "dispatch", id, requestId, taskId, task, context, deadline: started + live.manifest.role.timeoutMs },
+      await live.channel.request({ type: "dispatch", id, requestId, taskId, task, context, deadline: started + live.manifest.role.timeoutMs, ...(from === "user" ? { from } : {}) },
         AbortSignal.any([signal, AbortSignal.timeout(10_000)]));
       return item;
     } catch (error) {
@@ -294,6 +310,15 @@ export class RexRunner {
     }
     if (message.type === "retired") { await this.lost(id, new Error(message.text)); return; }
     if (message.type === "ready" || message.type === "ack" || message.type === "error") return;
+    if (message.type === "request") {
+      // The user typed into the idle child's pane. Not awaited: the dispatch's
+      // receipt arrives through this same event queue.
+      void this.submit(id, message.text, "", AbortSignal.timeout(15_000), true, undefined, false, "user").catch(error => {
+        try { live.channel.send({ type: "declined", id, requestId: message.requestId, text: bounded(error instanceof Error ? error.message : String(error), 500) }); }
+        catch { /* The channel is gone; the child reports that itself. */ }
+      });
+      return;
+    }
     if (message.type === "accepted") {
       const task = this.tasks.get(message.taskId!);
       if (!task || run.activeTask !== task.id || task.requestId !== message.requestId) throw new Error("Unexpected task acceptance");
@@ -305,6 +330,7 @@ export class RexRunner {
         this.pause(id, live, WAITING.test(message.text ?? ""));
         const task = this.tasks.get(message.taskId);
         if (task && typeof message.cost === "number") task.liveCost = message.cost;
+        if (task) task.progress = message.total !== undefined ? { done: message.done!, total: message.total } : undefined;
         this.onChange();
       }
       return;
@@ -437,7 +463,7 @@ export class RexRunner {
       await this.dispose(live, busy && !live.transferring);
     }));
   }
-  async action(run: Run, action: "show" | "peek" | "hide" | "park" | "keep" | "close"): Promise<void> {
+  async action(run: Run, action: "peek" | "close"): Promise<void> {
     if (!run.block || run.status === "closed") throw new Error("No retained Rex block for this child");
     const signal = AbortSignal.timeout(20_000);
     const identity = await this.rex.probe(run.rexSession, run.parentBlock, signal);
@@ -450,10 +476,7 @@ export class RexRunner {
         run.owner = "retired"; await this.complete(live, "cancelled", "Terminal closed by user"); await this.dispose(live, true);
       } else if (await this.claimClose(run)) { await this.rex.close(run.rexSession, run.block, signal); run.status = "closed"; await this.save(run); }
       if (run.status !== "closed") throw new Error(run.note ?? "Terminal closure was not confirmed");
-    } else if (action === "show" || action === "peek") await this.rex.peek(run.rexSession, run.block, run.parentBlock, signal);
-    else if (action === "hide") await this.rex.minimize(run.rexSession, run.block, signal);
-    else if (action === "keep") await this.rex.keep(run.rexSession, run.block, run.parentBlock, signal);
-    else await this.rex.hide(run.rexSession, run.block, signal);
+    } else await this.rex.peek(run.rexSession, run.block, run.parentBlock, signal);
   }
   /**
    * Parent-directed close: only an idle child the parent still manages, after
@@ -467,7 +490,7 @@ export class RexRunner {
     if (unread.length) throw new Error(`${run.name} has ${unread.length} unread result(s); read them with rex_result first`);
     await this.action(run, "close");
   }
-  /** Persist presentation intent (view/pin); policy fields are not changed here. */
+  /** Persist presentation intent (view); policy fields are not changed here. */
   async update(run: Run) { await this.save(run); this.onChange(); }
   /** A blocking wait was given up: report the task's completion like background work. */
   async background(task: TaskRun) {

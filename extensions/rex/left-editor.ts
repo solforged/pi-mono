@@ -1,7 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { LeftGate } from "./hub-model.ts";
 import { useEditorFeature } from "../shared/editor.ts";
+import { LeftGate } from "./ui.ts";
 
 /**
  * Pi's editor, except that ← on an empty prompt calls `onLeft` (as ctrl+d exits

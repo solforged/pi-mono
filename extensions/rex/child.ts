@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { connect, type Socket } from "node:net";
 import { readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -5,6 +6,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { TOOL as ASK } from "../ask/model.ts";
 import { addUsage, bounded, emptyUsage } from "../workflows/process.ts";
 import { privateDir, saveJson } from "../workflows/state.ts";
+import { CLEAR as CLEAR_TODOS, restore as restoreTodos, type Item as TodoItem } from "../todo/store.ts";
 import { claimOwner, readOwner, Frames, isId, LEASE_MS, MAX_MESSAGES, MAX_TASKS, record, send, taskPrompt, text, validateManifest, VERSION, type Manifest, type Outcome } from "./protocol.ts";
 
 /** `read docs/x.md`, `bash npm test`: the tool and its main argument, one line. */
@@ -49,19 +51,29 @@ export class ChildState {
   }
 }
 
+/** How far along a task is: its todo items done out of all of them. No list, no count. */
+export function todoProgress(items: Pick<TodoItem, "status">[]): { done: number; total: number } | undefined {
+  return items.length ? { done: items.filter(item => item.status === "done").length, total: items.length } : undefined;
+}
+
 /** A lease tick is due every second; one this late means the process did not run. */
 const SUSPENDED_MS = 5000;
 
 /** Managed tasks share a Pi session, but never share task IDs, budgets or results. */
-export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (ctx: ExtensionContext, manifest: Manifest) => void = () => {}) {
+export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (ctx: ExtensionContext, manifest: Manifest) => void = () => {},
+  onProgress: (progress?: { done: number; total: number }) => void = () => {}) {
   let manifest: Manifest | undefined, ctx: ExtensionContext | undefined, socket: Socket | undefined;
   let owner: "managed" | "human" | "retired" | "transferring" = "retired";
   let current: { id: string; deadline: number; state: ChildState } | undefined;
   let timer: ReturnType<typeof setInterval> | undefined, lastPing = Date.now(), seq = 0, tasks = 0;
   let shuttingDown = false, allowedInput: string | undefined, queue = Promise.resolve();
+  /** A follow-up the user typed, sent to the parent and not yet dispatched or declined. */
+  let requested: string | undefined;
+  /** The todo list as of its last change; each task starts with an empty one. */
+  let todos: TodoItem[] = [];
   const emit = (value: object) => { if (socket && !socket.destroyed) send(socket, { id: manifest!.id, seq: ++seq, ...value }); };
   const status = () => ctx?.ui.setStatus("rex-child", owner === "human" ? "Human control · role tools retained"
-    : owner === "managed" ? current ? "Managed task · /take when idle" : "Ready for follow-up · /take for human control" : "Disconnected · inspection only · /take for human control");
+    : owner === "managed" ? current ? "Working for the parent · type to steer" : "Ready · type a follow-up · /take to keep it" : "Disconnected · inspection only · /take for human control");
   const finish = async (aborted: boolean) => {
     if (!current || current.state.finished) return;
     const task = current;
@@ -70,6 +82,7 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
     await saveJson(join(manifest!.dir, "tasks", task.id, "result.json"), { id: manifest!.id, taskId: task.id, ...result, usage: task.state.usage });
     current = undefined; allowedInput = undefined;
     emit({ type: "result", taskId: task.id, ...result, text: bounded(result.text, manifest!.outputBytes), usage: task.state.usage });
+    onProgress(undefined);
     status();
   };
   const retire = async (reason: string, shutdown = false) => {
@@ -117,9 +130,34 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
       allowedInput = undefined;
       if (context.model?.provider === manifest!.role.provider && context.model.id === manifest!.role.model) return { action: "continue" };
     }
-    context.ui.notify("Managed child: use parent messages, or /take when idle. Approvals remain available here.", "warning");
+    if (owner === "managed" && event.source === "interactive") return typed(event.text, !!event.images?.length, context);
+    context.ui.notify(owner === "managed" ? "Managed child: only the parent and the user typing here start work." : "Disconnected from the parent: /take to continue here.", "warning");
     return { action: "handled" };
   });
+  /**
+   * The user typed into this pane. During a task it steers that task (Pi queues
+   * it into the running agent, so it stays inside the task the parent awaits).
+   * When idle, the parent starts it as a follow-up, so its result reaches the
+   * parent like any other.
+   */
+  function typed(input: string, images: boolean, context: ExtensionContext): { action: "continue" | "handled" } {
+    const say = (message: string, level: "info" | "warning" = "warning") => { context.ui.notify(message, level); return { action: "handled" as const }; };
+    if (!input.trim()) return { action: "handled" };
+    if (current) {
+      if (current.state.cancelled || current.state.settling) return say("This task is ending; type again once it has settled.");
+      // Only into a running agent: an idle Pi would start a separate run with it.
+      if (context.isIdle()) return say("The task is starting; type again in a moment.");
+      return { action: "continue" };
+    }
+    if (requested) return say("A follow-up you typed is already on its way to the parent.");
+    if (images) return say("Follow-ups go through the parent, which takes text only; describe the image or /take this child.");
+    if (!text(input, 16000)) return say("Follow-ups are limited to 16,000 characters.");
+    const requestId = randomUUID();
+    requested = requestId;
+    try { emit({ type: "request", requestId, text: input }); }
+    catch (error) { requested = undefined; return say(`Could not reach the parent: ${String(error)}`); }
+    return say("Starting it as a follow-up; its result also goes to the parent.", "info");
+  }
   pi.on("before_agent_start", (_event, context) => {
     if (owner === "human") return;
     if (owner !== "managed" || !current?.state.active || current.state.cancelled
@@ -153,13 +191,22 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
   pi.on("cache_warming_decision", () => owner !== "human" ? { action: "stop" } : undefined);
   pi.on("message_end", event => { current?.state.message(event.message); if (event.message.role === "assistant") progress(); });
   pi.on("session_compact", event => { if (current?.state.active) addUsage(current.state.usage, event.compactionEntry.usage); });
-  // Activity and running cost for the parent's strip and roster; no transcript content.
+  // Activity, running cost and todo progress for the parent's widget and tool rows; no transcript content.
   let note = "Running";
   const progress = (message?: string) => {
     if (!current) return;
     if (message) note = bounded(message.replace(/\s+/g, " ").trim(), 200) || "Running";
-    emit({ type: "progress", taskId: current.id, text: note, cost: current.state.usage.cost.total });
+    const count = todoProgress(todos);
+    emit({ type: "progress", taskId: current.id, text: note, cost: current.state.usage.cost.total, ...(count ?? {}) });
   };
+  pi.on("tool_execution_end", event => {
+    const list = (event as any).result?.details;
+    if (event.toolName !== "todo" || event.isError || !Array.isArray(list?.items) || !Number.isInteger(list.nextId)) return;
+    todos = list.items;
+    if (!current) return;
+    onProgress(todoProgress(todos));
+    progress();
+  });
   pi.on("agent_start", () => progress("Running"));
   // Custom dialogs carry no title; an ask names its first question instead.
   let asking: string | undefined, waitingSince: number | undefined;
@@ -189,13 +236,17 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
     if (message.type === "ping") { lastPing = Date.now(); return; }
     if (message.type === "retire") { await retire("Parent session closed", !!current); return; }
     if (!isId(message.requestId)) throw new Error("Invalid request ID");
+    if (message.type === "declined") {
+      if (message.requestId === requested) { requested = undefined; ctx?.ui.notify(`The parent could not start your follow-up: ${bounded(String(message.text ?? ""), 300)}`, "warning"); }
+      return;
+    }
     try {
       if (owner !== "managed") throw new Error("Child is not parent-owned");
       if (message.type === "take") { await take(message.requestId); return; }
       if (!isId(message.taskId)) throw new Error("Invalid task ID");
       if (message.type === "dispatch") {
         if (current || !ctx!.isIdle()) throw new Error("Child is busy; wait for the current task result");
-        if (tasks >= MAX_TASKS || !text(message.task, 16000) || !message.task.trim() || !text(message.context, 16000)
+        if (tasks >= MAX_TASKS || !text(message.task, 16000) || !message.task.trim() || !text(message.context, 16000) || ![undefined, "user"].includes(message.from)
           || !Number.isFinite(message.deadline) || message.deadline <= Date.now() || message.deadline > Date.now() + m.role.timeoutMs + 1000) throw new Error("Invalid task or task limit reached");
         if (ctx!.model?.provider !== m.role.provider || ctx!.model?.id !== m.role.model) throw new Error("Requested model is no longer selected");
         const dir = join(m.dir, "tasks", message.taskId);
@@ -204,8 +255,11 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
         tasks++;
         current = { id: message.taskId, deadline: message.deadline, state: new ChildState(m) };
         current.state.active = true;
+        if (message.from === "user") requested = undefined;
+        // Each task starts with an empty list (the todo extension clears its own).
+        todos = []; pi.events?.emit(CLEAR_TODOS, {}); onProgress(undefined);
         emit({ type: "accepted", requestId: message.requestId, taskId: current.id });
-        allowedInput = taskPrompt(current.id, message.task, message.context);
+        allowedInput = taskPrompt(current.id, message.task, message.context, message.from === "user" ? "user" : "parent");
         // The terminal title follows the current task (Rex shows it on the pane).
         pi.setSessionName(`${m.name ?? m.agent ?? "Rex"}: ${message.task.replace(/\s+/g, " ").trim().slice(0, 60)}`);
         pi.sendUserMessage(allowedInput, { expandPromptTemplates: false });
@@ -241,6 +295,7 @@ export function registerChild(pi: ExtensionAPI, manifestPath: string, onReady: (
       if ((info.mode & 0o077) !== 0 || info.size > 64 * 1024) throw new Error("Rex child manifest must be private and bounded");
       manifest = validateManifest(JSON.parse(await readFile(manifestPath, "utf8")), true);
       const m = manifest;
+      todos = restoreTodos((ctx.sessionManager as any).getBranch?.() ?? []).items;
       const claim = await readOwner(m.dir, m.id);
       if (claim === "human") { owner = "human"; pi.setActiveTools(m.tools); status(); return; }
       if (claim !== "managed") throw new Error("Child closure or ownership transition is already claimed");

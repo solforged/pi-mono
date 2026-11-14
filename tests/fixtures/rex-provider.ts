@@ -14,8 +14,13 @@ export default function (pi: ExtensionAPI) {
     streamSimple(model, _context, options) {
       const stream = createAssistantMessageEventStream();
       const last: any = _context.messages.at(-1);
-      const waiting = JSON.stringify(last).includes("Wait for cancellation fixture");
-      const asking = last?.role === "user" && JSON.stringify(last).includes("Ask the user fixture");
+      // "Todo progress fixture": list three steps, finish one, then keep working until cancelled.
+      const users = _context.messages.map((m, i) => m.role === "user" ? i : -1).filter(i => i >= 0), lastUser = users.at(-1) ?? -1;
+      const todoStep = lastUser >= 0 && JSON.stringify(_context.messages[lastUser]).includes("Todo progress fixture")
+        ? _context.messages.slice(lastUser).filter(m => m.role === "toolResult").length : -1;
+      const waiting = JSON.stringify(last).includes("Wait for cancellation fixture") || todoStep >= 2;
+      const asking = lastUser >= 0 && JSON.stringify(_context.messages[lastUser]).includes("Ask the user fixture") && last?.role !== "toolResult";
+
       let timer: ReturnType<typeof setTimeout> | undefined, finished = false;
       const finish = () => {
         if (finished) return;
@@ -29,8 +34,11 @@ export default function (pi: ExtensionAPI) {
           stream.push({ type: "error", reason: "aborted", error: output }); stream.end(); return;
         }
         stream.push({ type: "start", partial: output });
-        if (asking) {
-          const call = { type: "toolCall" as const, id: `ask-${Date.now()}`, name: "ask_user_question", arguments: { questions: [{ question: "Pick one?", options: [{ label: "Alpha" }, { label: "Beta" }] }] } };
+        const tool = asking ? { name: "ask_user_question", arguments: { questions: [{ question: "Pick one?", options: [{ label: "Alpha" }, { label: "Beta" }] }] } }
+          : todoStep === 0 ? { name: "todo", arguments: { action: "add", items: ["Read", "Change", "Check"] } }
+          : todoStep === 1 ? { name: "todo", arguments: { action: "update", id: 1, status: "done" } } : undefined;
+        if (tool) {
+          const call = { type: "toolCall" as const, id: `call-${Date.now()}`, ...tool };
           output.content.push(call); output.stopReason = "toolUse";
           stream.push({ type: "toolcall_start", contentIndex: 0, partial: output });
           stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: call, partial: output });

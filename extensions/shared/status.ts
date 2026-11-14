@@ -2,7 +2,7 @@
 // Rex widget and tool rows, workflowz pools, and their receipts. A state has
 // one glyph and one tone everywhere, and numbers read the same way.
 
-export type Tone = "accent" | "success" | "error" | "warning" | "muted" | "dim";
+export type Tone = "accent" | "success" | "error" | "warning" | "muted" | "dim" | "borderMuted";
 export type Theme = { fg(tone: Tone, text: string): string; bold?(text: string): string };
 export type State = "attention" | "working" | "starting" | "done" | "failed" | "cancelled" | "idle" | "yours";
 

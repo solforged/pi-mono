@@ -13,7 +13,7 @@ export interface RexWorkerResult {
   provider: string; model: string; worktree?: string; sessionFile: string; elapsedMs: number;
 }
 export interface RexWorkers {
-  /** Opens a managed child in the deck; resolves to its id once it is ready. */
+  /** Opens a managed child in the Agents tab; resolves to its id once it is ready. */
   open(agent: AgentName, title: string, ctx: ExtensionContext, signal: AbortSignal): Promise<string>;
   /** Runs one task on an idle child and reads its result, so Rex does not deliver it again. */
   run(child: string, task: string, context: string, signal: AbortSignal, title?: string): Promise<RexWorkerResult>;
