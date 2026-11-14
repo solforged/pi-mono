@@ -155,6 +155,10 @@ re-laid out once; otherwise only the affected pane moves. If a mutation fails or
 the layout does not settle, automation pauses (with a notice) instead of
 retrying; arrange panes as you like, then `/agents layout` resumes it.
 
+`/new`, `/resume` and `/fork` leave the children's panes where they are, as
+retired children. The strip closes, and a roster with children beside it
+says that it is no longer updated. Resuming the session brings both back.
+
 ## Agent hub
 
 Press `←` on an empty prompt (or `ctrl+shift+a`, or run `/agents`) to open the

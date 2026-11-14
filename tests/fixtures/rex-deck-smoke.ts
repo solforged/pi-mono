@@ -96,8 +96,18 @@ try {
   await new Promise(r => setTimeout(r, show ? 5000 : 500));
   const settled = (await view()).windows.find((w: any) => w.window_id === home.windowId).layers[0].layout.split.ratio;
   assert(Math.abs(settled - 0.55) < 0.02, `parent keeps 55% after settling (got ${settled})`);
-  await manager.stop();
-  console.log("Passed: deck slots, strip, capped grid overflow, even sizes, attention promotion, Agents tab order and label; focus preserved. No Pi or model calls.");
+  // Another session takes over the parent Pi (/new): the strip closes, and the
+  // roster, which still has children beside it, says that it is no longer updated.
+  await manager.leave(true);
+  const left = await rex.snapshot(session);
+  assert(!left.blocks.some((b: any) => b.block_id === strip), "the strip pane closed");
+  assert(left.blocks.some((b: any) => b.block_id === grid!.roster), "the roster stays beside its children");
+  await new Promise(r => setTimeout(r, 1500));
+  const rosterRows = (await rex.rows(session, grid.roster)).rows;
+  const roster = execFileSync("rex", ["--autostart=false", "capture", "-s", session, "-b", grid.roster], { encoding: "utf8" }).replace(/\n$/, "").split("\n").slice(-rosterRows);
+  assert.match(roster[0], /^Rex agents · no longer updated/, JSON.stringify(roster.slice(0, 2)));
+  if (!show) assert.deepEqual(focusOf(left.view).active, before.active, "closing the strip did not change the active window");
+  console.log("Passed: deck slots, strip, capped grid overflow, even sizes, attention promotion, Agents tab order and label, strip and roster after a session change; focus preserved. No Pi or model calls.");
 } finally {
   if (show && original) { try { select(original); } catch {} }
   for (const block of created.reverse()) await rex.close(session, block).catch(() => {});

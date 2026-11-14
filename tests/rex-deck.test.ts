@@ -255,6 +255,37 @@ test("the manager converges 14 children into a 3-slot deck under a strip, a 3×3
   assert.deepEqual(cells(tree(sim.windows.get("window:home")!)).map(c => c.block), [P]);
 });
 
+test("a replaced session closes its strip and marks the roster; coming back plans from what is there; a quit removes the files", async t => {
+  const { DeckManager } = await import("../extensions/rex/layout.ts");
+  const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+  const { existsSync } = await import("node:fs");
+  const dir = await mkdtemp("/tmp/rex-deck-"); t.after(() => rm(dir, { recursive: true, force: true }));
+  const sim = simulator(63, true), kids = new Map<number, DeckChild>(), states: any[] = [], pauses: string[] = [];
+  const make = () => new DeckManager({ rex: sim.rex, session: "session:x", parent: P, cwd: dir, rosterFile: `${dir}/roster.txt`, stripFile: `${dir}/strip.txt`,
+    children: () => [...kids.values()], roster: () => ["Rex agents", ...[...kids.values()].map(k => k.name)], onState: g => states.push(g), onPause: r => pauses.push(r) });
+  const first = make();
+  for (let n = 1; n <= 6; n++) { kids.set(n, child(n, { priority: 3, line: `line ${n}` })); sim.all.add(B(n)); await first.run(); }
+  const homeBlocks = () => cells(tree(sim.windows.get("window:home")!)).map(c => c.block);
+  assert(homeBlocks().includes(S)); assert(sim.windows.has("window:grid"));
+  const saved = states.at(-1), mutations = sim.rex.calls.length;
+  // /new, /resume or /fork: this Pi lives on, so the panes' loops would keep showing the old session.
+  await first.leave(true);
+  assert.deepEqual(sim.rex.calls.slice(mutations), ["close"]); assert(!sim.all.has(S)); assert(!homeBlocks().includes(S));
+  assert.equal(cells(tree(sim.windows.get("window:grid")!)).length, 4, "the roster stays with the children beside it");
+  assert.match(await readFile(`${dir}/roster.txt`, "utf8"), /^Rex agents · no longer updated: [^\n]+\nc1\n/);
+  assert(!existsSync(`${dir}/strip.txt`));
+  first.schedule(0); await new Promise(r => setTimeout(r, 20)); assert.equal(sim.rex.calls.length, mutations + 1, "a manager that left stays idle");
+  // The session is resumed: its saved strip is gone, so it is forgotten and made again, and the roster is live.
+  const back = make(); back.grid = saved.grid; back.strip = saved.strip;
+  await back.run();
+  assert.deepEqual(pauses, []); assert(homeBlocks().includes(S));
+  assert.match(await readFile(`${dir}/roster.txt`, "utf8"), /^Rex agents\nc1\n/);
+  // A quit ends the panes with the process: nothing to close, only files to remove.
+  const before = sim.rex.calls.length;
+  await back.leave(false);
+  assert.equal(sim.rex.calls.length, before); assert(!existsSync(`${dir}/roster.txt`)); assert(!existsSync(`${dir}/strip.txt`));
+});
+
 test("a failing or non-converging mutation pauses layout instead of retrying", async t => {
   const { DeckManager } = await import("../extensions/rex/layout.ts");
   const { mkdtemp, rm } = await import("node:fs/promises");

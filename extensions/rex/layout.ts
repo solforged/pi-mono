@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import { atomicWrite } from "../workflows/state.ts";
 import type { RexClient } from "./client.ts";
 import { classify, PARENT_SHARE, plan, rosterCommand, rosterText, stripText, type DeckChild, type Op } from "./deck.ts";
@@ -47,6 +48,23 @@ export class DeckManager {
   }
   resume() { this.paused = undefined; this.schedule(0); }
   stop() { this.stopped = true; if (this.timer) clearTimeout(this.timer); return this.running ?? Promise.resolve(); }
+  /**
+   * The session is over for this Pi, unlike a reload, which finds its panes
+   * again. On a quit the strip and roster panes end with the process. When
+   * another session takes over (`replaced`), the process they watch lives on:
+   * the strip is closed, and a roster that still has children beside it says
+   * that it is no longer updated. A session that comes back plans from what
+   * it finds, so nothing here needs recording.
+   */
+  async leave(replaced: boolean, signal = AbortSignal.timeout(5000)) {
+    await this.stop();
+    const { rex, session, rosterFile, stripFile } = this.opts;
+    if (replaced && this.strip) await rex.close(session, this.strip, signal).catch(() => {});
+    await rm(stripFile, { force: true }).catch(() => {});
+    if (!replaced || !this.grid) { await rm(rosterFile, { force: true }).catch(() => {}); return; }
+    const [, ...rows] = this.opts.roster();
+    await atomicWrite(rosterFile, `${rosterText(["Rex agents · no longer updated: the parent Pi moved to another session", ...rows])}\n`).catch(() => {});
+  }
   /** Rewrites the roster and strip text without touching Rex (activity, elapsed time, cost). */
   async refresh() {
     if (this.stopped) return;

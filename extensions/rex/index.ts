@@ -123,13 +123,15 @@ export default async function (pi: ExtensionAPI) {
   pi.on("before_agent_start", event => {
     instructions = (event.systemPromptOptions.contextFiles ?? []).map(f => `Instructions from ${f.path}:\n${f.content}`).join("\n\n");
   });
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (event) => {
     lifetime.abort(new Error("Parent session closed or reloaded"));
     setTitlePrefix("");
     if (flushTimer) clearTimeout(flushTimer);
     if (ticker) clearInterval(ticker);
     currentCtx?.ui.setWidget("rex-agents", undefined);
-    await deck?.stop();
+    // A reload keeps the session and finds its strip and roster again.
+    if (event.reason === "reload") await deck?.stop();
+    else await deck?.leave(event.reason !== "quit");
     await runner.shutdown();
   });
   // Watched workflowz pools run their items on managed children (see workers.ts).
@@ -184,12 +186,14 @@ export default async function (pi: ExtensionAPI) {
     if (ctx.mode === "tui" && session && parent) {
       installLeftArrow(ctx, () => void hub(currentCtx ?? ctx).catch(error => currentCtx?.ui.notify(String(error), "error")),
         "Press ← again for agents");
-      const saved = (ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "rex-layout").at(-1) as any)?.data;
       const dir = join(await scopeRoot(runner.agentDir, config.profile, ctx.cwd), "rex"), sid = ctx.sessionManager.getSessionId();
+      // A fork copies the branch, layout entry included, but the panes are the first session's.
+      const last = (ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "rex-layout").at(-1) as any)?.data;
+      const saved = last && (last.session ?? sid) === sid ? last : undefined;
       deck = new DeckManager({ rex, session, parent, cwd: ctx.cwd,
         rosterFile: join(dir, `roster-${sid}.txt`), stripFile: join(dir, `strip-${sid}.txt`),
         children: deckChildren, roster: rosterLines, tabLabel: agentsTab,
-        onState: (state: LayoutState) => pi.appendEntry("rex-layout", { grid: state.grid ?? null, strip: state.strip ?? null }),
+        onState: (state: LayoutState) => pi.appendEntry("rex-layout", { grid: state.grid ?? null, strip: state.strip ?? null, session: sid }),
         onPause: reason => currentCtx?.ui.notify(`Rex layout paused: ${reason}. Arrange panes in Rex, then /agents layout to resume.`, "warning") });
       deck.grid = saved?.grid ?? undefined;
       deck.strip = saved?.strip ?? undefined;
