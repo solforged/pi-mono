@@ -24,7 +24,7 @@ import { agentsTabLabel, MARKS, pickMark } from "./tabs.ts";
 import { REX_WORKERS, type RexWorkersRequest } from "./workers.ts";
 
 const str = () => Type.Optional(Type.String());
-import { activityLine, fitResults, oneLine, priority, resultText, rows, shortId, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
+import { activityLine, coalesce, fitResults, oneLine, priority, resultText, rows, shortId, SHORTCUT, taskMeta, waitingLine, type PickAction, type TaskMeta } from "./ui.ts";
 
 export default async function (pi: ExtensionAPI) {
   registerRexTitle();
@@ -65,15 +65,16 @@ export default async function (pi: ExtensionAPI) {
   // Activity and cost change on every child tool call; only placement-relevant
   // changes re-plan the layout, the rest just rewrite the strip and roster text.
   let layoutKey = "", ticker: ReturnType<typeof setInterval> | undefined;
-  runner.onChange = () => {
+  const draw = () => {
     if (lifetime.signal.aborted || currentCtx?.mode !== "tui") return;
     const items = rows(runner.runs.values(), runner.tasks);
     currentCtx.ui.setWidget("rex-agents", items.length ? widget(items) : undefined);
     for (const fn of hubListeners) fn();
+    const kids = deckChildren();
     // Marked only while it has children, so other Pi tabs stay plain.
-    setTitlePrefix(mark && deckChildren().length ? mark : "");
+    setTitlePrefix(mark && kids.length ? mark : "");
     if (!deck) return;
-    const key = JSON.stringify(deckChildren().map(({ line: _line, ...placement }) => placement));
+    const key = JSON.stringify(kids.map(({ line: _line, ...placement }) => placement));
     if (key !== layoutKey) { layoutKey = key; deck.schedule(); }
     else void deck.refresh().catch(() => {});
     // Elapsed times tick while work runs.
@@ -81,6 +82,11 @@ export default async function (pi: ExtensionAPI) {
     if (busy && !ticker) { ticker = setInterval(() => void deck?.refresh().catch(() => {}), 2000); ticker.unref?.(); }
     else if (!busy && ticker) { clearInterval(ticker); ticker = undefined; }
   };
+  // Children report every tool call and message, and each report redraws the
+  // widget and rewrites the strip and roster. The first change draws at once;
+  // those that follow shortly are drawn together.
+  const onChange = coalesce(draw, 250);
+  runner.onChange = onChange.call;
   /** Children the deck/grid may arrange, with attention-first priority. */
   const deckChildren = () => rows(runner.runs.values(), runner.tasks).flatMap(row => {
     const run = runner.runs.get(row.id)!, last = runner.tasks.get(run.taskIds.at(-1) ?? "");
@@ -128,6 +134,7 @@ export default async function (pi: ExtensionAPI) {
     setTitlePrefix("");
     if (flushTimer) clearTimeout(flushTimer);
     if (ticker) clearInterval(ticker);
+    onChange.stop();
     currentCtx?.ui.setWidget("rex-agents", undefined);
     // A reload keeps the session and finds its strip and roster again.
     if (event.reason === "reload") await deck?.stop();

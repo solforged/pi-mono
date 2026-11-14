@@ -141,3 +141,19 @@ export function completionLines(items: TaskMeta[], theme: Theme) {
 export function priority(row: Row, unread: boolean) {
   return row.group === "attention" ? 4 : row.group === "running" ? 3 : (row.group === "done" || row.group === "failed") && unread ? 2 : row.group === "yours" ? 0 : 1;
 }
+
+/**
+ * Runs `fn` at the first call, and once more `ms` later when calls came in
+ * between, so a burst costs two runs and the last state is always drawn.
+ */
+export function coalesce(fn: () => void, ms: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined, again = false, stopped = false;
+  const call = () => {
+    if (stopped) return;
+    if (timer) { again = true; return; }
+    fn();
+    timer = setTimeout(() => { timer = undefined; if (again) { again = false; call(); } }, ms);
+    timer.unref?.();
+  };
+  return { call, stop() { stopped = true; clearTimeout(timer); } };
+}

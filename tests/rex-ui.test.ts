@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { displayTaskPrompt, taskPrompt } from "../extensions/rex/protocol.ts";
 import { columns, COMMANDS, CONFIRM, entries, entryLine, LeftGate, listLines, replyTarget, tailLines, type Peer } from "../extensions/rex/hub-model.ts";
-import { activityLine, callLine, childFooter, money, fitResults, resultText, rows, shortId, splitResult, taskLine, waitingLine, widgetLine, type TaskMeta } from "../extensions/rex/ui.ts";
+import { activityLine, callLine, childFooter, coalesce, money, fitResults, resultText, rows, shortId, splitResult, taskLine, waitingLine, widgetLine, type TaskMeta } from "../extensions/rex/ui.ts";
 import { canUseRex } from "../extensions/rex/tools.ts";
 
 const run = (name: string, extra: object = {}) => ({ id: `${name}-id`, name, agent: "scout", owner: "managed", status: "idle", taskIds: [], ...extra }) as any;
@@ -176,4 +176,18 @@ test("Rex tools replace subagent only in an interactive Pi inside a Rex pane", (
   for (const mode of ["print", "json", "rpc"]) assert.equal(canUseRex(pane, mode), false, `${mode} cannot open panes`);
   assert.equal(canUseRex({ REX_SESSION: "s" }, "tui"), false);
   assert.equal(canUseRex({}, "tui"), false);
+});
+
+test("a burst of changes draws at once and once more when it ends", async () => {
+  let drawn = 0;
+  const changes = coalesce(() => { drawn++; }, 20);
+  changes.call(); assert.equal(drawn, 1, "the first change is not delayed");
+  for (let n = 0; n < 50; n++) changes.call();
+  assert.equal(drawn, 1);
+  await new Promise(r => setTimeout(r, 40)); assert.equal(drawn, 2, "the last state is drawn");
+  await new Promise(r => setTimeout(r, 40)); assert.equal(drawn, 2, "a quiet window draws nothing");
+  changes.call(); assert.equal(drawn, 3);
+  changes.call(); changes.stop();
+  await new Promise(r => setTimeout(r, 40)); assert.equal(drawn, 3, "nothing draws after a stop");
+  changes.call(); assert.equal(drawn, 3);
 });
