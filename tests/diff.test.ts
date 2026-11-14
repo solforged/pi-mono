@@ -350,7 +350,7 @@ test("the viewer answers keys, hovering, clicks and scrollbar drags", async (t) 
   await writeFile(join(repo, "a.ts"), `${changed.join("\n")}\n`);
   await writeFile(join(repo, "b.ts"), "export const b = 1;\n");
 
-  const viewer = spawn(process.execPath, [join(import.meta.dirname, "../extensions/diff/viewer.ts"), "--root", repo, "--ipc", join(repo, ".git", "ipc"), "--pi-pid", String(process.pid)], { stdio: ["pipe", "pipe", "pipe"] });
+  const viewer = spawn(process.execPath, ["--import", join(import.meta.dirname, "fixtures/viewer-resize.mjs"), join(import.meta.dirname, "../extensions/diff/viewer.ts"), "--root", repo, "--ipc", join(repo, ".git", "ipc"), "--pi-pid", String(process.pid)], { stdio: ["pipe", "pipe", "pipe"] });
   t.after(() => viewer.kill());
   let output = "";
   viewer.stdout.setEncoding("utf8").on("data", (chunk) => { output += chunk; });
@@ -366,6 +366,12 @@ test("the viewer answers keys, hovering, clicks and scrollbar drags", async (t) 
 
   let screen = await until(has("change 1/2 · file 1/2"), "first change of a.ts");
   assert.match(screen[23], /← +→ file/);
+  // A round trip through a smaller terminal can clip unchanged rows. Repaint
+  // all of them even though the final size matches the previous layout.
+  const beforeResize = output.length;
+  viewer.kill("SIGWINCH");
+  await until(() => new Set([...output.slice(beforeResize).matchAll(/\x1b\[(\d+);1H/g)].map((m) => Number(m[1]))).size === 24,
+    "a full repaint after shrinking and restoring the pane");
   send("\x1b[1;2B");
   await until(has("change 2/2 · file 1/2"), "shift-down moves to the next change");
   send("\x1b[1;2B");

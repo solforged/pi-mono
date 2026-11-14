@@ -297,13 +297,12 @@ if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", input);
 out.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[2J\x1b]11;?\x1b\\");
+// A temporary smaller size can clip rows even when the final size matches
+// the last layout. Invalidate the painted-line cache after every resize batch.
 let resized: ReturnType<typeof setTimeout> | undefined;
 out.on("resize", () => {
   clearTimeout(resized);
-  resized = setTimeout(() => {
-    if (out.columns === view.columns && out.rows === view.rows) return;
-    draw(true);
-  }, RESIZE_SETTLE_MS);
+  resized = setTimeout(() => draw(true), RESIZE_SETTLE_MS);
 });
 
 load();

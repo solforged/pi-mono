@@ -357,13 +357,13 @@ if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", input);
 out.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[2J\x1b]11;?\x1b\\");
-// Rex passes a new pane through more than one size as it settles, so wait for
-// the last one, and leave the screen alone if that is the size already drawn.
+// Rex passes a new pane through more than one size as it settles. Repaint
+// after the last one even when it matches the last layout: a smaller interim
+// size may have clipped rows that the painted-line cache considers unchanged.
 let resized: ReturnType<typeof setTimeout> | undefined;
 out.on("resize", () => {
   clearTimeout(resized);
   resized = setTimeout(() => {
-    if (out.columns === view.columns && out.rows === view.rows) return;
     clampScroll();
     draw(true);
   }, RESIZE_SETTLE_MS);

@@ -314,7 +314,7 @@ test("the document viewer scrolls, follows links in place, goes back and reloads
   await writeFile(join(dir, "a.md"), `# Alpha\n\nGo to [beta](b.md#later).\n\n${filler}\n\n## End\n`);
   await writeFile(join(dir, "b.md"), `# Beta\n\n${filler}\n\n## Later\n\nHere.\n`);
   const ipc = join(dir, "ipc");
-  const viewer = spawn(process.execPath, [join(import.meta.dirname, "../extensions/diff/doc.ts"), "--file", join(dir, "a.md"), "--ipc", ipc,
+  const viewer = spawn(process.execPath, ["--import", join(import.meta.dirname, "fixtures/viewer-resize.mjs"), join(import.meta.dirname, "../extensions/diff/doc.ts"), "--file", join(dir, "a.md"), "--ipc", ipc,
     "--pi-pid", String(process.pid), "--root", dir, "--marked", bundledMarked(piBinary)!], { stdio: ["pipe", "pipe", "pipe"] });
   t.after(() => viewer.kill());
   let output = "";
@@ -331,6 +331,12 @@ test("the document viewer scrolls, follows links in place, goes back and reloads
   let screen = await until(has("Go to beta."), "the first document");
   assert.match(screen[0], /^ a\.md +top $/);
   assert.equal(existsSync(join(ipc, `${process.pid}.doc-viewer`)), true);
+  // Replacing the diff briefly halves this pane. Returning to the same size
+  // still needs to repaint every row, not just rows whose content changed.
+  const beforeResize = output.length;
+  viewer.kill("SIGWINCH");
+  await until(() => new Set([...output.slice(beforeResize).matchAll(/\x1b\[(\d+);1H/g)].map((m) => Number(m[1]))).size === 24,
+    "a full repaint after shrinking and restoring the pane");
   viewer.stdin.write("G");
   await until(has("End"), "G goes to the end");
   viewer.stdin.write("g");

@@ -118,8 +118,9 @@ transcript as it was. To remove the handler, delete the app and run
 `/diff` splits `$REX_BLOCK` with Rex's `session.new_split` and starts
 `viewer.ts` with the `node` found on `PATH` (22.18 or later). The new terminal
 starts at the size it will end up with, and the border is then moved to give it
-a third, because Rex ignores the split's ratio. The viewer redraws only once
-resizes settle. The viewer is a standalone terminal
+a third, because Rex ignores the split's ratio. The viewer redraws every row
+once resizes settle, even if the pane returned to its original size: a smaller
+intermediate size can clip unchanged text. The viewer is a standalone terminal
 program with no Pi imports. It takes its colors from the Pi theme and asks the
 terminal for its background, so the added and removed tints blend in.
 
