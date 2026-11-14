@@ -14,6 +14,7 @@ import { recordUsage } from "../workflows/usage.ts";
 import { Jobs, type Backend, type Tier } from "./jobs.ts";
 import { GUEST_COMMAND, SANDBOX_CHANGED, type GuestCommandRequest } from "../sandbox/guest.ts";
 import { REX_WORKERS, type RexWorkersRequest } from "../rex/workers.ts";
+import { glyph, type State } from "../shared/status.ts";
 import { Kernel, localLaunch, type CellResult, type Launch } from "./kernel.ts";
 import { budgetIn, keywordsIn, loadNotices, NOTICE_TYPE, noticeMessage, noticesInContext, type NoticeDetails } from "./notices.ts";
 import { ToolServer } from "./tool-server.ts";
@@ -145,7 +146,7 @@ export default async function (pi: ExtensionAPI) {
     if (!lines.length) { ctx.ui.setWidget("workflowz", undefined); return; }
     const phase = jobs?.phase;
     ctx.ui.setWidget("workflowz", (_tui, theme) => ({
-      render: (width: number) => [theme.fg("accent", `workflowz${phase ? ` · ${phase}` : ""}`), ...lines.slice(0, 6).map((line) => theme.fg("muted", `  ${line}`)),
+      render: (width: number) => [theme.fg("accent", `workflowz${phase ? ` · ${phase}` : ""}`), ...lines.slice(0, 6).map((line) => `  ${glyph(lineState(line), theme)} ${theme.fg("muted", line)}`),
         ...(lines.length > 6 ? [theme.fg("dim", `  … ${lines.length - 6} more`)] : [])].map((line) => truncateToWidth(line, width)),
       invalidate() {},
     }));
@@ -265,7 +266,7 @@ export default async function (pi: ExtensionAPI) {
   });
   pi.registerMessageRenderer("workflowz-results", (message, options, theme) => {
     const d = message.details as { items?: Array<{ id: string; status: string; label: string; agent?: string }>; receipts?: string[] } | undefined;
-    const rows = (d?.items ?? []).map((i) => `  ${theme.fg(i.status === "done" ? "success" : "warning", i.status === "done" ? "✓" : "✗")} ${i.id} ${theme.fg("dim", `${i.agent ?? ""} ${i.label}`)}`);
+    const rows = (d?.items ?? []).map((i) => `  ${glyph(itemState(i.status), theme)} ${i.id} ${theme.fg("dim", `${i.agent ?? ""} ${i.label}`)}`);
     const receipts = (d?.receipts ?? []).map((r) => theme.fg("dim", `  ${r}`));
     const head = theme.fg("accent", "⚙ ") + theme.fg("muted", "Workflow results");
     return new Text(options.expanded ? `${head}\n${String(message.content)}` : [head, ...rows, ...receipts].join("\n"), options.outputPad, 0);
@@ -349,7 +350,7 @@ export default async function (pi: ExtensionAPI) {
       if (options.expanded) return new Text(text, 0, 0);
       // Collapsed: one row per result, then receipts and what still runs.
       const rows = text.split("\n").filter((line) => /^### |^Pool .* settled|^Judge batch|^Still running|^Nothing is running|^No |^Stopped waiting/.test(line))
-        .map((line) => line.startsWith("### ") ? `${/ · done · /.test(line) ? theme.fg("success", "✓") : theme.fg("warning", "✗")} ${line.slice(4)}` : theme.fg("dim", line));
+        .map((line) => line.startsWith("### ") ? `${glyph(itemState(/ · (done|failed|cancelled|running|queued) · /.exec(line)?.[1] ?? ""), theme)} ${line.slice(4)}` : theme.fg("dim", line));
       const hint = context?.keyHint?.("app.tools.expand", "to expand") ?? "";
       return new Text([...rows, ...(hint ? [theme.fg("dim", `(${hint})`)] : [])].join("\n"), 0, 0);
     },
@@ -395,4 +396,14 @@ export default async function (pi: ExtensionAPI) {
       report(ctx, text);
     },
   });
+}
+
+/** Item statuses in the shared status vocabulary, as Rex children show them. */
+function itemState(status: string): State {
+  return status === "done" ? "done" : status === "cancelled" ? "cancelled" : status === "running" ? "working" : status === "queued" ? "starting" : "failed";
+}
+/** A widget line's state: a pool whose items have all finished is done; anything else listed is still going. */
+function lineState(line: string): State {
+  const finished = / (\d+)\/(\d+) finished/.exec(line);
+  return finished && finished[1] === finished[2] ? "done" : / · queued · /.test(line) ? "starting" : "working";
 }
