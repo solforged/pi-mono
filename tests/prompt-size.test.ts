@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import test from "node:test";
 import { declarationSize, dropRepeatedRules, measure, owner, REPEATED_RULES, report, sections, withoutRepeatedRules } from "../extensions/prompt-size/measure.ts";
-import { switchTools } from "../extensions/rex/tools.ts";
+import { switchTools, withFollowUps } from "../extensions/rex/tools.ts";
 import { root, noModel } from "./helpers.ts";
 
 test("prompts are measured by section and tools by owning extension", () => {
@@ -45,6 +45,14 @@ test("one delegation tool per session, restoring only what the switch removed", 
   assert.deepEqual(switchTools(["read", "rex_agent"], all, true, []).active, ["read", "rex_agent"]);
   // Without the workflows extension, nothing about subagent is recorded.
   assert.deepEqual(switchTools(["rex_agent"], ["rex_agent"], true, []).removed, []);
+});
+
+test("rex_send and rex_result are declared with the first child, and only beside rex_agent", () => {
+  assert.deepEqual(withFollowUps(["read", "rex_agent"]), ["read", "rex_agent", "rex_send", "rex_result"]);
+  assert.deepEqual(withFollowUps(["rex_agent", "rex_result"]), ["rex_agent", "rex_result", "rex_send"]);
+  assert.equal(withFollowUps(["read", "rex_agent", "rex_send", "rex_result"]), undefined, "nothing to add is no change");
+  // Outside Rex the switch took rex_agent away, and /tools may have: the others stay out too.
+  assert.equal(withFollowUps(["read", "subagent"]), undefined);
 });
 
 test("installed Pi keeps every repo tool declaration within budget", t => {

@@ -49,7 +49,9 @@ Rex starts terminals with its server's environment, whose PATH is usually the
 system default. Children get the parent's PATH so they find the same `fd`, `rg`,
 and project tools.
 
-The model has three tools:
+The model has three tools. `rex_send` and `rex_result` are declared from the
+session's first child on, so a session that never delegates does not carry
+them in every request:
 
 - `rex_agent`: start an advisor, scout, researcher, or worker and its first task.
 - `rex_send`: addressed by `child` name. `followup` starts another task in an

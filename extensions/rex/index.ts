@@ -18,7 +18,7 @@ import { entries as hubEntries, short, type Entry, type HubAction, type Peer } f
 import { openHub, widget, type HubHost } from "./hub.ts";
 import { installLeftArrow } from "./left-editor.ts";
 import { completionRenderer, toolRenderers } from "./render.ts";
-import { canUseRex, switchTools, TOOLS_ENTRY } from "./tools.ts";
+import { canUseRex, switchTools, TOOLS_ENTRY, withFollowUps } from "./tools.ts";
 import { registerRexTitle, setTitlePrefix } from "./title.ts";
 import { agentsTabLabel, MARKS, pickMark } from "./tabs.ts";
 import { REX_WORKERS, type RexWorkersRequest } from "./workers.ts";
@@ -189,6 +189,7 @@ export default async function (pi: ExtensionAPI) {
     const refs = ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "rex-run")
       .map(e => ({ id: (e as any).data?.id, profile: (e as any).data?.profile ?? config.profile }));
     await runner.restore(refs, ctx);
+    if (runner.runs.size) declareFollowUps();
     const session = process.env.REX_SESSION, parent = process.env.REX_BLOCK;
     if (ctx.mode === "tui" && session && parent) {
       installLeftArrow(ctx, () => void hub(currentCtx ?? ctx).catch(error => currentCtx?.ui.notify(String(error), "error")),
@@ -210,6 +211,12 @@ export default async function (pi: ExtensionAPI) {
   pi.on("session_before_tree", (_event, ctx) => {
     if ([...runner.tasks.values()].some(running)) { ctx.ui.notify("Finish or cancel Rex tasks before changing conversation branches.", "warning"); return { cancel: true }; }
   });
+  // rex_send and rex_result act on children, so they are declared from the
+  // first child on (or with restored ones), not with every request before it.
+  const declareFollowUps = () => {
+    const next = withFollowUps(pi.getActiveTools());
+    if (next) pi.setActiveTools(next);
+  };
   const RESULTS_BYTES = 64_000;
   const runningTasks = () => [...runner.tasks.values()].filter(running).filter(t => runner.runs.get(t.childId))
     .map(t => ({ name: runner.runs.get(t.childId)!.name, elapsedMs: Date.now() - t.started }));
@@ -278,6 +285,7 @@ export default async function (pi: ExtensionAPI) {
       runner.checkTask(params.task, params.context);
       const config = await loadConfig(root, runner.agentDir, ctx.sessionManager.getBranch());
       const run = await runner.open(params.agent, config, ctx, instructions, combined, r => pi.appendEntry("rex-run", { id: r.id, profile: r.profile }), params.title ?? "", params.name);
+      declareFollowUps();
       let task: TaskRun | undefined;
       try {
         if (params.view === "background") await runner.update(Object.assign(run, { view: "background" as const }));
@@ -294,7 +302,7 @@ export default async function (pi: ExtensionAPI) {
   });
   pi.registerTool({
     ...toolRenderers("rex_send"),
-    name: "rex_send", label: "Message Rex child", executionMode: "sequential",
+    name: "rex_send", label: "Message Rex child", executionMode: "sequential", defaultActive: false,
     description: "Message a Rex child by name. followup: new task for an idle child; steer: text for its active taskId; cancel; close: an idle child whose results you have read. Never close Rex panes from the shell.",
     parameters: Type.Object({ child: Type.String(), mode: StringEnum(["followup", "steer", "cancel", "close"] as const),
       text: str(), title: str(), taskId: str(), context: str(), wait: Type.Optional(Type.Boolean()) }),
@@ -325,7 +333,7 @@ export default async function (pi: ExtensionAPI) {
   pi.registerTool({
     ...toolRenderers("rex_result"),
     // Sequential: two readers woken by one completion would otherwise race for it.
-    name: "rex_result", label: "Rex results", executionMode: "sequential",
+    name: "rex_result", label: "Rex results", executionMode: "sequential", defaultActive: false,
     description: "Rex child results; read them before reporting success. next=true: all unread results, or wait for the next (instead of polling; a user message ends the wait, so answer it and call again). taskId: that result; wait=true waits. Neither: list children.",
     parameters: Type.Object({ next: Type.Optional(Type.Boolean()), taskId: Type.Optional(Type.String()), wait: Type.Optional(Type.Boolean()) }),
     async execute(_id, params, signal, onUpdate, ctx) {

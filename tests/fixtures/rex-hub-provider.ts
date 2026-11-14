@@ -1,8 +1,11 @@
 // Loaded explicitly by rex-hub-smoke.ts, in its parent and (via childExtensions) its
 // children. Fixed responses only; never deploy this fixture as an extension.
-import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, getCurrentTools, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { emptyUsage } from "../../extensions/workflows/process.ts";
+
+// Which Rex tools the parent's first request declared: the others join with the first child.
+let declaredFirst: string | undefined;
 
 export default function (pi: ExtensionAPI) {
   // Rex starts terminals with its server's environment; the agent directory is passed explicitly.
@@ -17,6 +20,8 @@ export default function (pi: ExtensionAPI) {
       const output: AssistantMessage = { role: "assistant", provider: model.provider, model: model.id, api: model.api,
         timestamp: Date.now(), stopReason: "pending", content: [], usage: { ...emptyUsage(), cost: { ...emptyUsage().cost, total: 0.0123 } } };
       let timer: ReturnType<typeof setTimeout> | undefined, finished = false;
+      const declared = getCurrentTools(context.messages).map((tool: any) => tool.name as string).filter(name => name.startsWith("rex_")).sort().join(",");
+      if (!process.env.PI_REX_CHILD) declaredFirst ??= declared;
       const text = (body: string) => {
         const block = { type: "text" as const, text: body }; output.content.push(block);
         stream.push({ type: "text_start", contentIndex: 0, partial: output });
@@ -39,7 +44,7 @@ export default function (pi: ExtensionAPI) {
           calls.forEach((call, i) => { stream.push({ type: "toolcall_start", contentIndex: i, partial: output }); stream.push({ type: "toolcall_end", contentIndex: i, toolCall: call, partial: output }); });
           stream.push({ type: "done", reason: "toolUse", message: output }); stream.end(); return;
         }
-        if (!process.env.PI_REX_CHILD) return text(last?.role === "toolResult" ? "Children started." : "Parent fixture idle.");
+        if (!process.env.PI_REX_CHILD) return text(`${last?.role === "toolResult" ? "Children started." : "Parent fixture idle."} Rex tools before: ${declaredFirst}; after: ${declared}.`);
         text(`## Fixture result\n\nThe child answered **without a model request**.\n\n- one\n- two\n\nMessages: ${context.messages.length}.`);
       };
       options?.signal?.addEventListener("abort", finish, { once: true });

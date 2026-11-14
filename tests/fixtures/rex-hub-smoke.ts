@@ -71,6 +71,8 @@ try {
 
   await type(parent, "Spawn hub fixture\r");
   await until(parent, t => /● birch/.test(t) && /✓ cedar/.test(t) && t.includes("← agents"), "one running and one finished child", 60_000);
+  // A session without children does not carry rex_send and rex_result; the first child declares them.
+  await until(parent, t => t.replace(/\s+/g, " ").includes("Rex tools before: rex_agent; after: rex_agent,rex_result,rex_send."), "the follow-up tools declared after the first child");
   const runs = await childRuns();
   const birch = runs.find(r => r.name === "birch")?.block, cedar = runs.find(r => r.name === "cedar")?.block;
   assert(birch && cedar); created.push(birch, cedar);
@@ -168,7 +170,8 @@ finally {
     for (const block of [...new Set([...created, ...children])].reverse()) await rex.close(session, block).catch(() => {});
     await sleep(500);
     for (const b of api("session.list_blocks", {}).blocks) if (!existing.has(b.block_id) && ["agents", "not in the deck"].includes(b.label)) await rex.close(session, b.block_id).catch(() => {});
-    if (!failed) await rm(dir, { recursive: true, force: true });
+    // The Pis closing with their panes write state on the way out: remove it again after them.
+    if (!failed) { await rm(dir, { recursive: true, force: true }); await sleep(1500); await rm(dir, { recursive: true, force: true }); }
     else console.log(`Kept ${dir} for diagnosis`);
   } else console.log(`Kept the test window and ${dir}`);
 }

@@ -18,3 +18,13 @@ export function switchTools(active: string[], registered: string[], inRex: boole
 
 /** Rex children open only from an interactive Pi in a Rex pane; print, JSON and RPC runs there keep `subagent`. */
 export const canUseRex = (env: Record<string, string | undefined>, mode: string) => !!(env.REX_SESSION && env.REX_BLOCK) && mode === "tui";
+
+/**
+ * The active tools with `rex_send` and `rex_result` added, or nothing when
+ * they are there already or `rex_agent` is not: outside Rex, and where the
+ * user turned delegation off, they stay undeclared.
+ */
+export function withFollowUps(active: string[]): string[] | undefined {
+  const missing = REX_TOOLS.filter(name => !active.includes(name));
+  if (missing.length && !missing.includes("rex_agent")) return [...active, ...missing];
+}
