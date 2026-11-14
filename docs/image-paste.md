@@ -30,11 +30,14 @@ size. Nothing is attached when the current model does not accept images, for
 ## Previews
 
 While the editor holds image paths, thumbnails of up to three of them appear
-above it, each with its name and pixel size. They need the interactive
+above it, each with its name and pixel size: up to 48×8 cells for one image,
+32×5 each for several. They need the interactive
 terminal UI, a terminal that shows images (Rex, Ghostty, kitty, WezTerm or
 iTerm2), and `terminal.showImages` left on. On macOS the built-in `sips`
-shrinks each image to a thumbnail first; elsewhere only files up to 1 MB are
-previewed.
+shrinks each image to just the pixels those cells show, and again when the
+terminal reports a new cell size; elsewhere only files up to 1 MB are
+previewed. The thumbnail's line is sent to the terminal again whenever the
+lines above the editor move, which is why it stays small.
 
 omp draws these thumbnails inside bordered cards with Kitty Unicode
 placeholders. Pi's image renderer places images directly instead, one per
@@ -43,4 +46,5 @@ block of lines, so the previews are stacked rather than side by side.
 ## Transcript
 
 Prompts sent before the extension was installed show a clipboard path as a
-short `🖼 pasted image` link to the file. This changes only the display.
+short `pasted image` link to the file, led by the Nerd Font image icon the
+previews use. This changes only the display.

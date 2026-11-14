@@ -16,6 +16,10 @@ export interface Loaded { data: string; mimeType: string }
 
 export const limits = { images: 8, bytes: 20 * 1024 * 1024 };
 
+// Nerd Font image icon, one column wide like the status line's icons. The 🖼
+// emoji is one column to Pi but two on screen, so it ran into the label.
+export const imageIcon = "\uF03E";
+
 const imageExtension = /\.(png|jpe?g|gif|webp)$/i;
 // Escaped spaces are part of a path; macOS screenshot names also contain
 // U+202F, which is not a separator here.
@@ -141,5 +145,5 @@ export async function attach(
 // path becomes a short link to the file.
 export function shortenClipboardPaths(markdown: string): string {
   return markdown.replace(/(^|[\s(])((?:\/[^\s/]+)*\/(pi-clipboard-[0-9a-f-]+\.\w+))(?=$|[\s).,;:!?])/gim,
-    (_match, before: string, path: string) => `${before}[🖼 pasted image](file://${encodeURI(path)})`);
+    (_match, before: string, path: string) => `${before}[${imageIcon} pasted image](file://${encodeURI(path)})`);
 }

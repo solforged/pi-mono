@@ -1,12 +1,15 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { getCapabilities, getCellDimensions, Image, truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import { basename } from "node:path";
-import { attach, candidates, isClipboardFile, shortenClipboardPaths } from "./paths.ts";
-import { thumbnail, type Thumbnail } from "./thumbs.ts";
+import { attach, candidates, imageIcon, isClipboardFile, shortenClipboardPaths } from "./paths.ts";
+import { thumbnail, type Box, type Thumbnail } from "./thumbs.ts";
 
-const preview = { cols: 24, rows: 4, shown: 3, cached: 32 };
+// One image gets the larger preview; several get the smaller one each.
+const preview = { one: { cols: 48, rows: 8 }, several: { cols: 32, rows: 5 }, shown: 3, cached: 32 };
 
-type Entry = { state: "loading" | "none" } | { state: "ready"; thumb: Thumbnail; image?: Image };
+type Ready = { state: "ready"; box: string; thumb: Thumbnail; images: Map<number, Image> };
+// A thumbnail being redrawn for new cells keeps the old one on screen meanwhile.
+type Entry = { state: "loading"; box: string; previous?: Ready } | { state: "none"; box: string } | Ready;
 
 // Thumbnails of the image paths in the editor, above it. Each image is its own
 // block, as in the transcript: Pi tracks one image per line, so placing two
@@ -19,42 +22,59 @@ class Previews implements Component {
   render(width: number): string[] {
     if (!getCapabilities().images || width < 8) return [];
     const paths = [...new Set(candidates(this.text()).map((candidate) => candidate.path))];
-    const ready: Array<[string, Extract<Entry, { state: "ready" }>]> = [];
+    // Pi asks the terminal for its cell size after startup, and Rex answers
+    // with placeholder cells until the pane is laid out: a thumbnail made for
+    // other cells is made again, so it is neither blurred nor oversized.
+    const cell = getCellDimensions();
+    const box: Box = { widthPx: preview.one.cols * cell.widthPx, heightPx: preview.one.rows * cell.heightPx };
+    const key = `${box.widthPx}×${box.heightPx}`;
+    const ready: Array<[string, Ready]> = [];
     for (const path of paths) {
-      const entry = this.#entries.get(path) ?? this.#load(path);
-      if (entry.state === "ready") ready.push([path, entry]);
+      let entry = this.#entries.get(path);
+      if (!entry || entry.box !== key) entry = this.#load(path, box, key, entry?.state === "ready" ? entry : entry?.state === "loading" ? entry.previous : undefined);
+      const shown = entry.state === "loading" ? entry.previous : entry.state === "ready" ? entry : undefined;
+      if (shown) ready.push([path, shown]);
     }
     this.#prune(paths);
     if (!ready.length) return [];
+    const size = ready.length > 1 ? preview.several : preview.one;
     const lines: string[] = [];
     for (const [path, entry] of ready.slice(0, preview.shown)) {
       const { thumb } = entry;
       const name = isClipboardFile(path) ? "pasted image" : basename(path);
-      const size = thumb.width && thumb.height ? ` · ${thumb.width}×${thumb.height}` : "";
-      lines.push(truncateToWidth(` ${this.theme.fg("accent", "🖼")} ${this.theme.fg("muted", name + size)}`, width));
-      entry.image ??= new Image(thumb.data, thumb.mimeType, { fallbackColor: (text) => this.theme.fg("dim", text) },
-        { maxWidthCells: preview.cols, maxHeightCells: preview.rows, filename: name });
-      lines.push(...entry.image.render(Math.min(width, preview.cols + 2) - 1).map((line) => ` ${line}`));
+      const pixels = thumb.width && thumb.height ? ` · ${thumb.width}×${thumb.height}` : "";
+      lines.push(truncateToWidth(` ${this.theme.fg("accent", imageIcon)} ${this.theme.fg("muted", name + pixels)}`, width));
+      let image = entry.images.get(size.rows);
+      if (!image) {
+        image = new Image(thumb.data, thumb.mimeType, { fallbackColor: (text) => this.theme.fg("dim", text) },
+          { maxWidthCells: size.cols, maxHeightCells: size.rows, filename: name });
+        entry.images.set(size.rows, image);
+      }
+      // Indented by one column under the caption; Pi's Image keeps two columns spare.
+      lines.push(...image.render(Math.min(width - 1, size.cols + 2)).map((line) => ` ${line}`));
     }
     if (ready.length > preview.shown) lines.push(this.theme.fg("dim", ` +${ready.length - preview.shown} more`));
     return lines;
   }
 
   invalidate() {
-    for (const entry of this.#entries.values()) if (entry.state === "ready") entry.image?.invalidate();
+    for (const entry of this.#entries.values()) {
+      const ready = entry.state === "ready" ? entry : entry.state === "loading" ? entry.previous : undefined;
+      for (const image of ready?.images.values() ?? []) image.invalidate();
+    }
   }
 
-  #load(path: string): Entry {
-    const entry: Entry = { state: "loading" };
+  #load(path: string, box: Box, key: string, previous?: Ready): Entry {
+    const entry: Entry = { state: "loading", box: key, previous };
     this.#entries.set(path, entry);
-    const cell = getCellDimensions();
-    thumbnail(path, Math.max(preview.cols * cell.widthPx, preview.rows * cell.heightPx)).then(
-      (thumb) => {
-        if (this.#entries.get(path) !== entry) return;
-        this.#entries.set(path, thumb ? { state: "ready", thumb } : { state: "none" });
-        if (thumb) this.tui.requestRender();
-      },
-      () => { if (this.#entries.get(path) === entry) this.#entries.set(path, { state: "none" }); },
+    const settle = (next: Entry) => {
+      if (this.#entries.get(path) !== entry) return;
+      this.#entries.set(path, next);
+      if (next.state === "ready" || previous) this.tui.requestRender();
+    };
+    thumbnail(path, box).then(
+      (thumb) => settle(thumb ? { state: "ready", box: key, thumb, images: new Map() } : { state: "none", box: key }),
+      () => settle({ state: "none", box: key }),
     );
     return entry;
   }

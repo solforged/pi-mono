@@ -4,7 +4,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { attach, candidates, isClipboardFile, limits, load, shortenClipboardPaths, sniff } from "../extensions/image-paste/paths.ts";
-import { thumbnail } from "../extensions/image-paste/thumbs.ts";
+import { longSide, thumbnail } from "../extensions/image-paste/thumbs.ts";
 import { temporary } from "./helpers.ts";
 
 // A 2×1 PNG.
@@ -60,9 +60,17 @@ test("clipboard paths shorten to links in the transcript", () => {
   assert.equal(isClipboardFile("/T/pi-clipboard-699be858-b175.png"), true);
   assert.equal(isClipboardFile("/T/shot.png"), false);
   assert.equal(shortenClipboardPaths("/var/T/pi-clipboard-ab12.png\n\nwhat is this?"),
-    "[🖼 pasted image](file:///var/T/pi-clipboard-ab12.png)\n\nwhat is this?");
-  assert.equal(shortenClipboardPaths("see /T/pi-clipboard-ab12.png."), "see [🖼 pasted image](file:///T/pi-clipboard-ab12.png).");
+    "[\uF03E pasted image](file:///var/T/pi-clipboard-ab12.png)\n\nwhat is this?");
+  assert.equal(shortenClipboardPaths("see /T/pi-clipboard-ab12.png."), "see [\uF03E pasted image](file:///T/pi-clipboard-ab12.png).");
   assert.equal(shortenClipboardPaths("/T/shot.png"), "/T/shot.png");
+});
+
+test("thumbnails get the pixels their cells show and no more", () => {
+  const box = { widthPx: 960, heightPx: 352 };
+  assert.equal(longSide({ width: 3456, height: 2168 }, box), 561); // height-bound screenshot
+  assert.equal(longSide({ width: 4000, height: 400 }, box), 960); // width-bound banner
+  assert.equal(longSide({ width: 120, height: 80 }, box), 120); // never enlarged
+  assert.equal(longSide({}, box), 960); // size unknown: the box
 });
 
 test("thumbnail shrinks images and reports the original size", { skip: process.platform !== "darwin" }, async (t) => {
@@ -70,10 +78,11 @@ test("thumbnail shrinks images and reports the original size", { skip: process.p
   const source = join(dir, "big.png");
   await writeFile(join(dir, "small.png"), png);
   execFileSync("/usr/bin/sips", ["-s", "format", "png", "-z", "600", "1200", join(dir, "small.png"), "--out", source], { stdio: "ignore" });
-  const thumb = await thumbnail(source, 96);
+  // Fitted to the box: here its height limits it.
+  const thumb = await thumbnail(source, { widthPx: 400, heightPx: 48 });
   assert.equal(thumb?.mimeType, "image/png");
   assert.deepEqual([thumb?.width, thumb?.height], [1200, 600]);
   const data = Buffer.from(thumb!.data, "base64");
   assert.deepEqual([data.readUInt32BE(16), data.readUInt32BE(20)], [96, 48]);
-  assert.equal(await thumbnail(join(dir, "missing.png"), 96), undefined);
+  assert.equal(await thumbnail(join(dir, "missing.png"), { widthPx: 96, heightPx: 96 }), undefined);
 });
