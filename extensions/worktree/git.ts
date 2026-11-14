@@ -16,11 +16,12 @@ export const git: Run = (args, cwd, input) => new Promise((done, fail) => {
 });
 
 export interface Checkout {
+  vcs: "git" | "jj"; // jj only in a colocated jj workspace; see jj.ts.
   top: string;      // This checkout's root.
   main: string;     // The main worktree's root.
   repo: string;     // Repository key: the main root's directory name, as `ga` uses.
   linked: boolean;  // A linked worktree rather than the main checkout.
-  branch?: string;
+  branch?: string;  // Under jj, the workspace name.
 }
 
 /** The checkout containing `cwd`, or undefined outside Git or in a bare repository. */
@@ -34,7 +35,7 @@ export async function inspect(cwd: string, run = git): Promise<Checkout | undefi
   if (!first || first.bare) return undefined;
   const main = first.path;
   const branch = await run(["branch", "--show-current"], cwd).catch(() => "") || undefined;
-  return { top, main, repo: basename(main), linked: resolve(gitDir) !== resolve(common), branch };
+  return { vcs: "git", top, main, repo: basename(main), linked: resolve(gitDir) !== resolve(common), branch };
 }
 
 export interface Worktree { path: string; branch?: string; bare: boolean }
@@ -83,7 +84,7 @@ export function worktreeRoot(env = process.env): string {
   return root;
 }
 
-const exists = (path: string) => lstat(path).then(() => true, () => false);
+export const exists = (path: string) => lstat(path).then(() => true, () => false);
 const hasBranch = (name: string, cwd: string, run: Run) => run(["rev-parse", "--verify", "--quiet", `refs/heads/${name}`], cwd).then(() => true, () => false);
 const OWNER = (branch: string) => `branch.${branch}.piSession`;
 
@@ -116,7 +117,7 @@ export async function create(from: Checkout, slug: string, sessionId: string, op
   return { path: await realpath(path), branch, dirty };
 }
 
-const trustMise = (path: string) => new Promise((done) => execFile("mise", ["trust", "--quiet", path], { timeout: 10_000 }, () => done(undefined)));
+export const trustMise = (path: string) => new Promise((done) => execFile("mise", ["trust", "--quiet", path], { timeout: 10_000 }, () => done(undefined)));
 
 const hasUpstream = (branch: string, cwd: string, run: Run) => run(["rev-parse", "--abbrev-ref", `${branch}@{upstream}`], cwd).then(() => true, () => false);
 
@@ -127,7 +128,7 @@ export async function owned(branch: string | undefined, sessionId: string, cwd: 
   return !await hasUpstream(branch, cwd, run);
 }
 
-export interface Landed { target: string; commits: number; rebased: boolean }
+export interface Landed { target: string; commits: number; rebased: boolean; note?: string }
 
 /**
  * Lands a clean worktree's branch on the main checkout's branch without a merge

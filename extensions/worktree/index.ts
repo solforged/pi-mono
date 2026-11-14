@@ -1,13 +1,14 @@
-// Moves a session into its own Git worktree and branch, as Claude Code's
-// EnterWorktree does, keeps the branch named after the session title, and
-// lands or resumes worktree sessions. See docs/worktree.md.
+// Moves a session into its own Git worktree and branch, or jj workspace in a
+// colocated jj repository, as Claude Code's EnterWorktree does, keeps it named
+// after the session title, and lands or resumes worktree sessions. See
+// docs/worktree.md.
 import { stat } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { report as say } from "../shared/context.ts";
-import { create, editsMainCheckout, followTitle, git as run, inside, inspect, land, owner, remove, slugify, worktreeRoot, worktrees, type Checkout, type Created } from "./git.ts";
+import { create, dirty, editsMainCheckout, followTitle, git as run, inside, inspect, land, owner, remove, slugify, uncolocated, unit, worktreeRoot, worktrees, type Checkout, type Created } from "./vcs.ts";
 import { copyIncluded, INCLUDE_FILE } from "./include.ts";
 import { relocate, repositorySessionDirs, sessionChoices, type Listed } from "./session.ts";
 
@@ -23,6 +24,7 @@ export default function (pi: ExtensionAPI) {
   // Rex and workflow children already run in worker worktrees chosen by their parent.
   if (process.env.PI_REX_CHILD || process.env.PI_WORKFLOW_CHILD_CONFIG) return;
   let checkout: Checkout | undefined;
+  let unsupported: string | undefined; // Why a jj workspace here gets no worktrees.
   let pending: Prepared | undefined;
   let warned: string | undefined; // The assistant message whose edits were turned back.
 
@@ -36,14 +38,15 @@ export default function (pi: ExtensionAPI) {
     if (!checkout?.linked || !title) return;
     try {
       const next = await followTitle(checkout, ctx.sessionManager.getSessionId(), title, run);
-      if (next) { checkout.branch = next; say(ctx, `Branch renamed to ${next}`); }
-    } catch (error) { say(ctx, `Could not rename the branch: ${(error as Error).message}`, "warning"); }
+      if (next) { checkout.branch = next; say(ctx, `${checkout.vcs === "jj" ? "Workspace" : "Branch"} renamed to ${next}`); }
+    } catch (error) { say(ctx, `Could not rename the ${unit(checkout)}: ${(error as Error).message}`, "warning"); }
   }
   const linked = () => { if (!checkout?.linked) throw new Error("Not in a linked worktree"); return checkout; };
 
   pi.on("session_start", async (_event, ctx) => {
     pending = undefined; warned = undefined;
     checkout = await inspect(ctx.cwd, run);
+    unsupported = checkout ? undefined : await uncolocated(ctx.cwd, run);
     offer(!!checkout && !checkout.linked && !!ctx.sessionManager.getSessionFile());
     await follow(ctx);
     await stray(ctx);
@@ -54,7 +57,7 @@ export default function (pi: ExtensionAPI) {
   async function stray(ctx: ExtensionContext) {
     const home = (ctx.sessionManager.getHeader() as { cwd?: unknown } | null)?.cwd;
     if (!checkout || typeof home !== "string" || resolve(home) === resolve(ctx.cwd)) return;
-    const all = await worktrees(checkout.top, run).catch(() => []);
+    const all = await worktrees(checkout, run).catch(() => []);
     const tree = owner(all, home);
     if (tree && tree !== owner(all, ctx.cwd)) say(ctx, `This session works in ${home}${tree.branch ? ` on ${tree.branch}` : ""} but is running in ${ctx.cwd}. Reopen it with /resume or pi --resume to work there.`, "warning");
   }
@@ -62,7 +65,7 @@ export default function (pi: ExtensionAPI) {
 
   async function prepare(ctx: ExtensionContext, name?: string): Promise<Prepared> {
     if (pending) return pending;
-    if (!checkout) throw new Error("Not in a Git repository with a working tree");
+    if (!checkout) throw new Error(unsupported ?? "Not in a Git repository with a working tree");
     if (checkout.linked) throw new Error(`Already in the linked worktree ${checkout.top}`);
     if (!ctx.sessionManager.getSessionFile()) throw new Error("This session has no file (--no-session), so it cannot move");
     const id = ctx.sessionManager.getSessionId();
@@ -77,6 +80,7 @@ export default function (pi: ExtensionAPI) {
   const describe = (target: Prepared, origin: string) => [
     target.copied ? ` Copied ${target.copied} file(s) listed in ${INCLUDE_FILE}.` : "",
     target.dirty ? ` Uncommitted changes in ${origin} were not copied.` : "",
+    checkout?.vcs === "jj" ? " It is a colocated jj workspace: commit with jj, and /wt land lands @- once @ is empty." : "",
   ].join("");
 
   // Notifications sent right after a switch are lost, so reports go into the
@@ -115,12 +119,13 @@ export default function (pi: ExtensionAPI) {
     const fromTool = !!pending;
     const target = await prepare(ctx, name);
     pending = undefined;
-    const origin = checkout!.top;
+    const from = checkout!;
+    const origin = from.top;
     const notes = describe(target, origin);
     const cwd = await counterpart(target.path, ctx.cwd);
     // A worktree the session did not reach is taken back: left there, the next attempt would make a second beside it.
     const discard = async (why: string) => {
-      const outcome = await remove(target.path, target.branch, ctx.sessionManager.getSessionId(), origin, run).catch((error) => `Could not remove ${target.path}: ${error.message}`);
+      const outcome = await remove(from, target.path, target.branch, ctx.sessionManager.getSessionId(), run).catch((error) => `Could not remove ${target.path}: ${error.message}`);
       // The tool's result said the session would move, so the model is told that it did not.
       if (fromTool) pi.sendMessage({ customType: "worktree", content: `The session did not move to a worktree: ${why}. ${outcome} It is still in ${ctx.cwd}.`, display: true });
       return outcome;
@@ -128,7 +133,9 @@ export default function (pi: ExtensionAPI) {
     let moved: boolean;
     try {
       moved = await move(ctx, cwd, ctx.cwd, async (next) => {
-        const text = `Session moved to the worktree ${target.path} on branch ${target.branch}, created from HEAD of ${origin}.${notes} Work in ${cwd} from now on`;
+        const text = from.vcs === "jj"
+          ? `Session moved to the worktree ${target.path}, jj workspace ${target.branch}, created on the parent of @ in ${origin}.${notes} Work in ${cwd} from now on`
+          : `Session moved to the worktree ${target.path} on branch ${target.branch}, created from HEAD of ${origin}.${notes} Work in ${cwd} from now on`;
         await report(next, fromTool ? `${text} and continue the task.` : `${text}.`, fromTool);
       });
     } catch (error) { throw new Error(`${(error as Error).message}. ${await discard((error as Error).message)}`); }
@@ -137,23 +144,24 @@ export default function (pi: ExtensionAPI) {
 
   /** Returns to the main checkout, keeping or removing this worktree; `done` prefixes the report. */
   async function leave(ctx: ExtensionCommandContext, choice: "keep" | "remove", done = "") {
-    const { top, main, branch } = linked();
+    const here = linked();
+    const { top, main, branch } = here;
     const sessionId = ctx.sessionManager.getSessionId();
     const cwd = await counterpart(main, ctx.cwd);
     await move(ctx, cwd, cwd, async (next) => {
       const outcome = choice === "remove"
-        ? await remove(top, branch, sessionId, main, run).catch((error) => `Could not remove ${top}: ${error.message}`)
-        : `Kept ${top}${branch ? ` on ${branch}` : ""}.`;
+        ? await remove(here, top, branch, sessionId, run).catch((error) => `Could not remove ${top}: ${error.message}`)
+        : `Kept ${top}${branch ? ` ${here.vcs === "jj" ? "as workspace" : "on"} ${branch}` : ""}.`;
       await report(next, `${done}Session returned to the main checkout ${main}; work in ${cwd} from now on. ${outcome}`);
     });
   }
 
   async function exit(ctx: ExtensionCommandContext, choice: string | undefined) {
-    const { top, main } = linked();
+    const here = linked();
     if (choice !== "keep" && choice !== "remove") {
       if (!ctx.hasUI) throw new Error("Usage: /wt exit keep|remove");
-      const dirty = !!await run(["status", "--porcelain"], top);
-      const picked = await ctx.ui.select(`Return to ${main}`, dirty ? ["Keep worktree (uncommitted changes)"] : ["Keep worktree", "Remove worktree"]);
+      const changed = await dirty(here);
+      const picked = await ctx.ui.select(`Return to ${here.main}`, changed ? ["Keep worktree (uncommitted changes)"] : ["Keep worktree", "Remove worktree"]);
       if (!picked) return;
       choice = picked.startsWith("Remove") ? "remove" : "keep";
     }
@@ -164,7 +172,7 @@ export default function (pi: ExtensionAPI) {
     const here = linked();
     await ctx.waitForIdle();
     const result = await land(here, run);
-    const summary = `Landed ${result.commits} commit(s) from ${here.branch} on ${result.target}${result.rebased ? " after rebasing" : ""}. `;
+    const summary = `Landed ${result.commits} commit(s) from ${here.branch} on ${result.target}${result.rebased ? " after rebasing" : ""}. ${result.note ? `${result.note} ` : ""}`;
     if (choice !== "keep" && choice !== "remove" && choice !== "stay") {
       if (!ctx.hasUI) choice = "stay";
       else {
@@ -178,8 +186,8 @@ export default function (pi: ExtensionAPI) {
 
   /** Sessions working in the repository's other checkouts, by the cwd in their headers. */
   async function resume(ctx: ExtensionCommandContext) {
-    if (!checkout) throw new Error("Not in a Git repository with a working tree");
-    const all = (await worktrees(checkout.top, run)).filter((tree) => !tree.bare);
+    if (!checkout) throw new Error(unsupported ?? "Not in a Git repository with a working tree");
+    const all = (await worktrees(checkout, run)).filter((tree) => !tree.bare);
     const here = resolve(checkout.top);
     const found: Listed[] = [];
     const seen = new Set<string>();
@@ -205,8 +213,8 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: TOOL,
     label: "Enter worktree",
-    description: "Move this session into a new Git worktree and pi/<name> branch created from HEAD. Ends the current response; the session continues in the worktree.",
-    promptSnippet: "Move this session into its own Git worktree and branch",
+    description: "Move this session into a new worktree and pi/<name> branch (or jj workspace) created from HEAD. Ends the current response; the session continues in the worktree.",
+    promptSnippet: "Move this session into its own worktree and branch",
     promptGuidelines: [`Call ${TOOL} alone, before the first edit, for non-trivial work in a main checkout, unless the user asked to work in place.`],
     parameters: Type.Object({ name: Type.Optional(Type.String({ description: "Fallback kebab-case name, used only when the session has no title; the branch follows the title" })) }),
     async execute(_id, params: { name?: string }, _signal, _onUpdate, ctx) {
@@ -238,8 +246,8 @@ export default function (pi: ExtensionAPI) {
     if (warned && warned !== turn?.id) return;
     if (!editsMainCheckout(checkout, ctx.cwd, (event.input as { path?: unknown }).path)) return;
     warned = turn?.id ?? "";
-    const dirty = !!await run(["status", "--porcelain"], checkout!.top).catch(() => "");
-    const state = dirty ? " It has uncommitted changes, which a new worktree, created from HEAD, would not include." : "";
+    const changed = await dirty(checkout!).catch(() => false);
+    const state = changed ? " It has uncommitted changes, which a new worktree, created from HEAD, would not include." : "";
     return { block: true, reason: `This session is in the main checkout.${state} For non-trivial work, call ${TOOL} first. For a trivial change, or if the user asked to work here, retry the edit.` };
   });
 
@@ -262,7 +270,10 @@ export default function (pi: ExtensionAPI) {
         if (action === "land") return await landHere(ctx, rest[0]);
         if (action === "resume") return await resume(ctx);
         if (action !== "status") return say(ctx, USAGE, "warning");
-        if (!checkout) return say(ctx, "Not in a Git repository with a working tree.");
+        if (!checkout) return say(ctx, unsupported ?? "Not in a Git repository with a working tree.");
+        if (checkout.vcs === "jj") return say(ctx, checkout.linked
+          ? `jj workspace ${checkout.branch ?? "(unnamed)"} at ${checkout.top}; main workspace ${checkout.main}.`
+          : `Main jj workspace ${checkout.top}. New workspaces go in ${worktreeRoot()}.`);
         say(ctx, checkout.linked
           ? `Worktree ${checkout.top} on ${checkout.branch ?? "a detached HEAD"}; main checkout ${checkout.main}.`
           : `Main checkout ${checkout.top} on ${checkout.branch ?? "a detached HEAD"}. New worktrees go in ${worktreeRoot()}.`);

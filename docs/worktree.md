@@ -1,9 +1,10 @@
 # Worktree sessions
 
 Non-trivial work moves the session into its own Git worktree and branch, like
-Claude Code's EnterWorktree. The conversation carries over and Pi's tools,
-context files and extensions rebind to the new directory. `/wt` lands the
-branch, returns, or resumes sessions from other worktrees.
+Claude Code's EnterWorktree, or its own workspace in a colocated
+[jj repository](#jj-repositories). The conversation carries over and Pi's
+tools, context files and extensions rebind to the new directory. `/wt` lands
+the branch, returns, or resumes sessions from other worktrees.
 
 ## When a session moves
 
@@ -21,8 +22,9 @@ working directory. A session started in a subfolder moves to the same
 subfolder of the worktree, and returns to it. If the move fails or is
 cancelled, the new worktree and branch are removed again.
 
-Nothing happens in linked worktrees, outside Git, with `--no-session`, or in
-Rex and workflow children, which already have worker worktrees.
+Nothing happens in linked worktrees, outside Git, in jj workspaces that are
+not colocated, with `--no-session`, or in Rex and workflow children, which
+already have worker worktrees.
 
 ## Layout
 
@@ -88,3 +90,32 @@ return; elsewhere it stays unless you pass `keep` or `remove`.
 the branch only if this session created it and it is merged into the main
 checkout's `HEAD`; otherwise both stay. Each move is reported in the session,
 so the model knows where it is.
+
+## jj repositories
+
+In a colocated jj repository, where the workspace root is also the Git
+checkout's, the session moves into a jj workspace instead: `jj workspace add
+--colocate` at the same path, named `pi/<slug>` rather than given a branch.
+Its working-copy commit starts on the parents of the main workspace's `@`, as
+a worktree starts from `HEAD`, and it has its own Git worktree, so the status
+line, `/diff`, the sandbox and `.worktreeinclude` work as in Git. The
+workspace name follows the session title like a branch; this session's
+ownership is kept in the Git config. A jj workspace that Git cannot see, in a
+repository that is not colocated or one added with `--no-colocate`, gets no
+worktrees, and `/wt` says how to colocate it (`jj git colocation enable`).
+
+`land` lands the workspace's `@-` on the one bookmark at the main
+workspace's `@-`, so `@` must be empty: commit with `jj commit` first. When
+that bookmark has moved on, the workspace's commits are rebased onto it; a
+rebase that fails or leaves conflicts is undone with `jj op restore`, so
+resolve it with `jj rebase -b @ -d <bookmark>` and land again. Commits
+already pushed are not rebased. The bookmark then moves forward, and the main
+workspace's `@` moves onto it so its files follow; if its own changes would
+conflict there, it stays and the report says how to move it.
+
+`remove` removes a workspace whose `@` is empty with `jj workspace remove`,
+which also removes its Git worktree and folder. Its commits stay in the
+repository, visible in `jj log`, and the report counts those the main
+workspace lacks. jj runs on the host with `-R` naming the workspace; it reads
+repository and workspace config from your config folder, not the working
+tree.
