@@ -8,6 +8,7 @@ import { canUseRex } from "../extensions/rex/tools.ts";
 const run = (name: string, extra: object = {}) => ({ id: `${name}-id`, name, agent: "scout", owner: "managed", status: "idle", taskIds: [], ...extra }) as any;
 const task = (id: string, status: string, text = "Read AGENTS.md and report") => [id, { id, status, task: text }] as const;
 const theme = { fg: (_tone: string, s: string) => s };
+const plain = { width: (s: string) => s.length, truncate: (s: string, w: number) => s.slice(0, w) };
 const TASK = "7c2ae99a-a047-4361-819a-5987c99d8e4d";
 
 test("rows put children needing the user first, then running, failed and done; closed are hidden", () => {
@@ -24,13 +25,16 @@ test("rows put children needing the user first, then running, failed and done; c
   assert(items.find(r => r.name === "ash")!.title.endsWith("…"));
 });
 
-test("the widget stays one line at 14 children, grouping names by state", () => {
+test("the widget is one heading rule at 14 children, grouping names by state", () => {
   const names = ["birch", "cedar", "fern", "oak", "ash", "elm", "pine", "moss", "reed", "sage", "ivy", "hazel", "rowan", "alder"];
   const tasks = new Map<string, any>([task("r", "running"), task("s", "succeeded")]);
   const items = rows(names.map((n, i) => run(n, i < 9 ? { status: "running", activeTask: "r", taskIds: ["r"] } : { taskIds: ["s"] })), tasks);
-  const line = widgetLine(items, theme);
-  assert(!line.includes("\n"));
-  assert.match(line, /^Rex 14 {2}● birch cedar .* reed {3}✓ sage .* alder {3}← agents$/);
+  const line = widgetLine(items, theme, plain, 140);
+  assert.equal(line.length, 140);
+  assert.match(line, /^─ Agents {2}● birch cedar .* reed {2}✓ sage .* alder ─+ ← open ─$/);
+  // A tight width drops the facts before cutting names.
+  assert.match(widgetLine(items, theme, plain, 92), /^─ Agents {2}● birch .* alder ─+$/);
+  assert.equal(widgetLine(items, theme, plain, 60), `─ Agents  ● ${names.slice(0, 9).join(" ")}  ✓ ${names.slice(9).join(" ")}`.slice(0, 60));
 });
 
 test("task lines, call lines and result splitting are compact and ID-free", () => {
@@ -73,7 +77,7 @@ test("rows carry cost (settled usage, else live) and running time; widget and ac
   ]);
   const items = rows([run("alpha", { status: "running", activeTask: "a2", taskIds: ["a1", "a2"], note: "read docs/rex.md" }), run("bravo", { taskIds: ["b1"] })], tasks, 131_000);
   assert.equal(items[0].cost, 0.75); assert.equal(items[0].elapsedMs, 130_000); assert.equal(items[1].cost, 0.1); assert.equal(items[1].elapsedMs, undefined);
-  assert.match(widgetLine(items, theme), /^Rex 2 · \$0\.85 {2}/);
+  assert.match(widgetLine(items, theme, plain, 80), /^─ Agents {2}● alpha {2}✗ bravo ─+ \$0\.85 · ← open ─$/);
   const line = activityLine(items[0]);
   assert.match(line, /^● alpha {8}scout {3}read docs\/rex\.md +2m10s +\$0\.75 {2}Find auth entry points$/);
   assert.equal(money(12.345), "$12.3");

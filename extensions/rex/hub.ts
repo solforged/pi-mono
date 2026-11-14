@@ -23,7 +23,7 @@ type Tone = "success" | "warning" | "error" | "dim";
 
 export function widget(items: Row[]) {
   return (_tui: unknown, theme: any) => ({
-    render: (width: number) => [truncateToWidth(widgetLine(items, theme), width)],
+    render: (width: number) => [truncateToWidth(widgetLine(items, theme, { width: visibleWidth, truncate: truncateToWidth }, width), width)],
     invalidate() {},
   });
 }

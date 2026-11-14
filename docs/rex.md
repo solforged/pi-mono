@@ -82,11 +82,12 @@ already queued when the wait began does not end it.
 
 Tool rows render compactly, e.g. `✓ birch scout · succeeded · 18s · 2.5k tok`,
 one line per result in a batch; expand a row to read the answer as Markdown
-with its file paths. The widget is a single line with the total cost, grouping
-names by state with children needing you first:
+with its file paths. The widget is a single heading rule in the editor's style,
+grouping names by state with children needing you first, and the total cost
+and hub key at the right; a tight width drops those first:
 
 ```text
-Rex 9 · $1.62  ! oak needs you   ● birch cedar fern   ✓ elm pine   ✗ ash   ← agents
+─ Agents  ! oak needs you  ● birch cedar fern  ✓ elm pine  ✗ ash ──── $1.62 · ← open ─
 ```
 
 Children report their current tool and its main argument, with paths relative

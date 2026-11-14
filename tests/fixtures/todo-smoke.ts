@@ -160,21 +160,23 @@ export default function (pi: ExtensionAPI) {
         assert.ok(!panelLines(sample, 0, 40, 30, theme).some((line) => line.includes("╭")));
         assert.match(panelLines(empty(), 0, 64, 30, theme).join("\n"), /The list is empty/);
 
-        // The widget puts a status line above the work in view, with the IDs in one column.
+        // The widget is a full-width heading rule that fills with progress, then the work in view, IDs first.
         const wide = widgetLines(sample, 100, theme);
+        const fill = 100 - "─ Todo 1/5 ".length - " 1 more in /todos ─".length;
         assert.deepEqual(wide, [
-          "Todo ━━━━━━━━━━━━━━━━━━━━ 1/5 done · 1 more in /todos",
-          "  ▸ wire panel                          #1",
-          "  ⊘ update docs · needs the resize fix  #3",
-          "  ○ write tests                         #2",
+          `─ Todo 1/5 ${"━".repeat(Math.round(fill / 5))}${"─".repeat(fill - Math.round(fill / 5))} 1 more in /todos ─`,
+          "  #1 ▸ wire panel",
+          "  #3 ⊘ update docs · needs the resize fix",
+          "  #2 ○ write tests",
         ]);
-        // Long text is cut with an ellipsis, keeping the ID column, and narrow widths shrink the bar.
+        // Long text is cut with an ellipsis at the width; a tight rule drops the overflow count first.
         const long = apply(sample, { action: "update", id: 1, change: { text: "x".repeat(200) } }).list;
-        assert.ok(widgetLines(long, 200, theme).slice(1).every((line) => visibleWidth(line) === 92));
-        const narrow = widgetLines(long, 40, theme);
-        assert.match(narrow[0], /^Todo ━{10} 1\/5 done/);
-        assert.match(narrow[1].replace(/\x1b\[[0-9;]*m/g, ""), /^  ▸ x+…  #1$/);
-        assert.ok(narrow.every((line) => visibleWidth(line) <= 40));
+        assert.ok(widgetLines(long, 200, theme).every((line) => visibleWidth(line) <= 200));
+        const narrow = widgetLines(long, 30, theme);
+        assert.match(narrow[0], /^─ Todo 1\/5 ━*─+$/);
+        assert.equal(visibleWidth(narrow[0]), 30);
+        assert.match(narrow[1].replace(/\x1b\[[0-9;]*m/g, ""), /^  #1 ▸ x+…$/);
+        assert.ok(narrow.every((line) => visibleWidth(line) <= 30));
         // Frames reuse the rows until the width or the theme changes.
         let build: any;
         await events.session_tree({}, { ...fake, mode: "tui", ui: { setWidget: (_name: string, factory: any) => { build = factory; } } });

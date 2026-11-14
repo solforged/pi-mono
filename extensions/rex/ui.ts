@@ -1,8 +1,9 @@
 // Pure presentation helpers: no Pi imports, so the regression suite can load them.
+import { headingRule, type Measure } from "../shared/rule.ts";
 import type { Run, TaskRun } from "./runner.ts";
 
 export type PickAction = "open" | "spotlight" | "zoom" | "focus" | "grid" | "park" | "auto" | "message" | "result" | "take" | "cancel" | "close";
-type Tone = "accent" | "success" | "error" | "warning" | "muted" | "dim";
+type Tone = "accent" | "success" | "error" | "warning" | "muted" | "dim" | "borderMuted";
 type Theme = { fg(tone: Tone, text: string): string; bold?(text: string): string };
 export type Group = "attention" | "running" | "done" | "failed" | "idle" | "yours";
 export interface Row {
@@ -46,8 +47,12 @@ export function rows(runs: Iterable<Run>, tasks: Map<string, TaskRun>, now = Dat
   }).sort((a, b) => ORDER.indexOf(a.group) - ORDER.indexOf(b.group));
 }
 
-/** One line at any scale: names grouped by state, e.g. `Rex  ! oak  ● birch cedar  ✓ fern`. */
-export function widgetLine(items: Row[], theme: Theme) {
+/**
+ * One heading rule at any scale, in the editor's style: names grouped by state
+ * on the left, cost and the hub key on the right, e.g.
+ * `─ Agents  ! oak needs you  ● birch cedar  ✓ fern ──── $0.42 · ← open ─`.
+ */
+export function widgetLine(items: Row[], theme: Theme, m: Measure, width: number) {
   const groups = ORDER.map(group => {
     const names = items.filter(r => r.group === group).map(r => r.name);
     if (!names.length) return "";
@@ -55,7 +60,9 @@ export function widgetLine(items: Row[], theme: Theme) {
     return `${theme.fg(tone, glyph)} ${names.join(" ")}${group === "attention" ? theme.fg("warning", " needs you") : ""}`;
   }).filter(Boolean);
   const total = items.reduce((sum, r) => sum + r.cost, 0);
-  return `${theme.fg("accent", "Rex")} ${theme.fg("dim", `${items.length}${total ? ` · ${money(total)}` : ""}`)}  ${groups.join("   ")}   ${theme.fg("dim", "← agents")}`;
+  const title = theme.fg("accent", theme.bold ? theme.bold("Agents") : "Agents");
+  const facts = `${total ? `${theme.fg("muted", money(total))}${theme.fg("dim", " · ")}` : ""}${theme.fg("muted", "←")} ${theme.fg("dim", "open")}`;
+  return headingRule(m, width, [title, ...groups].join("  "), facts, s => theme.fg("borderMuted", s));
 }
 export const money = (dollars: number) => `$${dollars < 10 ? dollars.toFixed(2) : dollars.toFixed(1)}`;
 /** Plain-text roster/strip line: `● alpha   scout  read docs/x.md   2m10s  $0.18  Find auth entry points`. */

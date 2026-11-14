@@ -1,5 +1,6 @@
 // Terminal rendering shared by the /todos panel, the widget and tool results.
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { headingRule } from "../shared/rule.ts";
 import { counts, ordered, upNext, type Item, type List, type Status } from "./store.ts";
 
 export interface Theme {
@@ -11,7 +12,7 @@ export interface Theme {
 
 const sections: Array<[Status, string]> = [["in_progress", "IN PROGRESS"], ["blocked", "BLOCKED"], ["pending", "PENDING"], ["done", "DONE"]];
 const maxWidth = 88;
-const widgetText = 84;
+const measure = { width: visibleWidth, truncate: truncateToWidth };
 const pad = (text: string, width: number) => text + " ".repeat(Math.max(0, width - visibleWidth(text)));
 const fitTo = (text: string, width: number) => pad(truncateToWidth(text, Math.max(0, width)), width);
 
@@ -39,23 +40,27 @@ export function bar(done: number, total: number, width: number, theme: Theme) {
 const row = (item: Item, theme: Theme) => `${mark(item, theme)} ${label(item, theme)} ${theme.fg("dim", `#${item.id}`)}`;
 
 /**
- * The widget above the editor: a status line with progress and the overflow
- * count, then the work in view indented below it. Item text is capped and
- * padded so the IDs line up in one column.
+ * The widget above the editor: a heading rule in the editor's style whose
+ * strokes fill with progress, then the work in view under the title. IDs lead
+ * each row, so they line up without pushing away from their text.
  */
 export function widgetLines(list: List, width: number, theme: Theme): string[] {
   const { items, hidden } = upNext(list);
   if (!items.length) return [];
   const { done } = counts(list.items);
-  const more = hidden ? theme.fg("dim", ` · ${hidden} more in /todos`) : "";
-  const head = `${theme.fg("accent", theme.bold("Todo"))} ${bar(done, list.items.length, width >= 60 ? 20 : 10, theme)} ${theme.fg("muted", `${done}/${list.items.length} done`)}${more}`;
-  const ids = items.map((item) => theme.fg("dim", `#${item.id}`));
-  const labels = items.map((item) => label(item, theme));
-  // Indent, mark and gap before the ID; the text takes what is left, up to a readable cap.
-  const room = width - 6 - Math.max(...ids.map(visibleWidth));
-  const textWidth = Math.min(widgetText, room, Math.max(...labels.map(visibleWidth)));
-  const rows = items.map((item, index) => `  ${mark(item, theme)} ${fitTo(truncateToWidth(labels[index], textWidth, "…"), textWidth)}  ${ids[index]}`);
-  return [head, ...rows].map((line) => truncateToWidth(line, width));
+  const total = list.items.length;
+  const title = `${theme.fg("accent", theme.bold("Todo"))} ${theme.fg("muted", `${done}/${total}`)}`;
+  const more = hidden ? theme.fg("dim", `${hidden} more in /todos`) : "";
+  const border = (text: string) => theme.fg("borderMuted", text);
+  // Heavier strokes for the done share, so progress reads without colour too.
+  const fill = (n: number) => {
+    const filled = total ? Math.round((done / total) * n) : 0;
+    return theme.fg("success", "━".repeat(filled)) + border("─".repeat(n - filled));
+  };
+  const head = headingRule(measure, width, title, more, border, fill);
+  const idWidth = Math.max(...items.map((item) => `#${item.id}`.length));
+  const rows = items.map((item) => `  ${theme.fg("dim", `#${item.id}`.padEnd(idWidth))} ${mark(item, theme)} ${label(item, theme)}`);
+  return [head, ...rows.map((line) => truncateToWidth(line, width, "…"))];
 }
 
 /** Tool-result rows: the open work in view, or every item when expanded. */

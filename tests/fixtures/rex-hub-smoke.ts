@@ -71,7 +71,7 @@ try {
   await until(peer, t => t.includes("fixture"), "the peer prompt", 30_000);
 
   await type(parent, "Spawn hub fixture\r");
-  await until(parent, t => /● birch/.test(t) && /✓ cedar/.test(t) && t.includes("← agents"), "one running and one finished child", 60_000);
+  await until(parent, t => /● birch/.test(t) && /✓ cedar/.test(t) && t.includes("← open"), "one running and one finished child", 60_000);
   // A session without children does not carry rex_send and rex_result; the first child declares them.
   await until(parent, t => t.replace(/\s+/g, " ").includes("Rex tools before: rex_agent; after: rex_agent,rex_result,rex_send."), "the follow-up tools declared after the first child");
   const runs = await childRuns();
