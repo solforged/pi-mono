@@ -7,6 +7,9 @@ export interface Item { id: number; text: string; status: Status; note?: string 
 export interface List { nextId: number; items: Item[] }
 export interface Change { text?: string; status?: Status; note?: string }
 
+/** pi.events message: start over with an empty list (a Rex child does at each delegated task). */
+export const CLEAR = "todo:clear";
+
 export const limits = { items: 200, text: 500, note: 2000, reminders: 3, widget: 3, context: 16000 };
 
 export function empty(): List { return { nextId: 1, items: [] }; }

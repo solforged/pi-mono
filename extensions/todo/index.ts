@@ -7,7 +7,7 @@ import { userStarted } from "../continue/started.ts";
 import { report } from "../shared/context.ts";
 import { showPanel } from "./panel.ts";
 import {
-  apply, counts, empty, format, limits, open, reminder, restated, restore, section, statuses, tally, withParentTodos,
+  apply, CLEAR, counts, empty, format, limits, open, reminder, restated, restore, section, statuses, tally, withParentTodos,
   type Item, type List, type Operation, type Status,
 } from "./store.ts";
 import { resultRows, widgetLines } from "./view.ts";
@@ -42,7 +42,11 @@ export default function (pi: ExtensionAPI) {
   // Edits outside the tool are recorded as custom entries on the branch.
   function save(ctx: ExtensionContext, next: List) { list = next; pi.appendEntry("todo", next); refresh(ctx); }
 
-  pi.on("session_start", (_event, ctx) => sync(ctx));
+  let last: ExtensionContext | undefined;
+  pi.on("session_start", (_event, ctx) => { last = ctx; sync(ctx); });
+  // A Rex child starts each task with an empty list: stale items from an earlier
+  // (perhaps cancelled) task would otherwise be nagged about, and counted as its progress.
+  pi.events.on(CLEAR, () => { if (last && list.items.length) save(last, empty()); });
   pi.on("session_tree", (_event, ctx) => sync(ctx));
   pi.events.on(DISCUSS, () => { discussing = true; });
   pi.on("before_agent_start", (event) => {
