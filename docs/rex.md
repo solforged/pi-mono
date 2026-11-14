@@ -355,7 +355,7 @@ node tests/fixtures/rex-hub-smoke.ts
 node tests/fixtures/rex-hub-smoke.ts --open      # also → into a child and ← back
 ```
 
-Both check native peek/toggle/keep/park, preserved focus, and takeover. The
+Both check native peek/minimize/keep/park, preserved focus, and takeover. The
 second also checks conversation-preserving follow-ups, steering, cancellation,
 and immutable results through real Pi, and captures the child's screen to check
 its named header and compact task display. They use an isolated fixed-response

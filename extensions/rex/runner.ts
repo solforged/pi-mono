@@ -49,7 +49,7 @@ export interface TaskRun {
   /** Run for another extension (a workflowz pool), which reads the result itself: never offered to the model. */
   programmatic?: boolean;
 }
-export type RexBackend = Pick<RexClient, "probe" | "create" | "show" | "hide" | "close" | "peek" | "minimize" | "keep" | "toggle">;
+export type RexBackend = Pick<RexClient, "probe" | "create" | "hide" | "close" | "peek" | "minimize" | "keep">;
 interface Live {
   run: Run; manifest: Manifest; channel: Channel; controlDir: string;
   ready: boolean; transferring: boolean; closing?: Promise<void>; launchError?: Error;
@@ -436,7 +436,7 @@ export class RexRunner {
       await this.dispose(live, busy && !live.transferring);
     }));
   }
-  async action(run: Run, action: "show" | "peek" | "hide" | "park" | "keep" | "close" | "toggle"): Promise<string | void> {
+  async action(run: Run, action: "show" | "peek" | "hide" | "park" | "keep" | "close"): Promise<void> {
     if (!run.block || run.status === "closed") throw new Error("No retained Rex block for this child");
     const signal = AbortSignal.timeout(20_000);
     const identity = await this.rex.probe(run.rexSession, run.parentBlock, signal);
@@ -450,7 +450,6 @@ export class RexRunner {
       } else if (await this.claimClose(run)) { await this.rex.close(run.rexSession, run.block, signal); run.status = "closed"; await this.save(run); }
       if (run.status !== "closed") throw new Error(run.note ?? "Terminal closure was not confirmed");
     } else if (action === "show" || action === "peek") await this.rex.peek(run.rexSession, run.block, run.parentBlock, signal);
-    else if (action === "toggle") return this.rex.toggle(run.rexSession, run.block, run.parentBlock, signal);
     else if (action === "hide") await this.rex.minimize(run.rexSession, run.block, signal);
     else if (action === "keep") await this.rex.keep(run.rexSession, run.block, run.parentBlock, signal);
     else await this.rex.hide(run.rexSession, run.block, signal);

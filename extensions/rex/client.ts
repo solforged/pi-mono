@@ -263,18 +263,6 @@ export class RexClient {
     return result.block_id;
   }
 
-  async show(sessionId: string, blockId: string, anchorBlock: string, signal?: AbortSignal): Promise<void> {
-    id(blockId, "block"); id(anchorBlock, "block");
-    if (blockId === anchorBlock) throw new Error("Rex show requires a distinct anchor block");
-    const state = await this.preflight(sessionId, signal);
-    this.target(state, blockId); this.target(state, anchorBlock, true);
-    if (state.blocks.find((block) => block.block_id === blockId)?.placement !== "detached") {
-      throw new Error("Rex show requires a detached block to preserve focus; hide it before moving it");
-    }
-    // A detached block takes no focus. Do not call any focus/window-selection API.
-    await this.mutate(sessionId, "session.move_block", { block_id: blockId, anchor_block_id: anchorBlock }, signal);
-  }
-
   async hide(sessionId: string, blockId: string, signal?: AbortSignal): Promise<void> {
     id(blockId, "block");
     const state = await this.preflight(sessionId, signal);
@@ -325,21 +313,6 @@ export class RexClient {
     await this.capability("session.raise_layer", ["session_id", "layer_id"], signal);
     await this.mutate(sessionId, "session.set_layer_state", { layer_id: layer.layer_id, state: "normal", focus: false }, signal);
     await this.mutate(sessionId, "session.raise_layer", { layer_id: layer.layer_id }, signal);
-  }
-
-  /** Peek a detached or minimized child; minimize a visible floating one. Tiled panes are left alone. */
-  async toggle(sessionId: string, blockId: string, anchorBlock: string, signal?: AbortSignal): Promise<"floating" | "minimized" | "tiled"> {
-    id(blockId, "block");
-    const state = await this.preflight(sessionId, signal);
-    this.target(state, blockId);
-    if (state.blocks.find(b => b.block_id === blockId)?.placement !== "detached") {
-      const { layer } = this.placement(state.view, blockId);
-      if (layer.kind === "tiled") return "tiled";
-      if (layer.kind === "floating" && layer.blocks.length === 1 && layer.state !== "minimized") {
-        await this.minimize(sessionId, blockId, signal); return "minimized";
-      }
-    }
-    await this.peek(sessionId, blockId, anchorBlock, signal); return "floating";
   }
 
   async minimize(sessionId: string, blockId: string, signal?: AbortSignal): Promise<void> {

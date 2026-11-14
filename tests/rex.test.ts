@@ -83,9 +83,8 @@ function backend(behavior: "success" | "disconnect" | "wait" | "no-hello" | "los
       calls.push("close"); [...children.values()].find(c => c.block === block)?.socket.destroy();
       if (gone.has(block)) throw new BlockGone(block);
     },
-    async show() { calls.push("show"); }, async hide() { calls.push("park"); }, async keep() { calls.push("keep"); },
+    async hide() { calls.push("park"); }, async keep() { calls.push("keep"); },
     async peek() { calls.push("peek"); }, async minimize() { calls.push("minimize"); },
-    async toggle() { calls.push("toggle"); return "floating" as const; },
   };
   return { rex, calls, labels, messages, children, gone };
 }
@@ -150,8 +149,7 @@ test("persistent child handles distinct follow-ups and immutable, once-accounted
   assert.equal(usage.filter(Boolean).length, 1); assert.equal(usage.find(Boolean)!.input, 3);
   assert.equal((await h.runner.collect(two.id))!.input, 3);
   await h.runner.action(run, "peek"); await h.runner.action(run, "hide"); await h.runner.action(run, "keep"); await h.runner.action(run, "park");
-  assert.equal(await h.runner.action(run, "toggle"), "floating");
-  assert.deepEqual(h.fake.calls.slice(-5), ["peek", "minimize", "keep", "park", "toggle"]);
+  assert.deepEqual(h.fake.calls.slice(-4), ["peek", "minimize", "keep", "park"]);
   const m = h.fake.children.get(run.id)!.manifest;
   await h.runner.shutdown();
   assert(!h.fake.calls.includes("close")); assert.equal(run.owner, "retired");

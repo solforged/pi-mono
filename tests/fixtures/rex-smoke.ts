@@ -59,10 +59,10 @@ try {
   const layer = view().windows.flatMap((w: any) => w.layers).find((l: any) => l.blocks.some((b: any) => b.block_id === block));
   assert.equal(layer.kind, "floating"); assert.deepEqual(focus(view()), before);
   await rex.minimize(session, block); await rex.peek(session, block, parent); assert.deepEqual(focus(view()), before);
-  assert.equal(await rex.toggle(session, block, parent), "minimized");
-  assert.equal(await rex.toggle(session, block, parent), "floating"); assert.deepEqual(focus(view()), before);
   await rex.keep(session, block, parent); assert.deepEqual(focus(view()), before);
-  assert.equal(await rex.toggle(session, block, parent), "tiled");
+  // Peeking at a kept pane leaves it tiled.
+  await rex.peek(session, block, parent);
+  assert.equal(view().windows.flatMap((w: any) => w.layers).find((l: any) => l.blocks.some((b: any) => b.block_id === block)).kind, "tiled");
   await rex.hide(session, block);
   if (dispatch) {
     const task = async (prompt: string, count: number) => {
@@ -116,7 +116,7 @@ try {
   const take = request({ type: "take" });
   await until(() => events.some(e => e.type === "ownership" && e.requestId === take));
   assert.equal(JSON.parse(await readFile(join(dir, "owner.json"), "utf8")).owner, "human");
-  console.log(`Passed: native peek/toggle/keep/park with focus preserved; ${dispatch ? "persistent tasks, steering, cancellation; " : ""}${ask ? "a question answered and one handed back in the child; " : ""}explicit takeover. No external model requests.`);
+  console.log(`Passed: native peek/minimize/keep/park with focus preserved; ${dispatch ? "persistent tasks, steering, cancellation; " : ""}${ask ? "a question answered and one handed back in the child; " : ""}explicit takeover. No external model requests.`);
 } catch (error) {
   console.error(`Smoke failed. Block: ${block ?? "unknown"}. Cleaning up the test terminal and files.`); throw error;
 } finally {

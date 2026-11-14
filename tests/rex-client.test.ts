@@ -108,15 +108,6 @@ test("native peek places once, floats the actual child, and restores without foc
   assert.deepEqual(h.nativeMutations().slice(-2).map(c => c.method), ["session.set_layer_state", "session.raise_layer"]);
   assert(h.nativeMutations().filter(c => c.method === "session.set_layer_state").every(c => c.payload.focus === false));
 });
-test("toggle floats a detached child, minimizes a visible float, restores it, and leaves tiles alone", async () => {
-  const h = nativeHarness();
-  assert.equal(await h.client.toggle(SESSION, BLOCK, PARENT), "floating");
-  assert.equal(await h.client.toggle(SESSION, BLOCK, PARENT), "minimized"); assert.equal(h.floating.state, "minimized");
-  assert.equal(await h.client.toggle(SESSION, BLOCK, PARENT), "floating"); assert.equal(h.floating.state, "normal");
-  await h.client.keep(SESSION, BLOCK, PARENT); const count = h.nativeMutations().length;
-  assert.equal(await h.client.toggle(SESSION, BLOCK, PARENT), "tiled"); assert.equal(h.nativeMutations().length, count);
-  assert(h.nativeMutations().filter(c => c.method === "session.set_layer_state").every(c => c.payload.focus === false));
-});
 test("native keep promotes a floating child; peek and keep respect an existing tiled pane", async () => {
   const h = nativeHarness(); h.float();
   await h.client.keep(SESSION, BLOCK, PARENT);
@@ -211,24 +202,17 @@ test("keep_open is sent only when the terminal explicitly advertises boolean sup
   }
 });
 
-test("show, hide, and close use explicit session/block IDs and never focus or select a window", async () => {
+test("place, hide, and close use explicit session/block IDs and never focus or select a window", async () => {
   const h = harness();
-  await h.client.show(SESSION, BLOCK, PARENT);
+  await h.client.place(SESSION, BLOCK, PARENT, "horizontal", 0.5);
   await h.client.hide(SESSION, BLOCK);
   await h.client.close(SESSION, BLOCK);
   assert.deepEqual(h.mutations().map(({ method, payload }) => ({ method, payload })), [
-    { method: "session.move_block", payload: { session_id: SESSION, block_id: BLOCK, anchor_block_id: PARENT } },
+    { method: "session.move_block", payload: { session_id: SESSION, block_id: BLOCK, anchor_block_id: PARENT, direction: "horizontal", side: "after", ratio: 0.5 } },
     { method: "session.detach_block", payload: { session_id: SESSION, block_id: BLOCK } },
     { method: "block.close", payload: { session_id: SESSION, block_id: BLOCK } },
   ]);
   assert.equal(h.calls.some((call) => /focus|select|new_window|window_id/.test(call.args.join(" "))), false);
-});
-
-test("show refuses an already placed block rather than risk moving focus with it", async () => {
-  const h = harness();
-  h.blocks[1].placement = "placed";
-  await assert.rejects(h.client.show(SESSION, BLOCK, PARENT), /detached block to preserve focus/);
-  assert.equal(h.mutations().length, 0);
 });
 
 test("remote endpoints, invalid identities, and mismatched location IDs fail before mutation", async (t) => {
@@ -263,7 +247,7 @@ test("session and local block membership must match, including a placed anchor",
       if (change === "block remote") h.blocks[1].host_id = INSTANCE;
       if (change === "creator remote") h.creators[0].host_id = INSTANCE;
       if (change === "creator absent") h.creators.splice(0);
-      await assert.rejects(h.client.show(SESSION, BLOCK, PARENT), /match|missing|remote|unavailable/);
+      await assert.rejects(h.client.peek(SESSION, BLOCK, PARENT), /match|missing|remote|unavailable/);
       assert.equal(h.mutations().length, 0);
     });
   }
@@ -291,7 +275,7 @@ test("invalid arguments are rejected without invoking Rex", async () => {
   const h = harness();
   await assert.rejects(h.client.probe("work", PARENT), /full session/);
   await assert.rejects(h.client.probe(SESSION, "4444"), /full block/);
-  await assert.rejects(h.client.show(SESSION, BLOCK, BLOCK), /distinct anchor/);
+  await assert.rejects(h.client.peek(SESSION, BLOCK, BLOCK), /distinct anchor/);
   await assert.rejects(h.client.create(SESSION, "", ["echo"], process.cwd()), /label/);
   await assert.rejects(h.client.create(SESSION, "x".repeat(129), ["echo"], process.cwd()), /label/);
   await assert.rejects(h.client.create(SESSION, "ok", [], process.cwd()), /argv/);
@@ -356,7 +340,7 @@ test("pre-aborted and midflight cancellation reach the executor without a retry"
     assert.equal(call.options.signal.aborted, true);
     return new Promise(() => {});
   };
-  await assert.rejects(h.client.show(SESSION, BLOCK, PARENT, controller.signal), /outcome may be unknown.*cancelled during move/);
+  await assert.rejects(h.client.place(SESSION, BLOCK, PARENT, "horizontal", 0.5, controller.signal), /outcome may be unknown.*cancelled during move/);
   assert.equal(h.mutations().length, 1);
 });
 
@@ -365,7 +349,7 @@ test("every mutation fails once without retrying when Rex reports an error", asy
     const h = harness();
     h.intercept = (call) => call.method === method ? { stdout: "", stderr: "request timed out", code: 1 } : undefined;
     const operation = method === "session.new_block" ? h.client.create(SESSION, "test", ["echo"], process.cwd())
-      : method === "session.move_block" ? h.client.show(SESSION, BLOCK, PARENT)
+      : method === "session.move_block" ? h.client.place(SESSION, BLOCK, PARENT, "horizontal", 0.5)
       : method === "session.detach_block" ? h.client.hide(SESSION, BLOCK) : h.client.close(SESSION, BLOCK);
     await assert.rejects(operation, /outcome may be unknown.*request timed out/);
     assert.equal(h.mutations().length, 1);
