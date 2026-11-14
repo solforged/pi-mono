@@ -71,6 +71,36 @@ can reach. `PI_WEB_FETCH_PRIVATE=1` lifts that, for example to read a local
 development server. The check resolves a name before the request is made; it
 does not pin the connection to that address.
 
+## Nous Portal
+
+The `nous-portal` extension adds the Nous Portal subscription as a provider.
+Run `/login nous-portal`, press Enter to open the Portal and copy the device
+code, and approve inference access. Then pick a model with `/model`, for
+example `nous-portal/~anthropic/claude-opus-latest`. `/nous-usage` shows the
+allowance gauges, their reset times and any credit balance or pause.
+
+- **Login.** It uses Nous's published `hermes-cli` public client, so the
+  consent screen may say Hermes CLI, and asks only for `inference:invoke`, not
+  `billing:manage`. It never buys or changes a subscription. Pi stores the grant
+  in `auth.json` and refreshes the short-lived inference JWT itself. Refresh
+  tokens rotate on use, so do not copy a grant from Hermes or omp, or refresh one
+  grant from two clients. A revoked grant needs another `/login`; gateway
+  errors keep it.
+- **Models.** The public catalog supplies the chat models that can call tools,
+  with their context, output limit, reasoning and pricing; without a listed
+  output limit the cap is 16,384 tokens or the context, whichever is smaller.
+  Pi fetches it after login and on start when signed in, keeps it for a day in
+  `models-store.json`, and uses that copy offline and through an outage.
+- **Requests.** They go to the Portal's OpenAI-compatible chat completions
+  endpoint with OpenRouter-style reasoning parameters and `max_tokens`.
+- **Usage.** The gauges are informational. The Portal decides which models a
+  plan reaches and whether requests continue on credits, and a zero credit
+  balance does not mean the allowance is spent. Manage the plan at
+  [Nous Portal](https://portal.nousresearch.com/manage-subscription).
+
+The protocol follows Hermes Agent's `hermes_cli/auth_nous.py`, ported from the
+omp extension that preceded this one.
+
 ## Anthropic integration
 
 The `anthropic` extension integrates automatically with Pi's existing Anthropic
