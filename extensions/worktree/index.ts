@@ -80,7 +80,7 @@ export default function (pi: ExtensionAPI) {
   const describe = (target: Prepared, origin: string) => [
     target.copied ? ` Copied ${target.copied} file(s) listed in ${INCLUDE_FILE}.` : "",
     target.dirty ? ` Uncommitted changes in ${origin} were not copied.` : "",
-    checkout?.vcs === "jj" ? " It is a colocated jj workspace: commit with jj, and /wt land lands @- once @ is empty." : "",
+    checkout?.vcs === "jj" ? " It is a colocated jj workspace: commit or describe with jj; /wt land lands @ once described, or @- when @ is empty." : "",
   ].join("");
 
   // Notifications sent right after a switch are lost, so reports go into the

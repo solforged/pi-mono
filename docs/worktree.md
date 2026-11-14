@@ -104,9 +104,11 @@ ownership is kept in the Git config. A jj workspace that Git cannot see, in a
 repository that is not colocated or one added with `--no-colocate`, gets no
 worktrees, and `/wt` says how to colocate it (`jj git colocation enable`).
 
-`land` lands the workspace's `@-` on the one bookmark at the main
-workspace's `@-`, so `@` must be empty: commit with `jj commit` first. When
-that bookmark has moved on, the workspace's commits are rebased onto it; a
+`land` lands the workspace's work on the one bookmark at the main
+workspace's `@-`: `@` itself once it has a description (`jj describe`), then
+a new empty `@` on top of it; otherwise `@-`, when `@` is empty after
+`jj commit`. Changes in an undescribed `@` are refused. When that bookmark
+has moved on, the workspace's commits are rebased onto it; a
 rebase that fails or leaves conflicts is undone with `jj op restore`, so
 resolve it with `jj rebase -b @ -d <bookmark>` and land again. Commits
 already pushed are not rebased. The bookmark then moves forward, and the main

@@ -75,7 +75,7 @@ test("landing moves the main workspace's bookmark, rebasing when it moved on and
   const at = async () => (await inspect(made.path))!;
   await assert.rejects(land(await at()), /no commits that main lacks/);
   await writeFile(join(made.path, "one.txt"), "one\n");
-  await assert.rejects(land(await at()), /Commit or discard/);
+  await assert.rejects(land(await at()), /@ has changes but no description; describe it with jj describe/);
   jj(made.path, "commit", "-m", "feat: one.txt");
 
   // The bookmark to land on sits on the main workspace's @-.
@@ -103,6 +103,17 @@ test("landing moves the main workspace's bookmark, rebasing when it moved on and
   assert.deepEqual(log(main, "::main ~ root()").split("\n"), ["feat: two.txt", "feat: a.txt", "feat: one.txt", "chore: init"]);
   assert.equal(log(main, "merges()"), "");
   assert.ok(existsSync(join(main, "two.txt")));
+
+  // A described @ lands itself, and later edits go to a new @ on top of it.
+  await writeFile(join(made.path, "three.txt"), "three\n");
+  jj(made.path, "describe", "-m", "feat: three.txt");
+  await commit(main, "four.txt");
+  jj(main, "bookmark", "set", "main", "-r", "@-");
+  assert.deepEqual(await land(await at()), { target: "main", commits: 1, rebased: true, note: undefined });
+  assert.equal(log(main, "main"), "feat: three.txt");
+  assert.equal(log(made.path, "@-"), "feat: three.txt");
+  assert.equal(log(made.path, "@", 'if(empty, "empty")'), "empty");
+  assert.ok(existsSync(join(main, "three.txt")) && existsSync(join(made.path, "four.txt")));
 });
 
 test("removal keeps a workspace with changes and reports commits it leaves behind", { skip: missing && "jj is not installed" }, async (t) => {
@@ -144,7 +155,7 @@ test("Pi moves a session into a jj workspace and lands it", { skip: (missing && 
   assert.ok(!existsSync(join(main, "made.txt")));
   assert.match(jj(main, "workspace", "list"), /pi\/fixture-task/);
   const moved = entries().find((entry) => entry.customType === "worktree")?.content ?? "";
-  assert.match(moved, /jj workspace pi\/fixture-task, created on the parent of @ .*commit with jj/);
+  assert.match(moved, /jj workspace pi\/fixture-task, created on the parent of @ .*commit or describe with jj; \/wt land lands @ once described/);
   const id = entries().find((entry) => entry.type === "session").id;
   assert.match(pi(main, "--session", id, "-p", "/wt"), /jj workspace pi\/fixture-task at .*proj--fixture-task; main workspace /);
 

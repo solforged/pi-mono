@@ -101,11 +101,13 @@ export async function followTitleJj(checkout: Checkout, sessionId: string, title
 }
 
 /**
- * Lands a workspace's committed work on the bookmark at the main workspace's
- * @-: rebases it there when the bookmark has moved on, moves the bookmark
- * forward to this workspace's @-, then moves the main workspace's @ onto it
- * so its files follow, as a fast-forward updates the main checkout's. A
- * rebase that fails or leaves conflicts is undone with `jj op restore`.
+ * Lands a workspace's work on the bookmark at the main workspace's @-: its
+ * @ when that is described, as with `jj describe`, else its @- when @ is
+ * empty, as after `jj commit`. Rebases the work there when the bookmark has
+ * moved on, moves the bookmark forward to it, starts a new empty @ on a
+ * landed @, then moves the main workspace's @ onto the bookmark so its files
+ * follow, as a fast-forward updates the main checkout's. A rebase that fails
+ * or leaves conflicts is undone with `jj op restore`.
  */
 export async function landJj(checkout: Checkout, run = jj): Promise<Landed> {
   const { top, main, branch } = checkout;
@@ -117,14 +119,16 @@ export async function landJj(checkout: Checkout, run = jj): Promise<Landed> {
     ? `The main workspace's @- carries ${marks.join(", ")}; leave one bookmark there to land on`
     : `The main workspace's @- has no bookmark to land on; set one there with jj bookmark set, or move the main workspace onto one`);
   const [target] = marks;
-  if (await dirtyJj(top, run)) throw new Error("Commit or discard the workspace's changes first, so that @ is empty");
+  const state = await run(["log", "--no-graph", "-r", "@", "-T", 'if(empty, "empty", if(description, "described", "bare"))'], top);
+  if (state === "bare") throw new Error("@ has changes but no description; describe it with jj describe, commit it with jj commit, or discard it with jj restore");
+  const tip = state === "described" ? "@" : "@-";
   const onto = symbol(target);
-  const commits = await count(`${onto}..@-`, top, run);
+  const commits = await count(`${onto}..${tip}`, top, run);
   if (!commits) throw new Error(`${branch} has no commits that ${target} lacks`);
-  const behind = await count(`@-..${onto}`, top, run);
+  const behind = await count(`${tip}..${onto}`, top, run);
   const operation = (cwd: string) => run(["--ignore-working-copy", "op", "log", "-n1", "--no-graph", "-T", "id"], cwd);
   if (behind) {
-    if (await count(`(${onto}..@-) & ::remote_bookmarks()`, top, run)) throw new Error(`${branch} has pushed commits and ${target} has moved on; rebase it yourself, then land`);
+    if (await count(`(${onto}..${tip}) & ::remote_bookmarks()`, top, run)) throw new Error(`${branch} has pushed commits and ${target} has moved on; rebase it yourself, then land`);
     const before = await operation(top);
     const undo = () => run(["op", "restore", before], top).catch(() => undefined);
     try { await run(["rebase", "-b", "@", "-d", onto], top); }
@@ -134,7 +138,9 @@ export async function landJj(checkout: Checkout, run = jj): Promise<Landed> {
       throw new Error(`Rebasing ${branch} onto ${target} conflicts. Run jj rebase -b @ -d ${target} in ${top}, resolve it, then land again`);
     }
   }
-  await run(["bookmark", "set", target, "-r", "@-"], top);
+  await run(["bookmark", "set", target, "-r", tip], top);
+  // Later edits would otherwise amend the landed commit.
+  if (tip === "@") await run(["new"], top);
   // Run in the main workspace, so jj updates its files too.
   const landed = await operation(main);
   let note: string | undefined;
