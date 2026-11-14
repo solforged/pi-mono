@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { backoff, borderLabel, branchLabel, displayPath, fitSegments, formatCost, formatTokens, layout, parseGitStatus, readContribution, rightStatuses, sessionStats, modelLabel, plainText, thinkingColor, thinkingIcon, worktreeHome } from "../extensions/statusline/format.ts";
+import { backoff, borderLabel, branchLabel, displayPath, fitSegments, formatCost, formatTokens, jjLabel, layout, parseGitStatus, parseJj, readContribution, rightStatuses, sessionStats, modelLabel, plainText, thinkingColor, thinkingIcon, worktreeHome } from "../extensions/statusline/format.ts";
 
 const measure = { width: (text: string) => [...text].length, truncate: (text: string, width: number) => [...text].slice(0, width).join("") };
 const usage = (input: number, cacheRead: number, cacheWrite: number, total: number) => ({ input, output: 10, cacheRead, cacheWrite, cost: { total } });
@@ -42,8 +42,19 @@ test("parses porcelain v2 status with branch, tracking, and change counts", () =
     "1 MM N... 100644 100644 100644 a b both.ts", "2 R. N... 100644 100644 100644 a b R100 new.ts\told.ts",
     "u UU N... 100644 100644 100644 100644 a b c conflict.ts", "? new.txt", "? dir/", "! ignored", "",
   ].join("\n"));
-  assert.deepEqual(git, { branch: "main", oid: "0123456789abcdef", ahead: 2, behind: 1, staged: 3, unstaged: 2, untracked: 2, conflicts: 1 });
-  assert.deepEqual(parseGitStatus("# branch.oid (initial)\n# branch.head (detached)\n"), { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicts: 0 });
+  assert.deepEqual(git, { branch: "main", oid: "0123456789abcdef", ahead: 2, behind: 1, staged: 3, unstaged: 2, untracked: 2, conflicts: 1, changed: 7 });
+  assert.deepEqual(parseGitStatus("# branch.oid (initial)\n# branch.head (detached)\n"), { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicts: 0, changed: 0 });
+});
+
+test("a jj workspace is labelled by its Pi task, a nearby bookmark, or its change", () => {
+  const main = parseJj("uyqqozrn\t\tmain\tdefault@\t\n")!;
+  assert.deepEqual(main, { change: "uyqqozrn", bookmarks: [], parentBookmarks: ["main"], workspace: "default", conflict: false });
+  assert.equal(jjLabel(main, false), "main");
+  const task = parseJj("ponvttoo\tfeat\tmain\tpi/x@\tconflict\n")!;
+  assert.deepEqual([task.bookmarks, task.workspace, task.conflict], [["feat"], "pi/x", true]);
+  assert.deepEqual([jjLabel(task, true), jjLabel(task, false)], ["x", "feat"]);
+  assert.equal(jjLabel(parseJj("kxyz\t\t\tdefault@\t")!, false), "kxyz");
+  assert.equal(parseJj(""), undefined);
 });
 
 test("the poll slows down while nothing changes and starts over on a change or a reset", async (t) => {

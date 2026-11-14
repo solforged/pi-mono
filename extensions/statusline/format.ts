@@ -68,11 +68,12 @@ export type Git = {
   unstaged: number;
   untracked: number;
   conflicts: number;
+  changed: number; // Paths with any change, each counted once.
 };
 
 // Parses `git status --porcelain=v2 --branch`.
 export function parseGitStatus(stdout: string): Git {
-  const git: Git = { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicts: 0 };
+  const git: Git = { ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 0, conflicts: 0, changed: 0 };
   for (const line of stdout.split("\n")) {
     if (line.startsWith("# branch.head ")) {
       const head = line.slice(14);
@@ -87,11 +88,39 @@ export function parseGitStatus(stdout: string): Git {
     } else if (line.startsWith("1 ") || line.startsWith("2 ")) {
       if (line[2] !== ".") git.staged++;
       if (line[3] !== ".") git.unstaged++;
-    } else if (line.startsWith("u ")) git.conflicts++;
-    else if (line.startsWith("? ")) git.untracked++;
+      git.changed++;
+    } else if (line.startsWith("u ")) { git.conflicts++; git.changed++; }
+    else if (line.startsWith("? ")) { git.untracked++; git.changed++; }
   }
   return git;
 }
+
+/**
+ * The working-copy commit of a colocated jj workspace. Git sees a detached
+ * HEAD there, and jj records new files as intent-to-add, so the Git segment's
+ * branch, staging and tracking marks say nothing useful.
+ */
+export type Jj = { change: string; bookmarks: string[]; parentBookmarks: string[]; workspace?: string; conflict: boolean };
+
+// For `jj log -r @ --no-graph -T`: one tab-separated line.
+export const JJ_TEMPLATE = [
+  "change_id.shortest(8)",
+  'local_bookmarks.map(|b| b.name()).join(" ")',
+  'parents.map(|p| p.local_bookmarks().map(|b| b.name()).join(" ")).join(" ")',
+  "working_copies",
+  'if(conflict, "conflict", "")',
+].join(' ++ "\\t" ++ ') + ' ++ "\\n"';
+
+export function parseJj(stdout: string): Jj | undefined {
+  const [change, bookmarks = "", parents = "", copies = "", conflict = ""] = stdout.split("\n")[0].split("\t");
+  if (!change) return undefined;
+  const words = (text: string) => text.split(" ").filter(Boolean);
+  return { change, bookmarks: words(bookmarks), parentBookmarks: words(parents), workspace: words(copies)[0]?.replace(/@$/, ""), conflict: conflict === "conflict" };
+}
+
+/** A Pi workspace by its task name, else the bookmark on @ or its parent, else @'s change ID. */
+export const jjLabel = (jj: Jj, worktree: boolean) =>
+  worktree && jj.workspace ? branchLabel(jj.workspace, true) : jj.bookmarks[0] ?? jj.parentBookmarks[0] ?? jj.change;
 
 /**
  * Runs `check` every `first` ms, and doubles the wait up to `max` each time it

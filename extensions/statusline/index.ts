@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
-  backoff, borderLabel, branchLabel, displayPath, fitSegments, formatCost, formatTokens, icons, layout, parseGitStatus, readContribution, rightStatuses, sessionStats,
-  modelLabel, plainText, thinkingColor, thinkingIcon, worktreeHome, CACHE_SHOWN_BELOW, SEGMENT_EVENT, type Contribution, type Git, type Segment, type Stats,
+  backoff, borderLabel, branchLabel, displayPath, fitSegments, formatCost, formatTokens, icons, jjLabel, layout, parseGitStatus, parseJj, readContribution, rightStatuses, sessionStats,
+  modelLabel, plainText, thinkingColor, thinkingIcon, worktreeHome, CACHE_SHOWN_BELOW, JJ_TEMPLATE, SEGMENT_EVENT, type Contribution, type Git, type Jj, type Segment, type Stats,
 } from "./format.ts";
 import { hostGit, trustedLayout } from "../sandbox/hostgit.ts";
 import { dropEditorFeature, useEditorFeature, type FeatureFactory } from "../shared/editor.ts";
@@ -55,6 +57,16 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
     const call = hostGit(cwd, ["--no-optional-locks", "status", "--porcelain=v2", "--branch"]);
     execFile("git", call.args, { cwd, timeout: 5000, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env: call.env }, (error, stdout) => resolve(error ? undefined : stdout));
   });
+  // A colocated jj workspace: jj names the work, Git still counts the changed files.
+  // --ignore-working-copy keeps the poll from snapshotting, which would record an
+  // operation every time; jj commands the agent runs snapshot anyway.
+  const jjTop = repo && existsSync(join(repo.workTree, ".jj")) ? repo.workTree : undefined;
+  let jj: Jj | undefined;
+  const describe = () => new Promise<string | undefined>((resolve) => {
+    if (!jjTop) return resolve(undefined);
+    execFile("jj", ["--no-pager", "--color=never", "--ignore-working-copy", "-R", jjTop, "log", "--no-graph", "-r", "@", "-T", JJ_TEMPLATE],
+      { cwd, timeout: 5000, encoding: "utf8" }, (error, stdout) => resolve(error ? undefined : stdout));
+  });
   let running = false, again = false, closed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let seen: string | undefined;
@@ -65,10 +77,12 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
     running = true;
     let changed = false;
     try {
-      const output = await status();
-      changed = output !== seen;
-      seen = output;
+      const [output, described] = await Promise.all([status(), describe()]);
+      const key = `${output}\0${described}`;
+      changed = key !== seen;
+      seen = key;
       git = output === undefined ? undefined : parseGitStatus(output);
+      jj = described === undefined ? undefined : parseJj(described);
       if (!closed) render();
     } catch { git = undefined; }
     finally {
@@ -140,7 +154,13 @@ function install(pi: ExtensionAPI, ctx: ExtensionContext, contributed: ReadonlyM
         segments.push({ priority: 3, text: theme.fg("muted", `${icons.folder} ${path}`) + mark, compact: theme.fg("muted", `${icons.folder} ${base}`) + mark });
 
         const branch = footerData.getGitBranch() ?? git?.branch ?? (git?.oid ? `@${git.oid.slice(0, 7)}` : undefined);
-        if (branch) {
+        if (jj) {
+          const marks: string[] = [];
+          if (jj.conflict) marks.push(theme.fg("error", "!"));
+          if (git?.changed) marks.push(theme.fg("warning", `*${git.changed}`));
+          const head = theme.fg(git?.changed ? "warning" : "success", `${icons.branch} ${jjLabel(jj, Boolean(home))}`);
+          segments.push({ priority: 4, text: [head, ...marks].join(" "), compact: head });
+        } else if (branch) {
           const marks: string[] = [];
           if (git?.conflicts) marks.push(theme.fg("error", `!${git.conflicts}`));
           if (git?.staged) marks.push(theme.fg("success", `+${git.staged}`));

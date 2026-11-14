@@ -215,6 +215,12 @@ repository the guest created is trusted from the next Pi start, and in a
 linked worktree of a repository that reads `config.worktree`, the guest can
 replace that file.
 
+In a colocated jj repository, `/wt` and the status line also run jj on the
+host. jj reads repository and workspace config from your config folder, so
+the working tree names no program for it, but the `.jj` folder is not
+guarded: a guest can rewrite a workspace's `.jj/repo` file, which says where
+its repository is.
+
 The browser is Chromium on the host, rendering pages the guest serves. It is
 as exposed to them as to any website, with its own profile.
 

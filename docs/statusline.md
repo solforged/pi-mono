@@ -22,6 +22,12 @@ The left side says where the session works:
   of upstream. Counts refresh after tool calls and runs. A poll catches
   changes made outside Pi: every 10 seconds, slowing to once a minute while
   it finds nothing new, and not at all outside a repository.
+- In a colocated jj workspace, where Git sees a detached `HEAD`, the branch
+  segment names the work instead: a Pi workspace by its task, otherwise the
+  bookmark on `@` or its parent, otherwise `@`'s change ID. It shows `!` when
+  `@` has conflicts and `*` with the number of changed files. jj is read
+  without snapshotting the working copy (`--ignore-working-copy`), so the poll
+  records no operations.
 
 The right side says what it runs and spends:
 
