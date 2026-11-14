@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { Type } from "typebox";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { report } from "../shared/context.ts";
 import { ArtifactStore, archiveResult, readExcerpt } from "./output.ts";
 
 export default function (pi: ExtensionAPI) {
@@ -66,8 +67,7 @@ export default function (pi: ExtensionAPI) {
       ].join("\n");
       // A custom entry gives JSON/RPC consumers a report without corrupting stdout.
       pi.appendEntry("artifacts-report", { text });
-      if (ctx.hasUI) ctx.ui.notify(text, "info");
-      else if (ctx.mode !== "json" && ctx.mode !== "rpc") console.log(text);
+      report(ctx, text);
     },
   });
 }

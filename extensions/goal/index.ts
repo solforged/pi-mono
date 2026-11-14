@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { DISCUSS } from "../ask/model.ts";
+import { report } from "../shared/context.ts";
 import {
   KICKOFF_TYPE, NOTE_TYPE, amount, close, continueNote, create, decide, format, isUnfinished, kickoff, label,
   limitNote, overBudget, parseAmount, restore, section, snapshot, statusText, transition, withBudget,
@@ -201,7 +202,7 @@ export default function (pi: ExtensionAPI) {
       const words = text.split(/\s+/);
       let next: Snapshot;
       if (!text) {
-        if (ctx.hasUI) ctx.ui.notify(format(state), "info"); else console.log(format(state));
+        report(ctx, format(state));
         return;
       }
       if (words.length === 1 && (words[0] === "pause" || words[0] === "resume" || words[0] === "clear")) next = transition(state.goal, words[0]);

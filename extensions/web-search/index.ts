@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { print } from "../shared/context.ts";
 import { loadPage, pageView } from "./fetch.ts";
 import { attemptSummary, dropBlankRecency, RECENCIES, searchOrder, sourceLimit } from "./format.ts";
 import { availableProviders, executeSearch, orderByHealth, registryAuth, timedOutRecently, type SearchAuth, type SearchQuery } from "./search.ts";
@@ -20,7 +21,7 @@ export default function (pi: ExtensionAPI) {
 
   function report(ctx: ExtensionContext, text: string) {
     pi.appendEntry("web-search-report", { text });
-    if (!ctx.hasUI) console.log(text);
+    if (!ctx.hasUI) print(ctx, text);
     else if (ctx.mode !== "tui") ctx.ui.notify(text, "info");
   }
 

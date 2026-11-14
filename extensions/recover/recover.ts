@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { report } from "../shared/context.ts";
 import { userStarted } from "../continue/started.ts";
 
 // Pi retries provider errors and repairs unrun tool calls by itself. Three turn
@@ -86,8 +87,6 @@ export function registerRecover(pi: ExtensionAPI) {
     },
   });
 }
-
-function report(ctx: any, message: string) { if (ctx.hasUI) ctx.ui.notify(message, "info"); else console.log(message); }
 
 export const label = (details: { kind?: Kind; count?: number } | undefined) => {
   const of = `${details?.count ?? "?"}/${limits.nudges}`;

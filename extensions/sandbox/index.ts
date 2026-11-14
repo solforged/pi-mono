@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
+import { report as say } from "../shared/context.ts";
 import { Browser, parseCommand, which } from "./browser.ts";
 import { shareCargoTarget } from "./cargo.ts";
 import { ContainerCli, runProcess } from "./container.ts";
@@ -277,11 +278,6 @@ export default function sandboxExtension(pi: ExtensionAPI) {
       say(ctx, describe(), failure ? "error" : "info");
     },
   });
-
-  function say(ctx: ExtensionContext, text: string, level: "info" | "warning" | "error") {
-    if (ctx.hasUI) ctx.ui.notify(text, level);
-    else console.log(text);
-  }
 
   function describe() {
     const why = ({ flag: "--sandbox", environment: "set by the parent Pi", saved: "saved for this project", session: "kept on from the checkout this session came from", settings: "settings" } as Record<string, string>)[source] ?? source;

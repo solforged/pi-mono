@@ -5,6 +5,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { print } from "../shared/context.ts";
 import { loadTitlePrompt, registerAutoname } from "./autoname.ts";
 import { registerCommit } from "./commit.ts";
 import { registerAutolearn } from "./autolearn-ui.ts";
@@ -39,7 +40,7 @@ export default async function (pi: ExtensionAPI) {
   function report(ctx: ExtensionContext, text: string) {
     if (lifetime.signal.aborted) return;
     pi.appendEntry("workflow-report", { text });
-    if (!ctx.hasUI) console.log(text);
+    if (!ctx.hasUI) print(ctx, text);
     else if (ctx.mode !== "tui") ctx.ui.notify(text, "info");
   }
   pi.registerEntryRenderer("workflow-report", (entry) => new Text((entry.data as { text: string }).text, 0, 0));
@@ -116,7 +117,7 @@ export default async function (pi: ExtensionAPI) {
         const usage = results.reduce((sum, result) => addUsage(sum, result.usage), emptyUsage());
         recordUsage(pi, ctx, { role: task.agent, usage });
         pi.sendMessage({ customType: "workflow-subagent", content: summarize(results), display: true }, { triggerTurn: false });
-        if (!ctx.hasUI) console.log(summarize(results));
+        if (!ctx.hasUI) print(ctx, summarize(results));
       },
     });
   }

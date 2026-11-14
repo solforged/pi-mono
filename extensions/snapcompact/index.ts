@@ -1,6 +1,7 @@
 import { convertToLlm, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { limitsFor } from "../compaction/plan.ts";
+import { print } from "../shared/context.ts";
 import {
   compactMessages,
   FRAME_TOKEN_SHARE,
@@ -19,7 +20,7 @@ export default function (pi: ExtensionAPI) {
 
   function report(ctx: ExtensionContext, text: string) {
     pi.appendEntry("snapcompact-report", { text });
-    if (!ctx.hasUI) console.log(text);
+    if (!ctx.hasUI) print(ctx, text);
     else if (ctx.mode !== "tui") ctx.ui.notify(text, "info");
   }
 

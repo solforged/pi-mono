@@ -2,6 +2,7 @@
 // can be tested without Pi's packages.
 import { existsSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { report } from "../shared/context.ts";
 import { type Loaded, load, matches, SECTION, section, TERMS_TYPE, termId, termsMessage, wikiBinary } from "./context.ts";
 import { TOOL } from "./tool.ts";
 
@@ -88,9 +89,7 @@ export function register(pi: ExtensionAPI, binary = wikiBinary()): Session {
     description: "Show what the memory wiki loads into this session",
     handler: async (_args, ctx) => {
       last ??= await load(binary, ctx.cwd);
-      const report = status(last, binary, seenTerms(ctx.sessionManager.buildContextEntries()));
-      if (ctx.hasUI) ctx.ui.notify(report, "info");
-      else console.log(report);
+      report(ctx, status(last, binary, seenTerms(ctx.sessionManager.buildContextEntries())));
     },
   });
 

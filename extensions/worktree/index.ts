@@ -6,6 +6,7 @@ import { join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { report as say } from "../shared/context.ts";
 import { create, editsMainCheckout, followTitle, git as run, inside, inspect, land, owner, remove, slugify, worktreeRoot, worktrees, type Checkout, type Created } from "./git.ts";
 import { copyIncluded, INCLUDE_FILE } from "./include.ts";
 import { relocate, repositorySessionDirs, sessionChoices, type Listed } from "./session.ts";
@@ -25,9 +26,6 @@ export default function (pi: ExtensionAPI) {
   let pending: Prepared | undefined;
   let warned: string | undefined; // The assistant message whose edits were turned back.
 
-  const say = (ctx: ExtensionContext, text: string, level: "info" | "warning" | "error" = "info") => {
-    if (ctx.hasUI) ctx.ui.notify(text, level); else console.log(text);
-  };
   // Offer the tool only where it applies, so worktree sessions carry no guidance for it.
   function offer(on: boolean) {
     const active = pi.getActiveTools();

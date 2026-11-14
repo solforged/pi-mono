@@ -5,6 +5,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { userStarted } from "../continue/started.ts";
+import { report } from "../shared/context.ts";
 import { addUsage, bounded, emptyUsage, stopped } from "../workflows/process.ts";
 import { completeRole } from "../workflows/requests.ts";
 import { loadConfig, type Config, type RoleName } from "../workflows/roles.ts";
@@ -391,7 +392,7 @@ export default async function (pi: ExtensionAPI) {
       const text = [`Kernel: ${kernel?.where ? `running on the ${kernel.where === "sandbox" ? "sandbox guest" : "host"}` : "not started"}${jobs?.phase ? ` · phase ${jobs.phase}` : ""}`,
         `Kernel work: ${usage.totalTokens} tokens, $${usage.cost.total.toFixed(4)}${budget ? ` · budget ${budget.total}${budget.hard ? " (hard)" : ""}` : ""}`,
         ...(lines.length ? lines : ["No running jobs."])].join("\n");
-      if (ctx.hasUI) ctx.ui.notify(text, "info"); else console.log(text);
+      report(ctx, text);
     },
   });
 }

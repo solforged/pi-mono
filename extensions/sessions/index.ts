@@ -2,6 +2,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { print } from "../shared/context.ts";
 import { readSession, safeText, searchSessions, storageRoots, type Context } from "./store.ts";
 import { readPayload, searchPayload } from "./payload.ts";
 import { readCall, readView, reportView, searchCall, searchView } from "./view.ts";
@@ -80,8 +81,8 @@ export default function (pi: ExtensionAPI) {
         "Tools: session_search, session_read. See docs/sessions.md in pi-mono.",
       ].join("\n"));
       pi.appendEntry("sessions-report", { text });
-      if (!ctx.hasUI && ctx.mode !== "json") console.log(text);
-      else if (ctx.hasUI && ctx.mode !== "tui") ctx.ui.notify(text, "info");
+      if (!ctx.hasUI) print(ctx, text);
+      else if (ctx.mode !== "tui") ctx.ui.notify(text, "info");
     },
   });
 }

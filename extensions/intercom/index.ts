@@ -6,6 +6,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { report as say } from "../shared/context.ts";
 import { userStarted } from "../continue/started.ts";
 import { cards, describe, escapeTags, MAX_TEXT, newId, request, resolve, shortPath, Station, wrap, type Answer, type Card, type Delivery, type Envelope } from "./station.ts";
 
@@ -217,7 +218,8 @@ export default function intercom(pi: ExtensionAPI) {
   pi.registerCommand("intercom", {
     description: "List Pi sessions on the intercom, check, peek at or show one, or send it a note",
     handler: async (args, ctx) => {
-      const report = (text: string, level: "info" | "error" = "info") => ctx.hasUI ? ctx.ui.notify(text, level) : (level === "error" ? console.error : console.log)(text);
+      // Without a UI, errors go to standard error in every mode.
+      const report = (text: string, level: "info" | "error" = "info") => level === "error" && !ctx.hasUI ? console.error(text) : say(ctx, text, level);
       const words = String(args ?? "").trim();
       const sub = /^(status|peek|focus)\s+(\S+)(?:\s+(\d+))?$/.exec(words);
       const message = /^(\S+)\s+(--aside\s+)?(\S[\s\S]*)$/.exec(words);

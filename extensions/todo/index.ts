@@ -4,6 +4,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { DISCUSS } from "../ask/model.ts";
 import { userStarted } from "../continue/started.ts";
+import { report } from "../shared/context.ts";
 import { showPanel } from "./panel.ts";
 import {
   apply, counts, empty, format, limits, open, reminder, restated, restore, section, statuses, tally, withParentTodos,
@@ -40,9 +41,6 @@ export default function (pi: ExtensionAPI) {
   function sync(ctx: ExtensionContext) { list = restore(ctx.sessionManager.getBranch()); refresh(ctx); }
   // Edits outside the tool are recorded as custom entries on the branch.
   function save(ctx: ExtensionContext, next: List) { list = next; pi.appendEntry("todo", next); refresh(ctx); }
-  function report(ctx: ExtensionContext, text: string) {
-    if (ctx.hasUI) ctx.ui.notify(text, "info"); else console.log(text);
-  }
 
   pi.on("session_start", (_event, ctx) => sync(ctx));
   pi.on("session_tree", (_event, ctx) => sync(ctx));

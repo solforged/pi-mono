@@ -1,6 +1,7 @@
 // /prompt-size: what every request carries before any conversation. Also drops
 // Pi rules that repeat a tool's description from every prompt.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { report as say } from "../shared/context.ts";
 import { dropRepeatedRules, measure, owner, report, withoutRepeatedRules } from "./measure.ts";
 
 export default function (pi: ExtensionAPI) {
@@ -19,8 +20,7 @@ export default function (pi: ExtensionAPI) {
       // Pi's own inactive tools (powershell, codemode, ...) are opt-in, so only extension tools are listed.
       const inactive = all.filter(t => !active.has(t.name) && owner(t) !== "pi");
       const text = report(measure(withoutRepeatedRules(sent ?? ctx.getSystemPrompt()), all.filter(t => active.has(t.name)), inactive), sent !== undefined);
-      if (ctx.hasUI) ctx.ui.notify(text, "info");
-      else console.log(text);
+      say(ctx, text);
     },
   });
 }
