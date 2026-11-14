@@ -3,8 +3,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { print, report } from "../extensions/shared/context.ts";
-import { atomicWrite, atomicWriteSync } from "../extensions/shared/system.ts";
+import { instructionsText, print, report } from "../extensions/shared/context.ts";
+import { atomicWrite, atomicWriteSync, isAlive, which } from "../extensions/shared/system.ts";
 import { noModel, root, temporary } from "./helpers.ts";
 
 /** Runs `fn` and returns what it wrote through console.log and console.error. */
@@ -48,6 +48,30 @@ test("atomic writes replace a file privately and leave no temporary file, even w
   await assert.rejects(atomicWrite(join(dir, "missing", "file"), "text"), { code: "ENOENT" });
   assert.throws(() => atomicWriteSync(join(dir, "missing", "file"), "text"), { code: "ENOENT" });
   assert.deepEqual(readdirSync(dir).sort(), ["state.json", "taken"]);
+});
+
+test("a process is alive until it exits, including one that may not be signalled", () => {
+  assert.equal(isAlive(process.pid), true);
+  // PID 1 belongs to root, so signalling it fails with EPERM for anyone else.
+  assert.equal(isAlive(1), true);
+  assert.equal(isAlive(spawnSync(process.execPath, ["-e", ""]).pid), false);
+});
+
+test("which finds executable files along the given path only", async (t) => {
+  const dir = await temporary(t), bin = join(dir, "bin"), other = join(dir, "other");
+  for (const folder of [bin, other]) mkdirSync(folder);
+  writeFileSync(join(bin, "tool"), "#!/bin/sh\n", { mode: 0o755 });
+  writeFileSync(join(other, "tool"), "#!/bin/sh\n", { mode: 0o755 });
+  writeFileSync(join(bin, "notes"), "text", { mode: 0o644 });
+  assert.equal(which("tool", `:${join(dir, "missing")}:${bin}:${other}`), join(bin, "tool"));
+  assert.equal(which("notes", bin), undefined);
+  assert.equal(which("tool", ""), undefined);
+});
+
+test("context files become the instructions a child agent is given", () => {
+  assert.equal(instructionsText([{ path: "/a/AGENTS.md", content: "Be brief." }, { path: "/b/AGENTS.md", content: "Test first." }]),
+    "Instructions from /a/AGENTS.md:\nBe brief.\n\nInstructions from /b/AGENTS.md:\nTest first.");
+  assert.equal(instructionsText(), "");
 });
 
 test("commands run by Pi in JSON mode leave standard output as JSON lines", async (t) => {

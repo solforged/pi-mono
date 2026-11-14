@@ -2,13 +2,13 @@
 // own once Pi starts changing files, and writes refresh hints into a private
 // IPC directory. No runtime Pi imports, so tests can drive it with a fake API.
 import { execFile, execFileSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { hostGit } from "../sandbox/hostgit.ts";
-import { atomicWriteSync } from "../shared/system.ts";
+import { atomicWriteSync, isAlive, which } from "../shared/system.ts";
 import { SOURCES, type Source } from "./git.ts";
 import type { Palette } from "./render.ts";
 
@@ -109,16 +109,6 @@ export const run: Run = (command, args, cwd) => new Promise((resolve, reject) =>
   execFile(command, call.args, { cwd, timeout: 10_000, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, env: { ...call.env, GIT_OPTIONAL_LOCKS: "0" } },
     (error, stdout, stderr) => error ? reject(new Error(stderr.trim().split("\n").at(-1) || error.message)) : resolve(stdout));
 });
-
-/** Resolves a program on PATH to an absolute path; Rex starts it without a shell. */
-export function which(name: string, path = process.env.PATH ?? ""): string | undefined {
-  for (const dir of path.split(delimiter)) {
-    if (!dir) continue;
-    const candidate = join(dir, name);
-    try { accessSync(candidate, constants.X_OK); return candidate; } catch {}
-  }
-  return undefined;
-}
 
 /** The live process named by a PID file in the IPC directory, such as `<pi>.viewer`. */
 export function viewerPid(dir: string, piPid: number, kind = "viewer"): number | undefined {
@@ -242,10 +232,7 @@ export function registerDiff(pi: ExtensionAPI, options: Options): DiffPane {
   const pid = options.pid ?? process.pid;
   const settings = options.settings ?? (() => readSettings());
   const columns = options.columns ?? (() => process.stdout.columns ?? 0);
-  const alive = options.alive ?? ((other: number) => {
-    try { process.kill(other, 0); return true; }
-    catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
-  });
+  const alive = options.alive ?? isAlive;
   const paths = new Map<string, string>();
   const panes = options.panes ?? join(agentDir(), "diff-panes.json");
   /** The worktree of the last pane this Pi opened. */

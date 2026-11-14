@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, realpath, rm, rmdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { atomicWrite as write } from "../shared/system.ts";
+import { atomicWrite as write, isAlive } from "../shared/system.ts";
 
 export function hash(text: string): string { return createHash("sha256").update(text).digest("hex"); }
 export async function scopeRoot(agentDir: string, profile: string, cwd: string): Promise<string> {
@@ -22,9 +22,6 @@ export async function saveJson(file: string, value: unknown): Promise<void> {
   await atomicWrite(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-const isAlive = (pid: number) => {
-  try { process.kill(pid, 0); return true; } catch (error: any) { return error?.code === "EPERM"; }
-};
 const olderThan = (path: string, ms: number) => lstat(path).then((s) => Date.now() - s.mtimeMs > ms);
 // A lock is stale when its recorded owner has exited, or when it never recorded one.
 // A lock that is already gone needs no removal.

@@ -8,7 +8,8 @@ import test from "node:test";
 import { registerDocs } from "../extensions/diff/docs.ts";
 import { docUrl, linkDocs, parseDocUrl, resolveTarget } from "../extensions/diff/links.ts";
 import { bundledMarked, layoutDoc, loadMarked, plainLexer, renderDoc, slug, type DocView } from "../extensions/diff/markdown.ts";
-import { DEFAULT_SETTINGS, ipcDir, which } from "../extensions/diff/pane.ts";
+import { DEFAULT_SETTINGS, ipcDir } from "../extensions/diff/pane.ts";
+import { which } from "../extensions/shared/system.ts";
 import { DEFAULT_PALETTE } from "../extensions/diff/render.ts";
 import { paint } from "../extensions/diff/text.ts";
 

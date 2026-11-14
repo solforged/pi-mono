@@ -4,14 +4,12 @@
 import { createHash } from "node:crypto";
 import { appendFile, copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isAlive } from "../shared/system.ts";
 import { EXEC_ID, type ContainerCli, type RunOptions, type RunResult } from "./container.ts";
 import { CACHE_DIRS, runArgs, type Plan, type Stage } from "./plan.ts";
 
 export type Phase = "idle" | "building" | "starting" | "ready" | "error";
 
-export const isAlive = (pid: number) => {
-  try { process.kill(pid, 0); return true; } catch (error: any) { return error?.code === "EPERM"; }
-};
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**

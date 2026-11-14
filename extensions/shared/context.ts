@@ -17,3 +17,7 @@ export function print(ctx: { mode?: string }, text: string) {
 export function report(ctx: Context, text: string, level: Level = "info") {
   if (ctx.hasUI) ctx.ui.notify(text, level); else print(ctx, text);
 }
+
+/** The session's context files (AGENTS.md and the like) as the text a child agent is given. */
+export const instructionsText = (files: Array<{ path: string; content: string }> = []) =>
+  files.map((f) => `Instructions from ${f.path}:\n${f.content}`).join("\n\n");

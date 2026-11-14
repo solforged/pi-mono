@@ -5,7 +5,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { print } from "../shared/context.ts";
+import { instructionsText, print } from "../shared/context.ts";
 import { loadTitlePrompt, registerAutoname } from "./autoname.ts";
 import { registerCommit } from "./commit.ts";
 import { registerAutolearn } from "./autolearn-ui.ts";
@@ -34,7 +34,6 @@ export default async function (pi: ExtensionAPI) {
   });
   pi.on("session_start", (_event, ctx) => { showAuxiliaryUsage(ctx); });
   let approvedInstructions = "";
-  const instructionsText = (files: Array<{ path: string; content: string }> = []) => files.map((f) => `Instructions from ${f.path}:\n${f.content}`).join("\n\n");
   pi.on("before_agent_start", (event) => { approvedInstructions = instructionsText(event.systemPromptOptions.contextFiles); });
 
   function report(ctx: ExtensionContext, text: string) {

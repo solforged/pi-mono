@@ -8,23 +8,13 @@
 // pass through the guest. Raw agent-browser commands could read or write any
 // host path (upload, download, screenshot paths, state files), read the host
 // clipboard, or fetch from the host's own network.
-import { accessSync, constants } from "node:fs";
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import type { Runner } from "./container.ts";
 import { withLock } from "./sandbox.ts";
 
 export const GUEST_SSHD = "/usr/local/libexec/pi-sandbox/browser-sshd";
-
-/** Resolves a program on PATH; Rex starts the browser's pane without a shell. */
-export function which(name: string, path = process.env.PATH ?? ""): string | undefined {
-  for (const dir of path.split(delimiter)) {
-    if (!dir) continue;
-    try { accessSync(join(dir, name), constants.X_OK); return join(dir, name); } catch {}
-  }
-  return undefined;
-}
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]);
 

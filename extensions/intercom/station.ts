@@ -6,7 +6,7 @@ import { chmod, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { atomicWrite } from "../shared/system.ts";
+import { atomicWrite, isAlive } from "../shared/system.ts";
 
 /** Longest message text, in bytes: a note between sessions, not a file. */
 export const MAX_TEXT = 64 * 1024;
@@ -45,10 +45,6 @@ const isId = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{6}
 const sockPath = (dir: string, id: string) => join(dir, `${id}.sock`);
 const cardPath = (dir: string, id: string) => join(dir, `${id}.json`);
 
-function alive(pid: number) {
-  try { process.kill(pid, 0); return true; } catch (error: any) { return error.code === "EPERM"; }
-}
-
 const stringOrNull = (v: unknown) => v === null || typeof v === "string";
 
 // Every field, as cards have always been written: one that is not a Card must not reach resolve() or the rex CLI.
@@ -67,7 +63,7 @@ export async function cards(dir: string): Promise<Card[]> {
     let card: unknown;
     try { card = JSON.parse(await readFile(join(dir, name), "utf8")); } catch { continue; }
     if (!validCard(card) || name !== `${card.id}.json`) continue;
-    if (!alive(card.pid)) {
+    if (!isAlive(card.pid)) {
       await rm(cardPath(dir, card.id), { force: true });
       await rm(sockPath(dir, card.id), { force: true });
       continue;
