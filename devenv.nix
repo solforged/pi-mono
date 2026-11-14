@@ -1,7 +1,12 @@
 # Node 26 for the extensions and checks, plus the `pm-*` commands. Outside an
 # activated shell, run them as `direnv exec . pm-test`; `devenv shell --`
 # unsets TMPDIR, which moves Pi's IPC directory away from the diff handler's.
-{ pkgs, lib, ... }:
+{
+  pkgs,
+  lib,
+  options,
+  ...
+}:
 
 let
   # Run from the checkout that contains the working directory, as mise did,
@@ -24,6 +29,17 @@ let
   };
 in
 {
+  # Pi sessions started here pass this environment to every command an agent
+  # runs, in any repository: keep Nix's compiler, Apple SDK and xcrun shim out,
+  # so builds elsewhere still use the host's compiler and Xcode.
+  stdenv = pkgs.stdenvNoCC;
+  apple.sdk = null;
+  unsetEnvVars = options.unsetEnvVars.default ++ [
+    "SOURCE_DATE_EPOCH"
+    "MACOSX_DEPLOYMENT_TARGET"
+    "ZERO_AR_DATE"
+  ];
+
   packages = [ pkgs.nodejs_26 ];
 
   scripts = lib.mapAttrs (name: args: script name args.description args.run) {
